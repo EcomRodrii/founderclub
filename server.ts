@@ -688,7 +688,11 @@ ${customPrompt || ""}`;
         parts.unshift({ inlineData: { mimeType: "image/jpeg", data: base64Data } });
       }
 
-      const IMG_MODELS = ["gemini-2.0-flash-exp-image-generation", "gemini-2.0-flash-preview-image-generation"];
+      const IMG_MODELS = [
+        "gemini-2.5-flash-image",
+        "gemini-2.0-flash-exp-image-generation",
+        "gemini-2.0-flash-preview-image-generation"
+      ];
       let lastErr = "";
       for (const model of IMG_MODELS) {
         const r = await fetch(
@@ -698,12 +702,15 @@ ${customPrompt || ""}`;
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               contents: [{ parts }],
-              generationConfig: { responseModalities: ["TEXT", "IMAGE"] }
+              generationConfig: {
+                responseModalities: ["TEXT", "IMAGE"],
+                imageConfig: { aspectRatio: "1:1" }
+              }
             })
           }
         );
         const data = await r.json();
-        if (!r.ok) { lastErr = JSON.stringify(data); continue; }
+        if (!r.ok) { lastErr = JSON.stringify(data); console.error(`ImgModel ${model} failed:`, JSON.stringify(data)); continue; }
         for (const part of data.candidates?.[0]?.content?.parts || []) {
           if (part.inlineData) {
             return res.json({ image: `data:image/png;base64,${part.inlineData.data}` });
