@@ -65,7 +65,7 @@ function generateLicenseKey(): string {
 // ─── Proxy config (IPRoyal Web Unblocker) ────────────────────────────────────
 
 function getProxyConfig() {
-  const raw = process.env.PROXY_URL || "http://QnTZEo1333120:QXJqBxlgtqkOsEeE@unblocker.iproyal.com:12323";
+  const raw = process.env.PROXY_URL;
   try {
     const u = new URL(raw);
     return {
