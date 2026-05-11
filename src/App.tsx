@@ -397,8 +397,19 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
     if (!targetId) { setError('⚠️ Introduce la URL del producto a reservar.'); return; }
     if (!targetUrl) targetUrl = `https://www.vinted.es/items/${targetId}`;
 
+    const itemDomain = (targetUrl.match(/vinted\.([a-z.]+)\//) || [])[1] || 'es';
+    const base = `https://www.vinted.${itemDomain}`;
+
+    const tokenMatch = cookie.match(/access_token_web[=:]([a-zA-Z0-9._-]+)/i);
+    const accessToken = tokenMatch?.[1] || '';
+    if (!accessToken) { setError('⚠️ No se encontró access_token_web en las cookies.'); return; }
+
+    const csrfToken = (cookie.match(/csrf_token[=:]([a-zA-Z0-9._-]+)/i) || [])[1] || '';
+
     setLoadingReserve(true);
-    setStatus('Añadiendo a la cola de reserva...');
+
+    // Register job for display
+    let jobId: number | null = null;
     try {
       const r = await apiFetch('/api/bazooka/enqueue', {
         method: 'POST',
@@ -406,14 +417,65 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
         body: JSON.stringify({ url: targetUrl, title: targetTitle, cookies: cookie }),
       });
       const d = await r.json();
-      if (Array.isArray(d) && d.length > 0) {
-        setStatus(`Job #${d[0].id} en cola. El worker lo procesará en segundos...`);
-        loadJobs();
-      } else {
-        setError('Error al encolar: ' + JSON.stringify(d));
-      }
-    } catch { setError('Error de red al encolar.'); }
-    finally { setLoadingReserve(false); }
+      if (Array.isArray(d) && d[0]) { jobId = d[0].id; loadJobs(); }
+    } catch {}
+
+    // Execute reservation directly from the browser (residential IP + real DataDome session)
+    setStatus('Conectando con Vinted desde tu navegador...');
+    try {
+      const h: Record<string, string> = {
+        'Accept': 'application/json, text/plain, */*',
+        'Authorization': `Bearer ${accessToken}`,
+        'X-Requested-With': 'XMLHttpRequest',
+        'X-Vinted-Client': 'web',
+        'Content-Type': 'application/json',
+      };
+      if (csrfToken) h['X-Csrf-Token'] = csrfToken;
+
+      // Step 1: get seller_id
+      setStatus('Obteniendo datos del artículo...');
+      const itemResp = await fetch(`${base}/api/v2/items/${targetId}`, { headers: h, credentials: 'include' });
+      if (!itemResp.ok) throw new Error(`item_${itemResp.status}`);
+      const itemData = await itemResp.json();
+      const sellerId = String(itemData?.item?.user_id || '');
+      if (!sellerId) throw new Error('seller_id_not_found');
+
+      // Step 2: open conversation (reserves the item)
+      setStatus('Reservando artículo...');
+      const convResp = await fetch(`${base}/api/v2/conversations`, {
+        method: 'POST', headers: h, credentials: 'include',
+        body: JSON.stringify({ initiator: 'buy', item_id: String(targetId), opposite_user_id: sellerId }),
+      });
+      if (!convResp.ok) throw new Error(`conv_${convResp.status}`);
+      const convData = await convResp.json();
+      const transactionId = convData?.conversation?.transaction?.id;
+      if (!transactionId) throw new Error('no_transaction_id');
+
+      // Step 3: lock checkout
+      const buildResp = await fetch(`${base}/api/v2/purchases/checkout/build`, {
+        method: 'POST', headers: h, credentials: 'include',
+        body: JSON.stringify({ purchase_items: [{ id: transactionId, type: 'transaction' }] }),
+      });
+      const purchaseId = (await buildResp.json())?.checkout?.purchase_id || String(transactionId);
+
+      if (jobId) await apiFetch(`/api/bazooka/jobs/${jobId}/result`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'done', note: `tx=${transactionId} purchase=${purchaseId}` }),
+      }).catch(() => {});
+
+      setStatus(`✅ Artículo reservado correctamente. TX: ${transactionId}`);
+      loadJobs();
+    } catch (err: any) {
+      const msg = err.message || 'Error desconocido';
+      if (jobId) await apiFetch(`/api/bazooka/jobs/${jobId}/result`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'failed', error_message: msg }),
+      }).catch(() => {});
+      setError(`Error al reservar: ${msg}`);
+      loadJobs();
+    } finally {
+      setLoadingReserve(false);
+    }
   };
 
   const clearJobs = async () => {

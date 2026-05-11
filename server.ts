@@ -853,6 +853,15 @@ async function startServer() {
     res.json(r.rows);
   });
 
+  app.patch("/api/bazooka/jobs/:id/result", requireLicense as any, async (req: AuthRequest, res) => {
+    const { status, note, error_message } = req.body;
+    await pool.query(
+      "UPDATE bazooka_jobs SET status=$1, note=$2, error_message=$3, updated_at=NOW() WHERE id=$4 AND user_id=$5",
+      [status, note || null, error_message || null, req.params.id, req.user!.id]
+    );
+    res.json({ ok: true });
+  });
+
   app.delete("/api/bazooka/jobs/clear", requireLicense as any, async (req: AuthRequest, res) => {
     await pool.query("DELETE FROM bazooka_jobs WHERE user_id=$1", [req.user!.id]);
     res.json({ ok: true });
