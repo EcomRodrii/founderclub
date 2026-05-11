@@ -503,25 +503,51 @@ async function startServer() {
   app.post("/api/vinted/hide", requireLicense as any, async (req: AuthRequest, res) => {
     const { cookie, itemId, domain = "es" } = req.body;
     if (!cookie || !itemId) return res.status(400).json({ error: "Cookie and Item ID are required" });
-    try {
-      const { headers, domain: activeDomain } = getVintedHeaders(cookie, domain);
-      const response = await axios.post(`https://www.vinted.${activeDomain}/api/v2/items/${itemId}/hide`, {}, { headers });
-      res.json({ success: true, data: response.data });
-    } catch (error: any) {
-      res.status(error.response?.status || 500).json({ error: "Failed to hide item", details: error.response?.data || error.message });
+    const { headers, domain: activeDomain } = getVintedHeaders(cookie, domain);
+    const attempts = [
+      () => axios.post(`https://www.vinted.${activeDomain}/api/v2/items/${itemId}/hide`, {}, { headers, validateStatus: s => s < 500 }),
+      () => axios.patch(`https://www.vinted.${activeDomain}/api/v2/items/${itemId}`, { item: { is_hidden: true } }, { headers, validateStatus: s => s < 500 }),
+      () => axios.put(`https://www.vinted.${activeDomain}/api/v2/items/${itemId}/hide`, {}, { headers, validateStatus: s => s < 500 }),
+      () => axios.patch(`https://www.vinted.${activeDomain}/api/v2/items/${itemId}`, { item: { is_draft: true } }, { headers, validateStatus: s => s < 500 }),
+    ];
+    let lastErr: any;
+    for (const attempt of attempts) {
+      try {
+        const r = await attempt();
+        if (r.status >= 200 && r.status < 300) return res.json({ success: true, data: r.data });
+        if (r.status === 401) return res.status(401).json({ error: "Sesión expirada. Renueva tu cookie.", details: r.data });
+        lastErr = r.data;
+      } catch (e: any) {
+        if (e.response?.status === 401) return res.status(401).json({ error: "Sesión expirada. Renueva tu cookie." });
+        lastErr = e.response?.data || e.message;
+      }
     }
+    res.status(500).json({ error: "No se pudo ocultar el artículo.", details: lastErr });
   });
 
   app.post("/api/vinted/reveal", requireLicense as any, async (req: AuthRequest, res) => {
     const { cookie, itemId, domain = "es" } = req.body;
     if (!cookie || !itemId) return res.status(400).json({ error: "Cookie and Item ID are required" });
-    try {
-      const { headers, domain: activeDomain } = getVintedHeaders(cookie, domain);
-      const response = await axios.post(`https://www.vinted.${activeDomain}/api/v2/items/${itemId}/reveal`, {}, { headers });
-      res.json({ success: true, data: response.data });
-    } catch (error: any) {
-      res.status(error.response?.status || 500).json({ error: "Failed to reveal item", details: error.response?.data || error.message });
+    const { headers, domain: activeDomain } = getVintedHeaders(cookie, domain);
+    const attempts = [
+      () => axios.post(`https://www.vinted.${activeDomain}/api/v2/items/${itemId}/reveal`, {}, { headers, validateStatus: s => s < 500 }),
+      () => axios.patch(`https://www.vinted.${activeDomain}/api/v2/items/${itemId}`, { item: { is_hidden: false } }, { headers, validateStatus: s => s < 500 }),
+      () => axios.delete(`https://www.vinted.${activeDomain}/api/v2/items/${itemId}/hide`, { headers, validateStatus: s => s < 500 }),
+      () => axios.patch(`https://www.vinted.${activeDomain}/api/v2/items/${itemId}`, { item: { is_draft: false } }, { headers, validateStatus: s => s < 500 }),
+    ];
+    let lastErr: any;
+    for (const attempt of attempts) {
+      try {
+        const r = await attempt();
+        if (r.status >= 200 && r.status < 300) return res.json({ success: true, data: r.data });
+        if (r.status === 401) return res.status(401).json({ error: "Sesión expirada. Renueva tu cookie.", details: r.data });
+        lastErr = r.data;
+      } catch (e: any) {
+        if (e.response?.status === 401) return res.status(401).json({ error: "Sesión expirada. Renueva tu cookie." });
+        lastErr = e.response?.data || e.message;
+      }
     }
+    res.status(500).json({ error: "No se pudo mostrar el artículo.", details: lastErr });
   });
 
   app.post("/api/vinted/report", requireLicense as any, async (req: AuthRequest, res) => {
