@@ -9,6 +9,7 @@ import {
 interface AdminPanelProps {
   token: string;
   onLogout: () => void;
+  onBack?: () => void;
 }
 
 type Tab = 'stats' | 'users' | 'licenses' | 'sessions';
@@ -59,7 +60,7 @@ function truncate(s: string | null, len = 18) {
   return s.length > len ? s.slice(0, len) + '…' : s;
 }
 
-export default function AdminPanel({ token, onLogout }: AdminPanelProps) {
+export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps) {
   const [tab, setTab] = useState<Tab>('stats');
   const [stats, setStats] = useState<any>(null);
   const [users, setUsers] = useState<any[]>([]);
@@ -118,10 +119,17 @@ export default function AdminPanel({ token, onLogout }: AdminPanelProps) {
           </div>
           <span className="font-bold text-white">Admin Panel</span>
         </div>
-        <button onClick={onLogout} className="flex items-center gap-2 text-sm text-zinc-400 hover:text-white transition">
-          <LogOut className="w-4 h-4" />
-          Salir
-        </button>
+        <div className="flex items-center gap-3">
+          {onBack && (
+            <button onClick={onBack} className="flex items-center gap-2 text-sm text-violet-400 hover:text-violet-300 transition">
+              ← Ir a la App
+            </button>
+          )}
+          <button onClick={onLogout} className="flex items-center gap-2 text-sm text-zinc-400 hover:text-white transition">
+            <LogOut className="w-4 h-4" />
+            Salir
+          </button>
+        </div>
       </div>
 
       <div className="max-w-6xl mx-auto p-6">

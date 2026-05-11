@@ -324,7 +324,13 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
               </div>
             )}
 
-            {!loading && !detections && (
+            {error && !loading && (
+              <div className="py-4 px-4 bg-red-500/10 border border-red-500/30 rounded-2xl">
+                <p className="text-[11px] text-red-400 font-medium">{error}</p>
+              </div>
+            )}
+
+            {!loading && !detections && !error && (
               <div className="py-8 text-center border border-dashed border-white/5 rounded-2xl">
                 <ScanText className="w-8 h-8 text-white/5 mx-auto mb-2" />
                 <p className="text-[11px] text-white/20">Sube una imagen para extraer los datos</p>

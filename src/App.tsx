@@ -140,14 +140,19 @@ export default function App() {
     );
   }
 
+  const [showAdmin, setShowAdmin] = useState(false);
+
   if (!authToken || !authUser) return <AuthPage onAuth={handleAuth} />;
-  if (authUser.is_admin) return <AdminPanel token={authToken} onLogout={handleLogout} />;
-  if (!license) return <LicenseActivation token={authToken} onActivated={() => {
+  if (!license && !authUser.is_admin) return <LicenseActivation token={authToken} onActivated={() => {
     fetch('/api/auth/me', { headers: { Authorization: `Bearer ${authToken}` } })
       .then(r => r.json()).then(data => setLicense(data.license));
   }} />;
 
-  return <MainApp token={authToken} user={authUser} license={license} onLogout={handleLogout} />;
+  if (authUser.is_admin && showAdmin) return (
+    <AdminPanel token={authToken} onLogout={handleLogout} onBack={() => setShowAdmin(false)} />
+  );
+
+  return <MainApp token={authToken} user={authUser} license={license} onLogout={handleLogout} onAdmin={authUser.is_admin ? () => setShowAdmin(true) : undefined} />;
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -165,7 +170,7 @@ const DOMAINS = ['es', 'fr', 'it', 'nl', 'de', 'pl', 'uk', 'com'];
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 
-function MainApp({ token, user, license, onLogout }: { token: string; user: any; license: any; onLogout: () => void }) {
+function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; user: any; license: any; onLogout: () => void; onAdmin?: () => void }) {
   const authHeader = { Authorization: `Bearer ${token}` };
 
   // Helper to add auth to fetch calls
@@ -520,6 +525,15 @@ function MainApp({ token, user, license, onLogout }: { token: string; user: any;
           </button>
           <div className="hidden lg:block h-6 w-[1px] bg-white/10" />
           <span className="hidden lg:inline text-xs text-white/50 font-mono">{user.username}</span>
+          {onAdmin && (
+            <button
+              onClick={onAdmin}
+              title="Panel de Admin"
+              className="hidden lg:flex p-2 hover:bg-violet-500/10 rounded-lg transition-colors text-violet-400/60 hover:text-violet-400"
+            >
+              <ShieldCheck className="w-4 h-4" />
+            </button>
+          )}
           <button
             onClick={onLogout}
             title="Cerrar sesión"
