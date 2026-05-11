@@ -51,7 +51,8 @@ export async function initDB() {
   if (adminEmail && adminPassword) {
     const existing = await pool.query("SELECT id FROM users WHERE is_admin = TRUE LIMIT 1");
     if (existing.rows.length === 0) {
-      const bcrypt = await import("bcryptjs");
+      const bcryptMod = await import("bcryptjs");
+      const bcrypt = bcryptMod.default ?? bcryptMod;
       const hash = await bcrypt.hash(adminPassword, 12);
       await pool.query(
         "INSERT INTO users (username, email, password_hash, is_admin) VALUES ($1, $2, $3, TRUE) ON CONFLICT DO NOTHING",
