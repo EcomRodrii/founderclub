@@ -224,7 +224,7 @@ async function reserveItemPuppeteer(itemId: string, cookiesStr: string, domain =
     html.match(/"user_id"\s*:\s*(\d+)/) ||
     html.match(/"seller_id"\s*:\s*(\d+)/) ||
     html.match(/"seller"\s*:\s*\{[^}]{0,100}"id"\s*:\s*(\d+)/);
-  if (!sellerMatch) throw new Error(`seller_id_not_in_page_${pageResp.status}: DataDome puede estar bloqueando desde este servidor`);
+  if (!sellerMatch) throw new Error(`seller_id_not_in_page_${pageResp.status}: ${html.slice(0, 400).replace(/\s+/g, " ")}`);
   const sellerId = sellerMatch[1];
 
   headers["Referer"] = `${base}/items/${itemId}`;
