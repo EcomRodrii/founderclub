@@ -9,6 +9,7 @@ import dotenv from "dotenv";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { pool, initDB } from "./db.js";
+import puppeteer, { Browser } from "puppeteer";
 
 dotenv.config({ path: ".env.local" });
 
@@ -61,10 +62,154 @@ function generateLicenseKey(): string {
   return `FC-${segment(4)}-${segment(4)}-${segment(4)}-${segment(4)}`;
 }
 
+// ─── Puppeteer / Bazooka ──────────────────────────────────────────────────────
+
+let _browser: Browser | null = null;
+
+async function getBrowser(): Promise<Browser> {
+  if (_browser) {
+    try { await _browser.version(); return _browser; } catch { _browser = null; }
+  }
+  _browser = await puppeteer.launch({
+    headless: true,
+    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-blink-features=AutomationControlled"],
+  });
+  return _browser;
+}
+
+function parseCookieStr(str: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const pair of (str || "").split(";")) {
+    const idx = pair.indexOf("=");
+    if (idx < 0) continue;
+    out[pair.slice(0, idx).trim()] = pair.slice(idx + 1).trim();
+  }
+  return out;
+}
+
+async function reserveItemPuppeteer(itemId: string, cookiesStr: string): Promise<{ transactionId: string; purchaseId: string }> {
+  const browser = await getBrowser();
+  const page = await browser.newPage();
+
+  try {
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, "webdriver", { get: () => false });
+      (window as any).chrome = { runtime: {} };
+    });
+    await page.setExtraHTTPHeaders({ "accept-language": "es-ES,es;q=0.9" });
+
+    // Inject user cookies
+    const cookieMap = parseCookieStr(cookiesStr);
+    const toSet = Object.entries(cookieMap)
+      .filter(([, v]) => v)
+      .map(([name, value]) => ({ name, value, domain: ".vinted.es", path: "/", secure: true, sameSite: "Lax" as const }));
+    if (toSet.length) await page.setCookie(...toSet);
+
+    let sellerId: string | null = null;
+    let csrfToken: string | null = null;
+    let anonId: string | null = null;
+    let accessToken: string | null = null;
+
+    await page.setRequestInterception(true);
+    page.on("request", req => {
+      const h = req.headers();
+      if (req.url().includes("/api/v2/") && h["x-csrf-token"]) {
+        csrfToken = csrfToken || h["x-csrf-token"];
+        anonId = anonId || h["x-anon-id"];
+        accessToken = accessToken || (h["authorization"] || "").replace("Bearer ", "") || null;
+      }
+      req.continue();
+    });
+    page.on("response", async resp => {
+      try {
+        if (resp.url().includes("/api/v2/offers/request_options") && !sellerId) {
+          const j = await resp.json().catch(() => null);
+          if (j?.request_options?.seller_id) sellerId = String(j.request_options.seller_id);
+        }
+        if (resp.url().includes(`/api/v2/items/${itemId}`) && !sellerId) {
+          const j = await resp.json().catch(() => null);
+          if (j?.item?.user_id) sellerId = String(j.item.user_id);
+        }
+      } catch {}
+    });
+
+    await page.goto(`https://www.vinted.es/items/${itemId}`, { waitUntil: "networkidle2", timeout: 35000 });
+
+    if (!sellerId || !csrfToken) await new Promise(r => setTimeout(r, 3000));
+
+    const bc = await page.cookies("https://www.vinted.es");
+    const bcMap = Object.fromEntries(bc.map(c => [c.name, c.value]));
+    if (!csrfToken) csrfToken = bcMap["csrf_token"] || bcMap["_csrf_token"] || null;
+    if (!anonId) anonId = bcMap["anon_id"] || cookieMap["anon_id"] || null;
+    if (!accessToken || accessToken.length < 10) accessToken = bcMap["access_token_web"] || null;
+
+    if (!sellerId) throw new Error("seller_id_not_found — el artículo puede estar reservado o eliminado");
+
+    // POST conversations from page context (same-origin, bypasses DataDome)
+    const convResult: any = await page.evaluate(async (p: any) => {
+      const h: Record<string, string> = { "accept": "application/json, text/plain, */*", "content-type": "application/json", "x-requested-with": "XMLHttpRequest", "locale": "es-ES" };
+      if (p.csrfToken) h["x-csrf-token"] = p.csrfToken;
+      if (p.anonId) h["x-anon-id"] = p.anonId;
+      if (p.accessToken) h["authorization"] = `Bearer ${p.accessToken}`;
+      const r = await fetch("/api/v2/conversations", { method: "POST", credentials: "include", headers: h, body: JSON.stringify({ initiator: "buy", item_id: String(p.itemId), opposite_user_id: String(p.sellerId) }) });
+      return { ok: r.ok, status: r.status, text: await r.text().catch(() => "") };
+    }, { itemId, sellerId, csrfToken, anonId, accessToken });
+
+    if (!convResult.ok) throw new Error(`conversations_${convResult.status}: ${convResult.text.slice(0, 200)}`);
+    const convJson = JSON.parse(convResult.text);
+    const transactionId = convJson?.conversation?.transaction?.id;
+    if (!transactionId) throw new Error(`no_transaction_id: ${convResult.text.slice(0, 150)}`);
+
+    // POST checkout/build from page context
+    const buildResult: any = await page.evaluate(async (p: any) => {
+      const h: Record<string, string> = { "accept": "application/json, text/plain, */*", "content-type": "application/json", "x-requested-with": "XMLHttpRequest", "locale": "es-ES" };
+      if (p.csrfToken) h["x-csrf-token"] = p.csrfToken;
+      if (p.anonId) h["x-anon-id"] = p.anonId;
+      if (p.accessToken) h["authorization"] = `Bearer ${p.accessToken}`;
+      const r = await fetch("/api/v2/purchases/checkout/build", { method: "POST", credentials: "include", headers: h, body: JSON.stringify({ purchase_items: [{ id: p.transactionId, type: "transaction" }] }) });
+      return { ok: r.ok, status: r.status, text: await r.text().catch(() => "") };
+    }, { transactionId, csrfToken, anonId, accessToken });
+
+    if (!buildResult.ok) throw new Error(`checkout_build_${buildResult.status}: ${buildResult.text.slice(0, 150)}`);
+    const buildJson = JSON.parse(buildResult.text);
+    const purchaseId = buildJson?.checkout?.purchase_id || buildJson?.purchase_id || String(transactionId);
+
+    return { transactionId: String(transactionId), purchaseId: String(purchaseId) };
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
+
+async function startBazookaWorker() {
+  console.log("Bazooka worker arrancado");
+  // Pre-warm browser
+  try { await getBrowser(); console.log("Browser Puppeteer listo"); } catch (e: any) { console.warn("Browser init:", e.message); }
+
+  while (true) {
+    try {
+      const result = await pool.query("SELECT * FROM bazooka_jobs WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1");
+      const job = result.rows[0];
+      if (job) {
+        await pool.query("UPDATE bazooka_jobs SET status = 'processing', updated_at = NOW() WHERE id = $1", [job.id]);
+        try {
+          const r = await reserveItemPuppeteer(job.item_id, job.vinted_cookies);
+          await pool.query("UPDATE bazooka_jobs SET status = 'done', note = $1, updated_at = NOW() WHERE id = $2", [`tx=${r.transactionId} purchase=${r.purchaseId}`, job.id]);
+          console.log(`Bazooka job #${job.id} DONE`);
+        } catch (err: any) {
+          await pool.query("UPDATE bazooka_jobs SET status = 'failed', error_message = $1, updated_at = NOW() WHERE id = $2", [err.message.slice(0, 300), job.id]);
+          console.error(`Bazooka job #${job.id} FAILED:`, err.message);
+        }
+      }
+    } catch (err: any) { console.error("Bazooka worker loop error:", err.message); }
+    await new Promise(r => setTimeout(r, 3000));
+  }
+}
+
 // ─── Main Server ──────────────────────────────────────────────────────────────
 
 async function startServer() {
   await initDB();
+  startBazookaWorker().catch(e => console.error("Bazooka worker crash:", e.message));
 
   const app = express();
 
@@ -685,6 +830,42 @@ async function startServer() {
   });
   app.delete("/api/profits/sales/:id", requireAuth as any, async (req: AuthRequest, res) => {
     await pool.query("DELETE FROM sales WHERE id=$1 AND user_id=$2", [req.params.id, req.user!.id]);
+    res.json({ ok: true });
+  });
+
+  // ── Bazooka / Reserve endpoints ─────────────────────────────────────────────
+
+  app.post("/api/bazooka/enqueue", requireLicense as any, async (req: AuthRequest, res) => {
+    const items = Array.isArray(req.body) ? req.body : [req.body];
+    if (!items.length) return res.status(400).json({ error: "Se requieren items" });
+    const cookies = items[0]?.cookies;
+    if (!cookies) return res.status(400).json({ error: "Se requieren las cookies de Vinted" });
+
+    const inserted: any[] = [];
+    for (const item of items) {
+      const { url, title, cookies: itemCookies } = item;
+      if (!url) continue;
+      const itemId = (url as string).match(/\/items\/(\d+)/)?.[1] || (url as string).match(/\/(\d+)-/)?.[1] || null;
+      if (!itemId) continue;
+      const r = await pool.query(
+        "INSERT INTO bazooka_jobs (user_id, url, title, item_id, vinted_cookies) VALUES ($1,$2,$3,$4,$5) RETURNING id, url, title, item_id, status, created_at",
+        [req.user!.id, url, title || null, itemId, itemCookies || cookies]
+      );
+      inserted.push(r.rows[0]);
+    }
+    res.json(inserted);
+  });
+
+  app.get("/api/bazooka/jobs", requireLicense as any, async (req: AuthRequest, res) => {
+    const r = await pool.query(
+      "SELECT id, url, title, item_id, status, note, error_message, created_at, updated_at FROM bazooka_jobs WHERE user_id=$1 ORDER BY created_at DESC LIMIT 50",
+      [req.user!.id]
+    );
+    res.json(r.rows);
+  });
+
+  app.delete("/api/bazooka/jobs/clear", requireLicense as any, async (req: AuthRequest, res) => {
+    await pool.query("DELETE FROM bazooka_jobs WHERE user_id=$1", [req.user!.id]);
     res.json({ ok: true });
   });
 

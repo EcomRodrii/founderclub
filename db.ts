@@ -60,6 +60,20 @@ export async function initDB() {
       vinted_account VARCHAR(100),
       created_at TIMESTAMP DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS bazooka_jobs (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      url TEXT NOT NULL,
+      title TEXT,
+      item_id VARCHAR(50),
+      status VARCHAR(20) DEFAULT 'pending',
+      note TEXT,
+      error_message TEXT,
+      vinted_cookies TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
   `);
 
   // Create first admin from env if no admins exist

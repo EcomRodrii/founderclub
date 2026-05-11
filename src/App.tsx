@@ -4,7 +4,7 @@ import {
   Lock, User, ExternalLink, RefreshCcw,
   CheckCircle2, AlertCircle, ShieldCheck,
   ChevronRight, LayoutGrid, List as ListIcon,
-  HelpCircle, Copy, Check, Scissors, Key, LogOut, TrendingUp
+  HelpCircle, Copy, Check, Scissors, Key, LogOut, TrendingUp, Zap, Trash2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import TongueEditor from './components/TongueEditor';
@@ -357,6 +357,69 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
 
   const [itemStats, setItemStats] = useState<{ visible: boolean; checked: boolean }>({ visible: true, checked: false });
   const [stealthDescription, setStealthDescription] = useState('This item is a replica and uses stock photos from a luxury brand website. Selling counterfeits is against Vinted safety policies.');
+
+  // Bazooka queue
+  interface BazookaJob { id: number; url: string; title: string | null; item_id: string; status: string; note: string | null; error_message: string | null; created_at: string; }
+  const [bazookaJobs, setBazookaJobs] = useState<BazookaJob[]>([]);
+  const [loadingReserve, setLoadingReserve] = useState(false);
+
+  const loadJobs = useCallback(async () => {
+    try {
+      const r = await apiFetch('/api/bazooka/jobs');
+      if (r.ok) setBazookaJobs(await r.json());
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    if (activeTab !== 'external') return;
+    loadJobs();
+    const iv = setInterval(loadJobs, 4000);
+    return () => clearInterval(iv);
+  }, [activeTab, loadJobs]);
+
+  const enqueueReserve = async () => {
+    let targetId = externalId;
+    let targetUrl = externalUrl;
+    let targetTitle = externalTitle;
+
+    if (!cookie) { setError('⚠️ Introduce tu Cookie en el panel lateral.'); return; }
+
+    if (!targetId && targetUrl) {
+      setStatus('Detectando ID...');
+      try {
+        const r = await fetch(`/api/vinted/resolve-product?url=${encodeURIComponent(targetUrl)}`);
+        const d = await r.json();
+        if (d.itemId) { targetId = d.itemId; targetTitle = d.title || ''; setExternalId(d.itemId); setExternalTitle(d.title || ''); }
+        else { setError('No se pudo detectar el ID del producto.'); return; }
+      } catch { setError('Error al resolver la URL.'); return; }
+    }
+
+    if (!targetId) { setError('⚠️ Introduce la URL del producto a reservar.'); return; }
+    if (!targetUrl) targetUrl = `https://www.vinted.es/items/${targetId}`;
+
+    setLoadingReserve(true);
+    setStatus('Añadiendo a la cola de reserva...');
+    try {
+      const r = await apiFetch('/api/bazooka/enqueue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: targetUrl, title: targetTitle, cookies: cookie }),
+      });
+      const d = await r.json();
+      if (Array.isArray(d) && d.length > 0) {
+        setStatus(`Job #${d[0].id} en cola. El worker lo procesará en segundos...`);
+        loadJobs();
+      } else {
+        setError('Error al encolar: ' + JSON.stringify(d));
+      }
+    } catch { setError('Error de red al encolar.'); }
+    finally { setLoadingReserve(false); }
+  };
+
+  const clearJobs = async () => {
+    await apiFetch('/api/bazooka/jobs/clear', { method: 'DELETE' });
+    setBazookaJobs([]);
+  };
 
   const checkPublicStatus = async () => {
     if (!externalId) return;
@@ -896,7 +959,8 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
           )}
 
           {activeTab === 'external' && (
-            <motion.div 
+            <>
+            <motion.div
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
               className="bg-[#141414] border border-white/5 rounded-3xl p-8 shadow-2xl space-y-8"
@@ -986,27 +1050,27 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                        </div>
 
                         <div className="grid grid-cols-1 gap-3 mt-4">
-                          <button 
-                           onClick={spamCheckout}
-                           disabled={loading}
-                           className="w-full bg-emerald-500 text-black font-bold py-5 rounded-2xl hover:bg-emerald-400 transition-all shadow-[0_0_30px_rgba(16,185,129,0.3)] flex flex-col items-center justify-center gap-1 border-2 border-emerald-400/50"
+                          <button
+                           onClick={enqueueReserve}
+                           disabled={loadingReserve}
+                           className="w-full bg-emerald-500 text-black font-bold py-5 rounded-2xl hover:bg-emerald-400 transition-all shadow-[0_0_30px_rgba(16,185,129,0.3)] flex flex-col items-center justify-center gap-1 border-2 border-emerald-400/50 disabled:opacity-50"
                           >
                            <div className="flex items-center gap-2">
-                             <ShieldCheck className="w-6 h-6" />
-                             <span className="text-lg">FORCE HIDE ATTACK</span>
+                             <Zap className="w-6 h-6" />
+                             <span className="text-lg">{loadingReserve ? 'ENCOLANDO...' : 'RESERVAR (PUPPETEER)'}</span>
                            </div>
-                           <span className="text-[11px] opacity-70 font-normal uppercase tracking-wider">Metodo Checkout Spam (Masivo)</span>
+                           <span className="text-[11px] opacity-70 font-normal uppercase tracking-wider">Inicia checkout real · Bypassa DataDome</span>
                           </button>
 
                           <div className="grid grid-cols-2 gap-2">
-                            <button 
+                            <button
                              onClick={reportItem}
                              disabled={loading}
                              className="py-3 bg-red-600/20 text-red-400 rounded-xl border border-red-500/20 text-xs font-bold hover:bg-red-600/30 transition-all"
                             >
                              Reporte V1
                             </button>
-                            <button 
+                            <button
                              onClick={checkPublicStatus}
                              className="py-3 bg-white/5 text-white/40 rounded-xl border border-white/10 text-xs font-bold hover:bg-white/10 transition-all"
                             >
@@ -1035,6 +1099,51 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                 </div>
               </div>
             </motion.div>
+
+            {/* Bazooka job queue */}
+            {bazookaJobs.length > 0 && (
+              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-[#141414] border border-white/5 rounded-2xl p-5 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Zap className="w-4 h-4 text-emerald-400" />
+                    <span className="text-xs font-bold uppercase tracking-widest text-white/60">Cola de reservas</span>
+                    <span className="text-[10px] bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded-full font-mono">{bazookaJobs.filter(j => j.status === 'pending' || j.status === 'processing').length} activos</span>
+                  </div>
+                  <button onClick={clearJobs} title="Limpiar cola" className="text-white/20 hover:text-red-400 transition-colors">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                  {bazookaJobs.map(job => (
+                    <div key={job.id} className="flex items-center gap-3 bg-black/30 rounded-xl px-3 py-2.5">
+                      <div className={`w-2 h-2 rounded-full shrink-0 ${
+                        job.status === 'done' ? 'bg-emerald-500' :
+                        job.status === 'failed' ? 'bg-red-500' :
+                        job.status === 'processing' ? 'bg-amber-400 animate-pulse' :
+                        'bg-white/20'
+                      }`} />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs truncate text-white/70">{job.title || job.url}</p>
+                        <p className="text-[10px] font-mono text-white/30">ID: {job.item_id} · {job.status.toUpperCase()}</p>
+                        {job.status === 'failed' && job.error_message && (
+                          <p className="text-[10px] text-red-400 truncate mt-0.5">{job.error_message}</p>
+                        )}
+                        {job.status === 'done' && job.note && (
+                          <p className="text-[10px] text-emerald-400 truncate mt-0.5">✓ {job.note}</p>
+                        )}
+                      </div>
+                      <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded-full shrink-0 ${
+                        job.status === 'done' ? 'bg-emerald-500/10 text-emerald-400' :
+                        job.status === 'failed' ? 'bg-red-500/10 text-red-400' :
+                        job.status === 'processing' ? 'bg-amber-500/10 text-amber-400' :
+                        'bg-white/5 text-white/30'
+                      }`}>{job.status}</span>
+                    </div>
+                  ))}
+                </div>
+              </motion.div>
+            )}
+            </>
           )}
         </div>
         {activeTab === 'profits' && (
