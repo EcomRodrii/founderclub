@@ -224,14 +224,17 @@ async function reserveItemPuppeteer(itemId: string, cookiesStr: string, domain =
   headers["Referer"] = `${base}/items/${itemId}`;
   const proxy = getProxyConfig();
   let sellerId: string | null = null;
+  const diag: string[] = [`proxy:${proxy ? "si" : "no"}`];
 
   // Attempt 1: item detail API via proxy
   try {
     const r = await axios.get(`${base}/api/v2/items/${itemId}`, {
       headers, proxy, validateStatus: () => true, timeout: 20000,
     });
+    diag.push(`item:${r.status}`);
     if (r.status === 200 && r.data?.item?.user_id) sellerId = String(r.data.item.user_id);
-  } catch {}
+    else diag.push(String(r.data).slice(0, 100));
+  } catch (e: any) { diag.push(`item_err:${e.message?.slice(0, 80)}`); }
 
   // Attempt 2: offers/request_options via proxy
   if (!sellerId) {
@@ -239,8 +242,10 @@ async function reserveItemPuppeteer(itemId: string, cookiesStr: string, domain =
       const r = await axios.get(`${base}/api/v2/offers/request_options`, {
         params: { item_id: itemId }, headers, proxy, validateStatus: () => true, timeout: 20000,
       });
+      diag.push(`off:${r.status}`);
       if (r.status === 200 && r.data?.request_options?.seller_id) sellerId = String(r.data.request_options.seller_id);
-    } catch {}
+      else diag.push(String(r.data).slice(0, 100));
+    } catch (e: any) { diag.push(`off_err:${e.message?.slice(0, 80)}`); }
   }
 
   // Attempt 3: HTML page via proxy — scan scripts + member links
@@ -250,6 +255,7 @@ async function reserveItemPuppeteer(itemId: string, cookiesStr: string, domain =
         headers: { "User-Agent": headers["User-Agent"], "Accept": "text/html,*/*;q=0.8", "Accept-Language": headers["Accept-Language"], "Cookie": headers["Cookie"] },
         proxy, validateStatus: () => true, timeout: 20000,
       });
+      diag.push(`html:${r.status}`);
       if (r.status === 200) {
         const $ = cheerio.load(r.data as string);
         $("script").each((_, el) => {
@@ -263,11 +269,12 @@ async function reserveItemPuppeteer(itemId: string, cookiesStr: string, domain =
           const m = ($(el).attr("href") || "").match(/\/member\/(\d+)/);
           if (m) sellerId = m[1];
         });
+        if (!sellerId) diag.push(`html_preview:${String(r.data).slice(0, 120)}`);
       }
-    } catch {}
+    } catch (e: any) { diag.push(`html_err:${e.message?.slice(0, 80)}`); }
   }
 
-  if (!sellerId) throw new Error(`seller_id_not_found: proxy activo pero no se pudo obtener el vendedor`);
+  if (!sellerId) throw new Error(`seller_id_not_found [${diag.join(" | ")}]`);
 
   // Step 2: open conversation (reserves the item)
   const convResp = await axios.post(
