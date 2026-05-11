@@ -113,9 +113,8 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
       };
 
       const result = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: "gemini-2.0-flash",
         contents: { parts: [imagePart, { text: prompt }] },
-        tools: [{ googleSearch: {} }]
       });
 
       const text = result.text || '';
@@ -308,7 +307,7 @@ ${customPromptNB}
       } : null;
 
       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-image',
+        model: 'gemini-2.0-flash-exp-image-generation',
         contents: {
           parts: [
             ...(imagePart ? [imagePart] : []),
@@ -316,9 +315,7 @@ ${customPromptNB}
           ],
         },
         config: {
-          imageConfig: {
-            aspectRatio: "1:1"
-          }
+          responseModalities: ['TEXT', 'IMAGE'],
         }
       });
 
