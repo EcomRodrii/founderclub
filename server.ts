@@ -208,67 +208,57 @@ async function reserveItemPuppeteer(itemId: string, cookiesStr: string, domain =
 
   headers["Referer"] = `${base}/items/${itemId}`;
   let sellerId: string | null = null;
+  const diag: string[] = [];
 
-  // Attempt 1: offers/request_options — authenticated endpoint that returns seller_id directly
+  // Attempt 1: offers/request_options
   try {
-    const offResp = await axios.get(`${base}/api/v2/offers/request_options`, {
-      params: { item_id: itemId },
-      headers,
-      validateStatus: () => true,
-      timeout: 10000,
+    const r = await axios.get(`${base}/api/v2/offers/request_options`, {
+      params: { item_id: itemId }, headers, validateStatus: () => true, timeout: 10000,
     });
-    if (offResp.status === 200 && offResp.data?.request_options?.seller_id) {
-      sellerId = String(offResp.data.request_options.seller_id);
-    }
-  } catch {}
+    diag.push(`off:${r.status}`);
+    if (r.status === 200 && r.data?.request_options?.seller_id) sellerId = String(r.data.request_options.seller_id);
+    else diag.push(JSON.stringify(r.data).slice(0, 120));
+  } catch (e: any) { diag.push(`off_err:${e.message?.slice(0, 60)}`); }
 
   // Attempt 2: item detail API
   if (!sellerId) {
     try {
-      const itemResp = await axios.get(`${base}/api/v2/items/${itemId}`, {
-        headers,
-        validateStatus: () => true,
-        timeout: 10000,
+      const r = await axios.get(`${base}/api/v2/items/${itemId}`, {
+        headers, validateStatus: () => true, timeout: 10000,
       });
-      if (itemResp.status === 200 && itemResp.data?.item?.user_id) {
-        sellerId = String(itemResp.data.item.user_id);
-      }
-    } catch {}
+      diag.push(`item:${r.status}`);
+      if (r.status === 200 && r.data?.item?.user_id) sellerId = String(r.data.item.user_id);
+      else diag.push(typeof r.data === "string" ? r.data.slice(0, 80) : JSON.stringify(r.data).slice(0, 120));
+    } catch (e: any) { diag.push(`item_err:${e.message?.slice(0, 60)}`); }
   }
 
-  // Attempt 3: HTML page — scan scripts + member profile links
+  // Attempt 3: HTML page — member links
   if (!sellerId) {
     try {
-      const pageResp = await axios.get(`${base}/items/${itemId}`, {
-        headers: {
-          "User-Agent": headers["User-Agent"],
-          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-          "Accept-Language": headers["Accept-Language"],
-          "Cookie": headers["Cookie"],
-        },
-        validateStatus: () => true,
-        timeout: 15000,
+      const r = await axios.get(`${base}/items/${itemId}`, {
+        headers: { "User-Agent": headers["User-Agent"], "Accept": "text/html,*/*;q=0.8", "Accept-Language": headers["Accept-Language"], "Cookie": headers["Cookie"] },
+        validateStatus: () => true, timeout: 15000,
       });
-      if (pageResp.status === 200) {
-        const $ = cheerio.load(pageResp.data as string);
+      diag.push(`html:${r.status}`);
+      if (r.status === 200) {
+        const $ = cheerio.load(r.data as string);
         $("script").each((_, el) => {
           if (sellerId) return;
           const t = $(el).text();
           const m = t.match(/"user_id"\s*:\s*(\d+)/) || t.match(/"seller_id"\s*:\s*(\d+)/) || t.match(/"userId"\s*:\s*(\d+)/);
           if (m) sellerId = m[1];
         });
-        if (!sellerId) {
-          $("a[href*='/member/']").each((_, el) => {
-            if (sellerId) return;
-            const m = ($(el).attr("href") || "").match(/\/member\/(\d+)/);
-            if (m) sellerId = m[1];
-          });
-        }
+        if (!sellerId) $("a[href*='/member/']").each((_, el) => {
+          if (sellerId) return;
+          const m = ($(el).attr("href") || "").match(/\/member\/(\d+)/);
+          if (m) sellerId = m[1];
+        });
+        if (!sellerId) diag.push(`no_seller_in_html`);
       }
-    } catch {}
+    } catch (e: any) { diag.push(`html_err:${e.message?.slice(0, 60)}`); }
   }
 
-  if (!sellerId) throw new Error(`seller_id_not_found: los 3 métodos fallaron. Comprueba que la URL es válida y las cookies no han expirado.`);
+  if (!sellerId) throw new Error(`seller_id_not_found [${diag.join(" | ")}]`);
 
   // Step 2: open conversation (reserves the item)
   const convResp = await axios.post(
