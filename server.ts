@@ -220,12 +220,36 @@ async function reserveItemPuppeteer(itemId: string, cookiesStr: string, domain =
     throw new Error(`page_fetch_${pageResp.status}: el artículo no existe o fue eliminado`);
   }
   const html: string = pageResp.data;
-  const sellerMatch =
-    html.match(/"user_id"\s*:\s*(\d+)/) ||
-    html.match(/"seller_id"\s*:\s*(\d+)/) ||
-    html.match(/"seller"\s*:\s*\{[^}]{0,100}"id"\s*:\s*(\d+)/);
-  if (!sellerMatch) throw new Error(`seller_id_not_in_page_${pageResp.status}: ${html.slice(0, 400).replace(/\s+/g, " ")}`);
-  const sellerId = sellerMatch[1];
+  const $ = cheerio.load(html);
+  let sellerId: string | null = null;
+
+  // Try Next.js SSR data blob first
+  const nextDataRaw = $("script#__NEXT_DATA__").html();
+  if (nextDataRaw) {
+    try {
+      const nd = JSON.parse(nextDataRaw);
+      const pp = nd?.props?.pageProps;
+      const it = pp?.item || pp?.initialState?.item?.item || pp?.initialState?.items?.[itemId];
+      if (it?.user_id) sellerId = String(it.user_id);
+      else if (it?.seller?.id) sellerId = String(it.seller.id);
+      else if (it?.userId) sellerId = String(it.userId);
+    } catch {}
+  }
+
+  // Fallback: scan all inline scripts with regex
+  if (!sellerId) {
+    $("script").each((_, el) => {
+      if (sellerId) return;
+      const t = $(el).text();
+      const m = t.match(/"user_id"\s*:\s*(\d+)/) ||
+                t.match(/"seller_id"\s*:\s*(\d+)/) ||
+                t.match(/"userId"\s*:\s*(\d+)/) ||
+                t.match(/"seller"\s*:\s*\{[^}]{0,200}"id"\s*:\s*(\d+)/);
+      if (m) sellerId = m[1];
+    });
+  }
+
+  if (!sellerId) throw new Error(`seller_id_not_found: página cargó pero no contiene seller_id (Next.js data: ${nextDataRaw ? "sí" : "no"})`);
 
   headers["Referer"] = `${base}/items/${itemId}`;
 
