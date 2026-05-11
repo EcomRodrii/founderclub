@@ -49,7 +49,7 @@ export default function TongueEditor() {
 1. NUNCA cambies el SKU / MODELO (el código que aparece después de "ART NO" o "A:"). Debe ser EXACTAMENTE igual al original.
 2. Modifica únicamente los dos últimos códigos de la parte inferior:
    - El código que empieza por # (9 dígitos): Cambia los 9 dígitos por aleatorios (solo números).
-   - El código alfanumérico después de “adidas” (13 dígitos): Cámbialo manteniendo longitud y formato (mayúsculas/números).
+   - El código alfanumérico después de "adidas" (13 dígitos): Cámbialo manteniendo longitud y formato (mayúsculas/números).
 3. Mantén tipografía, alineación, materiales y calidad originales. Everything else stays the same.`);
 
   const [customPromptNB, setCustomPromptNB] = useState<string>(`Modifica la etiqueta de esta zapatilla de New Balance. Cambia únicamente estos tres códigos:
