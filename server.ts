@@ -143,7 +143,45 @@ async function reserveItemPuppeteer(itemId: string, cookiesStr: string): Promise
     if (!anonId) anonId = bcMap["anon_id"] || cookieMap["anon_id"] || null;
     if (!accessToken || accessToken.length < 10) accessToken = bcMap["access_token_web"] || null;
 
-    if (!sellerId) throw new Error("seller_id_not_found — el artículo puede estar reservado o eliminado");
+    // Fallback 1: extract seller_id from page HTML / window state
+    if (!sellerId) {
+      sellerId = await page.evaluate((iid: string) => {
+        // Search in script tags
+        for (const s of Array.from(document.querySelectorAll("script"))) {
+          const t = s.textContent || "";
+          const m1 = t.match(/"user_id"\s*:\s*(\d+)/);
+          if (m1) return m1[1];
+          const m2 = t.match(/"seller_id"\s*:\s*(\d+)/);
+          if (m2) return m2[1];
+          const m3 = t.match(/"seller"\s*:\s*\{[^}]*?"id"\s*:\s*(\d+)/);
+          if (m3) return m3[1];
+        }
+        // Try preloaded state
+        const w = window as any;
+        const state = w.__PRELOADED_STATE__ || w.__INITIAL_STATE__ || w.APP_STATE;
+        if (state) {
+          const item = state?.item?.item || state?.items?.[iid] || state?.item;
+          if (item?.user_id) return String(item.user_id);
+          if (item?.seller?.id) return String(item.seller.id);
+        }
+        return null;
+      }, itemId).catch(() => null);
+    }
+
+    // Fallback 2: direct API call from page context
+    if (!sellerId && accessToken) {
+      const apiResult: any = await page.evaluate(async (p: any) => {
+        const r = await fetch(`/api/v2/items/${p.itemId}`, {
+          credentials: "include",
+          headers: { "accept": "application/json", "authorization": `Bearer ${p.accessToken}` }
+        });
+        const j = await r.json().catch(() => null);
+        return j?.item?.user_id ? String(j.item.user_id) : null;
+      }, { itemId, accessToken }).catch(() => null);
+      if (apiResult) sellerId = apiResult;
+    }
+
+    if (!sellerId) throw new Error("seller_id_not_found — DataDome bloqueó la página o el artículo no existe");
 
     // POST conversations from page context (same-origin, bypasses DataDome)
     const convResult: any = await page.evaluate(async (p: any) => {
