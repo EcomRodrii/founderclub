@@ -622,7 +622,7 @@ async function startServer() {
       Si no encuentras algún dato, pon "Desconocido". Solo devuelve el JSON puro sin markdown.`;
 
       const result = await ai.models.generateContent({
-        model: "gemini-2.5-flash-preview-05-20",
+        model: "gemini-1.5-flash",
         contents: {
           parts: [
             { inlineData: { mimeType: "image/jpeg", data: imageBase64.split(",")[1] || imageBase64 } },
