@@ -62,6 +62,121 @@ function generateLicenseKey(): string {
   return `FC-${segment(4)}-${segment(4)}-${segment(4)}-${segment(4)}`;
 }
 
+// ─── Vinted Headers Builder ───────────────────────────────────────────────────
+
+function getVintedHeaders(cookie: string, domain: string = "es") {
+  const extractedParts: string[] = [];
+  const foundKeys = new Set<string>();
+
+  let authToken = "";
+  const tokenMatch = cookie.match(/access_token_web[:=]\s*([a-zA-Z0-9._-]+)/i);
+  if (tokenMatch?.[1]) {
+    authToken = tokenMatch[1];
+  } else if (cookie.trim().startsWith("ey") && cookie.length > 100) {
+    authToken = cookie.trim();
+  }
+
+  let sessionToken = "";
+  let visitId = "";
+  let deviceId = "";
+  const domainSessionKey = `_vinted_${domain}_session`;
+
+  const allCookies: Record<string, string> = {};
+  if (cookie.includes("=")) {
+    cookie.split(";").forEach(part => {
+      const [k, ...v] = part.split("=");
+      if (k && v.length > 0) allCookies[k.trim()] = v.join("=").trim();
+    });
+  }
+
+  Object.entries(allCookies).forEach(([key, val]) => {
+    const kLow = key.toLowerCase();
+    if (kLow === "vinted-visit-id" || kLow === "vinted_visit_id") visitId = val;
+    if (kLow === "device_id" || kLow === "vinted_device_id") deviceId = val;
+    if (kLow === "anon_id") { extractedParts.push(`anon_id=${val}`); foundKeys.add("anon_id"); }
+
+    const isDomainSpecificSession = kLow.startsWith("_vinted_") && kLow.endsWith("_session");
+    const isOtherDomainSession = isDomainSpecificSession && kLow !== domainSessionKey;
+
+    if (!isOtherDomainSession && (
+      kLow.includes("vinted") || kLow.includes("session") || kLow.includes("datadome") ||
+      kLow === "_datadome" || kLow === "access_token_web" || kLow === "anon_id" ||
+      kLow === "device_id" || kLow === "user-iso-locale" || kLow === "vinted_locale" || kLow.startsWith("_")
+    )) {
+      if (!foundKeys.has(key)) { extractedParts.push(`${key}=${val}`); foundKeys.add(key); }
+    }
+  });
+
+  if (!deviceId) { deviceId = `web_${Math.random().toString(36).substring(2, 15)}_${Date.now()}`; extractedParts.push(`device_id=${deviceId}`); }
+  if (!visitId) { visitId = `vis_${Math.random().toString(36).substring(2, 10)}`; extractedParts.push(`vinted-visit-id=${visitId}`); }
+
+  let sessionKeyToUse = allCookies[domainSessionKey] ? domainSessionKey
+    : allCookies["_vinted_session"] ? "_vinted_session"
+    : Object.keys(allCookies).find(k => k.startsWith("_vinted_") && k.toLowerCase().includes("session")) || "";
+
+  if (sessionKeyToUse) {
+    sessionToken = allCookies[sessionKeyToUse];
+    if (!foundKeys.has(sessionKeyToUse)) { extractedParts.push(`${sessionKeyToUse}=${sessionToken}`); foundKeys.add(sessionKeyToUse); }
+  }
+
+  if (authToken && !foundKeys.has("anon_id") && authToken.includes(".")) {
+    try {
+      const payload = JSON.parse(Buffer.from(authToken.split(".")[1], "base64").toString());
+      if (payload.anid) { extractedParts.push(`anon_id=${payload.anid}`); foundKeys.add("anon_id"); }
+    } catch {}
+  }
+
+  let cleanCookie = extractedParts.filter(p => p.includes("=")).join("; ");
+  if (!cleanCookie && cookie.includes("=") && !cookie.trim().startsWith("ey")) cleanCookie = cookie.trim().replace(/;$/, "");
+  if (authToken && !cleanCookie.toLowerCase().includes("access_token_web"))
+    cleanCookie = cleanCookie ? `${cleanCookie}; access_token_web=${authToken}` : `access_token_web=${authToken}`;
+
+  const langMap: Record<string, [string, string]> = {
+    es: ["es-ES,es;q=0.9,en;q=0.8", "es"],
+    fr: ["fr-FR,fr;q=0.9,en;q=0.8", "fr"],
+    it: ["it-IT,it;q=0.9,en;q=0.8", "it"],
+    pl: ["pl-PL,pl;q=0.9,en;q=0.8", "pl"],
+    be: ["fr-BE,fr;q=0.9,nl-BE;q=0.8,en;q=0.7", "fr"],
+    de: ["de-DE,de;q=0.9,en;q=0.8", "de"],
+  };
+  const [acceptLanguage, vintedLanguage] = langMap[domain] || ["en-US,en;q=0.9", "en"];
+
+  const headers: any = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+    "X-Requested-With": "XMLHttpRequest",
+    "X-Vinted-Client": "web",
+    "X-Vinted-Language": vintedLanguage,
+    "X-Vinted-Web-Version": "8.175.0",
+    "X-App-Version": "8.175.0",
+    "X-Vinted-App-Id": "1",
+    "X-Vinted-Auth-Method": authToken ? "bearer" : "session",
+    "X-Vinted-Logged-In": "true",
+    "Origin": `https://www.vinted.${domain}`,
+    "Referer": `https://www.vinted.${domain}/`,
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": acceptLanguage,
+    "Accept-Encoding": "gzip, deflate, br",
+    "Content-Type": "application/json",
+    "Sec-Ch-Ua": '"Google Chrome";v="135", "Chromium";v="135", "Not?A_Brand";v="24"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin",
+    "DNT": "1",
+    "Connection": "keep-alive",
+    "Cookie": cleanCookie,
+    "Host": `www.vinted.${domain}`,
+  };
+
+  if (authToken) { headers["Authorization"] = `Bearer ${authToken}`; headers["X-Vinted-Access-Token"] = authToken; }
+  if (sessionToken) { headers["X-XSRF-TOKEN"] = sessionToken; headers["X-CSRF-Token"] = sessionToken; headers["X-XSRF-Token"] = sessionToken; }
+  if (visitId) headers["X-Vinted-Visit-Id"] = visitId;
+  if (deviceId) headers["X-Vinted-Device-Id"] = deviceId;
+
+  return { headers, domain };
+}
+
 // ─── Puppeteer / Bazooka ──────────────────────────────────────────────────────
 
 let _browser: Browser | null = null;
@@ -88,29 +203,15 @@ function parseCookieStr(str: string): Record<string, string> {
 }
 
 async function reserveItemPuppeteer(itemId: string, cookiesStr: string, domain = "es"): Promise<{ transactionId: string; purchaseId: string }> {
-  const cookieMap = parseCookieStr(cookiesStr);
-  const accessToken = cookieMap["access_token_web"] || "";
-  const csrfToken = cookieMap["csrf_token"] || cookieMap["_csrf_token"] || "";
-  const anonId = cookieMap["anon_id"] || "";
+  const { headers } = getVintedHeaders(cookiesStr, domain);
   const base = `https://www.vinted.${domain}`;
 
-  const getHeaders: Record<string, string> = {
-    "accept": "application/json, text/plain, */*",
-    "accept-language": "es-ES,es;q=0.9,en;q=0.8",
-    "cookie": cookiesStr,
-    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "x-csrf-token": csrfToken,
-    "x-anon-id": anonId,
-    "authorization": `Bearer ${accessToken}`,
-    "x-requested-with": "XMLHttpRequest",
-    "referer": `${base}/items/${itemId}`,
-    "origin": base,
-  };
-  const postHeaders = { ...getHeaders, "content-type": "application/json", "locale": "es-ES" };
+  // Override referer to point at the item page
+  headers["Referer"] = `${base}/items/${itemId}`;
 
   // Step 1: get seller_id from item API
   const itemResp = await axios.get(`${base}/api/v2/items/${itemId}`, {
-    headers: getHeaders,
+    headers,
     validateStatus: () => true,
   });
   if (itemResp.status !== 200 || !itemResp.data?.item?.user_id) {
@@ -123,7 +224,7 @@ async function reserveItemPuppeteer(itemId: string, cookiesStr: string, domain =
   const convResp = await axios.post(
     `${base}/api/v2/conversations`,
     { initiator: "buy", item_id: String(itemId), opposite_user_id: sellerId },
-    { headers: postHeaders, validateStatus: () => true }
+    { headers, validateStatus: () => true }
   );
   if (convResp.status !== 200 && convResp.status !== 201) {
     const preview = JSON.stringify(convResp.data).slice(0, 300);
@@ -136,7 +237,7 @@ async function reserveItemPuppeteer(itemId: string, cookiesStr: string, domain =
   const buildResp = await axios.post(
     `${base}/api/v2/purchases/checkout/build`,
     { purchase_items: [{ id: transactionId, type: "transaction" }] },
-    { headers: postHeaders, validateStatus: () => true }
+    { headers, validateStatus: () => true }
   );
   const purchaseId = buildResp.data?.checkout?.purchase_id || buildResp.data?.purchase_id || String(transactionId);
 
@@ -383,121 +484,6 @@ async function startServer() {
     );
     res.json(result.rows[0]);
   });
-
-  // ── Vinted Helper ───────────────────────────────────────────────────────────
-
-  const getVintedHeaders = (cookie: string, domain: string = "es") => {
-    const extractedParts: string[] = [];
-    const foundKeys = new Set<string>();
-
-    let authToken = "";
-    const tokenMatch = cookie.match(/access_token_web[:=]\s*([a-zA-Z0-9._-]+)/i);
-    if (tokenMatch?.[1]) {
-      authToken = tokenMatch[1];
-    } else if (cookie.trim().startsWith("ey") && cookie.length > 100) {
-      authToken = cookie.trim();
-    }
-
-    let sessionToken = "";
-    let visitId = "";
-    let deviceId = "";
-    const domainSessionKey = `_vinted_${domain}_session`;
-
-    const allCookies: Record<string, string> = {};
-    if (cookie.includes("=")) {
-      cookie.split(";").forEach(part => {
-        const [k, ...v] = part.split("=");
-        if (k && v.length > 0) allCookies[k.trim()] = v.join("=").trim();
-      });
-    }
-
-    Object.entries(allCookies).forEach(([key, val]) => {
-      const kLow = key.toLowerCase();
-      if (kLow === "vinted-visit-id" || kLow === "vinted_visit_id") visitId = val;
-      if (kLow === "device_id" || kLow === "vinted_device_id") deviceId = val;
-      if (kLow === "anon_id") { extractedParts.push(`anon_id=${val}`); foundKeys.add("anon_id"); }
-
-      const isDomainSpecificSession = kLow.startsWith("_vinted_") && kLow.endsWith("_session");
-      const isOtherDomainSession = isDomainSpecificSession && kLow !== domainSessionKey;
-
-      if (!isOtherDomainSession && (
-        kLow.includes("vinted") || kLow.includes("session") || kLow.includes("datadome") ||
-        kLow === "_datadome" || kLow === "access_token_web" || kLow === "anon_id" ||
-        kLow === "device_id" || kLow === "user-iso-locale" || kLow === "vinted_locale" || kLow.startsWith("_")
-      )) {
-        if (!foundKeys.has(key)) { extractedParts.push(`${key}=${val}`); foundKeys.add(key); }
-      }
-    });
-
-    if (!deviceId) { deviceId = `web_${Math.random().toString(36).substring(2, 15)}_${Date.now()}`; extractedParts.push(`device_id=${deviceId}`); }
-    if (!visitId) { visitId = `vis_${Math.random().toString(36).substring(2, 10)}`; extractedParts.push(`vinted-visit-id=${visitId}`); }
-
-    let sessionKeyToUse = allCookies[domainSessionKey] ? domainSessionKey
-      : allCookies["_vinted_session"] ? "_vinted_session"
-      : Object.keys(allCookies).find(k => k.startsWith("_vinted_") && k.toLowerCase().includes("session")) || "";
-
-    if (sessionKeyToUse) {
-      sessionToken = allCookies[sessionKeyToUse];
-      if (!foundKeys.has(sessionKeyToUse)) { extractedParts.push(`${sessionKeyToUse}=${sessionToken}`); foundKeys.add(sessionKeyToUse); }
-    }
-
-    if (authToken && !foundKeys.has("anon_id") && authToken.includes(".")) {
-      try {
-        const payload = JSON.parse(Buffer.from(authToken.split(".")[1], "base64").toString());
-        if (payload.anid) { extractedParts.push(`anon_id=${payload.anid}`); foundKeys.add("anon_id"); }
-      } catch {}
-    }
-
-    let cleanCookie = extractedParts.filter(p => p.includes("=")).join("; ");
-    if (!cleanCookie && cookie.includes("=") && !cookie.trim().startsWith("ey")) cleanCookie = cookie.trim().replace(/;$/, "");
-    if (authToken && !cleanCookie.toLowerCase().includes("access_token_web"))
-      cleanCookie = cleanCookie ? `${cleanCookie}; access_token_web=${authToken}` : `access_token_web=${authToken}`;
-
-    const langMap: Record<string, [string, string]> = {
-      es: ["es-ES,es;q=0.9,en;q=0.8", "es"],
-      fr: ["fr-FR,fr;q=0.9,en;q=0.8", "fr"],
-      it: ["it-IT,it;q=0.9,en;q=0.8", "it"],
-      pl: ["pl-PL,pl;q=0.9,en;q=0.8", "pl"],
-      be: ["fr-BE,fr;q=0.9,nl-BE;q=0.8,en;q=0.7", "fr"],
-      de: ["de-DE,de;q=0.9,en;q=0.8", "de"],
-    };
-    const [acceptLanguage, vintedLanguage] = langMap[domain] || ["en-US,en;q=0.9", "en"];
-
-    const headers: any = {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
-      "X-Requested-With": "XMLHttpRequest",
-      "X-Vinted-Client": "web",
-      "X-Vinted-Language": vintedLanguage,
-      "X-Vinted-Web-Version": "8.175.0",
-      "X-App-Version": "8.175.0",
-      "X-Vinted-App-Id": "1",
-      "X-Vinted-Auth-Method": authToken ? "bearer" : "session",
-      "X-Vinted-Logged-In": "true",
-      "Origin": `https://www.vinted.${domain}`,
-      "Referer": `https://www.vinted.${domain}/`,
-      "Accept": "application/json, text/plain, */*",
-      "Accept-Language": acceptLanguage,
-      "Accept-Encoding": "gzip, deflate, br",
-      "Content-Type": "application/json",
-      "Sec-Ch-Ua": '"Google Chrome";v="135", "Chromium";v="135", "Not?A_Brand";v="24"',
-      "Sec-Ch-Ua-Mobile": "?0",
-      "Sec-Ch-Ua-Platform": '"Windows"',
-      "Sec-Fetch-Dest": "empty",
-      "Sec-Fetch-Mode": "cors",
-      "Sec-Fetch-Site": "same-origin",
-      "DNT": "1",
-      "Connection": "keep-alive",
-      "Cookie": cleanCookie,
-      "Host": `www.vinted.${domain}`,
-    };
-
-    if (authToken) { headers["Authorization"] = `Bearer ${authToken}`; headers["X-Vinted-Access-Token"] = authToken; }
-    if (sessionToken) { headers["X-XSRF-TOKEN"] = sessionToken; headers["X-CSRF-Token"] = sessionToken; headers["X-XSRF-Token"] = sessionToken; }
-    if (visitId) headers["X-Vinted-Visit-Id"] = visitId;
-    if (deviceId) headers["X-Vinted-Device-Id"] = deviceId;
-
-    return { headers, domain };
-  };
 
   // ── Vinted Routes (public) ──────────────────────────────────────────────────
 
