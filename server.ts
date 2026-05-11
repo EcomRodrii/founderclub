@@ -618,6 +618,50 @@ async function startServer() {
     res.json({ success: totalSuccess > 0, count: totalSuccess, message: `BOMBARDEO FINALIZADO. ${totalSuccess} impactos en 2 minutos.` });
   });
 
+  // ── Profits / Sales endpoints ────────────────────────────────────────────────
+
+  // Accounts
+  app.get("/api/profits/accounts", requireAuth as any, async (req: AuthRequest, res) => {
+    const r = await pool.query("SELECT * FROM vinted_accounts WHERE user_id=$1 ORDER BY created_at DESC", [req.user!.id]);
+    res.json(r.rows);
+  });
+  app.post("/api/profits/accounts", requireAuth as any, async (req: AuthRequest, res) => {
+    const { username } = req.body;
+    if (!username) return res.status(400).json({ error: "Username requerido" });
+    try {
+      const r = await pool.query("INSERT INTO vinted_accounts(user_id,username) VALUES($1,$2) RETURNING *", [req.user!.id, username.replace(/^@/, "")]);
+      res.json(r.rows[0]);
+    } catch { res.status(409).json({ error: "Esa cuenta ya existe" }); }
+  });
+  app.delete("/api/profits/accounts/:id", requireAuth as any, async (req: AuthRequest, res) => {
+    await pool.query("DELETE FROM vinted_accounts WHERE id=$1 AND user_id=$2", [req.params.id, req.user!.id]);
+    res.json({ ok: true });
+  });
+
+  // Sales
+  app.get("/api/profits/sales", requireAuth as any, async (req: AuthRequest, res) => {
+    const r = await pool.query("SELECT * FROM sales WHERE user_id=$1 ORDER BY date DESC, created_at DESC", [req.user!.id]);
+    res.json(r.rows);
+  });
+  app.post("/api/profits/sales", requireAuth as any, async (req: AuthRequest, res) => {
+    const rows = Array.isArray(req.body) ? req.body : [req.body];
+    const inserted: any[] = [];
+    for (const s of rows) {
+      const { model, buy_price, sell_price, date, vinted_account } = s;
+      if (!model || buy_price == null || sell_price == null || !date) continue;
+      const r = await pool.query(
+        "INSERT INTO sales(user_id,model,buy_price,sell_price,date,vinted_account) VALUES($1,$2,$3,$4,$5,$6) RETURNING *",
+        [req.user!.id, model, buy_price, sell_price, date, vinted_account || null]
+      );
+      inserted.push(r.rows[0]);
+    }
+    res.json(inserted);
+  });
+  app.delete("/api/profits/sales/:id", requireAuth as any, async (req: AuthRequest, res) => {
+    await pool.query("DELETE FROM sales WHERE id=$1 AND user_id=$2", [req.params.id, req.user!.id]);
+    res.json({ ok: true });
+  });
+
   // ── Tongue / Gemini endpoints ───────────────────────────────────────────────
 
   app.get("/api/tongue/models", requireAuth as any, async (_req: AuthRequest, res) => {

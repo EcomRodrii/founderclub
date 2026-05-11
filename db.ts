@@ -41,6 +41,25 @@ export async function initDB() {
       created_at TIMESTAMP DEFAULT NOW(),
       last_seen TIMESTAMP DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS vinted_accounts (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      username VARCHAR(100) NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(user_id, username)
+    );
+
+    CREATE TABLE IF NOT EXISTS sales (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      model VARCHAR(255) NOT NULL,
+      buy_price DECIMAL(10,2) NOT NULL,
+      sell_price DECIMAL(10,2) NOT NULL,
+      date DATE NOT NULL,
+      vinted_account VARCHAR(100),
+      created_at TIMESTAMP DEFAULT NOW()
+    );
   `);
 
   // Create first admin from env if no admins exist
