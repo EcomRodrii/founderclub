@@ -87,7 +87,7 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
 
   const runOCR = async (base64Image: string) => {
     setLoading(true);
-    setStatus(‘Analizando lengüeta con OCR...’);
+    setStatus(‘Analizando lengueta con OCR...’);
     setError(null);
     try {
       const res = await authFetch(‘/api/tongue/analyze’, { imageBase64: base64Image, brand: activeBrand });
@@ -187,7 +187,7 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
   const generateModifiedTongue = async () => {
     if (!detections) return;
     setLoading(true);
-    setStatus('Generando nueva imagen de lengüeta...');
+    setStatus('Generando nueva imagen de lengueta...');
     setError(null);
     try {
       const res = await authFetch('/api/tongue/generate', {
@@ -247,7 +247,7 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
             ) : (
               <>
                 <ImageIcon className="w-10 h-10 text-white/10 mb-4" />
-                <p className="text-sm text-white/40 font-medium mb-4">Selecciona la lengüeta</p>
+                <p className="text-sm text-white/40 font-medium mb-4">Selecciona la lengueta</p>
                 <div className="flex gap-3">
                   <button
                     type="button"
@@ -550,7 +550,7 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
                   </div>
                   <div className="space-y-2">
                     <h3 className="text-xl font-bold">Vista Previa</h3>
-                    <p className="text-xs max-w-[200px] mx-auto">La nueva lengüeta aparecerá aquí después del procesado</p>
+                    <p className="text-xs max-w-[200px] mx-auto">La nueva lengueta aparecerá aquí después del procesado</p>
                   </div>
                 </div>
               )}
