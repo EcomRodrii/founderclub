@@ -702,6 +702,12 @@ STRICTLY DO NOT CHANGE: ART NO/SKU "${detections.sku}", DATE "${detections.date}
 ONLY UPDATE: Brand Serial (bottom-left): "${detections.brandSerial}", Reference (#): "${detections.reference}".
 RAW LOOK: 12MP smartphone photo, natural grain. NO AI watermarks. Bold Adidas sans-serif font.
 ${customPrompt || ""}`;
+    } else if (brand === "ASICS") {
+      brandPrompt = `CRITICAL IDENTITY RECONSTRUCTION - ASICS tongue label.
+STRICTLY DO NOT CHANGE: SKU "${detections.sku}", DATE "${detections.date}", ALL SIZES (US ${detections.sizes?.us}, UK ${detections.sizes?.uk}, FR ${detections.sizes?.fr}, JP ${detections.sizes?.jp}).
+ONLY UPDATE: Tracking code "${detections.reference}" (change first letter + 6 digits to random), Serial number "${detections.brandSerial}" (replace with 15 random uppercase alphanumeric chars).
+LOOK: Keep vertical dividers (|) in size table, compressed clean ASICS typography, macro photo style.
+${customPrompt || ""}`;
     } else {
       brandPrompt = `NEW BALANCE internal tongue label reconstruction.
 STYLE/MODEL: "${detections.sku}". DATE: "${detections.date}". FACTORY: "${detections.lvl}".

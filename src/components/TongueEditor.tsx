@@ -38,7 +38,7 @@ interface DetectionResult {
 }
 
 export default function TongueEditor() {
-  const [activeBrand, setActiveBrand] = useState<'ADIDAS' | 'NEW BALANCE'>('ADIDAS');
+  const [activeBrand, setActiveBrand] = useState<'ADIDAS' | 'NEW BALANCE' | 'ASICS'>('ADIDAS');
   const [originalImage, setOriginalImage] = useState<string | null>(null);
   const [generatedImage, setGeneratedImage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -69,6 +69,13 @@ Específicamente:
 - LXCK1298 CLX → 4 letras, 4 números, espacio, 3 letras.
 
 No cambies nada más (tipografía, texturas, iluminación y resto de datos deben ser idénticos).`);
+
+  const [customPromptAsics, setCustomPromptAsics] = useState<string>(`PROMPT ASICS - REGLAS DE ORO:
+1. NUNCA cambies el SKU (1204A191): Debe ser exacto para que el modelo sea reconocido como original.
+2. Modifica los códigos de rastreo individuales:
+   - Código F960925: Cambia la letra inicial y los 6 dígitos por otros aleatorios.
+   - Número de Serie (N4VDCSSVG6CSMGH): Cámbialo por una combinación aleatoria de 15 caracteres (letras mayúsculas y números).
+3. Mantén la estructura: Respeta las líneas verticales divisorias (|) en la tabla de tallas y la tipografía comprimida y limpia característica de Asics.`);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -209,7 +216,7 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
         imageBase64: originalImage,
         brand: activeBrand,
         detections,
-        customPrompt: activeBrand === 'ADIDAS' ? customPromptAdidas : customPromptNB,
+        customPrompt: activeBrand === 'ADIDAS' ? customPromptAdidas : activeBrand === 'ASICS' ? customPromptAsics : customPromptNB,
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Error en el servidor');
@@ -234,7 +241,7 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
   return (
     <div className="space-y-6">
       <div className="flex gap-4">
-        {['ADIDAS', 'NEW BALANCE'].map((brand) => (
+        {['ADIDAS', 'NEW BALANCE', 'ASICS'].map((brand) => (
           <button
             key={brand}
             onClick={() => setActiveBrand(brand as any)}
@@ -494,8 +501,8 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
                   </label>
                   <textarea 
                     placeholder={`Pega aquí el prompt personalizado de ${activeBrand}...`}
-                    value={activeBrand === 'ADIDAS' ? customPromptAdidas : customPromptNB}
-                    onChange={e => activeBrand === 'ADIDAS' ? setCustomPromptAdidas(e.target.value) : setCustomPromptNB(e.target.value)}
+                    value={activeBrand === 'ADIDAS' ? customPromptAdidas : activeBrand === 'ASICS' ? customPromptAsics : customPromptNB}
+                    onChange={e => activeBrand === 'ADIDAS' ? setCustomPromptAdidas(e.target.value) : activeBrand === 'ASICS' ? setCustomPromptAsics(e.target.value) : setCustomPromptNB(e.target.value)}
                     className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-emerald-500/50 outline-none h-20 resize-none"
                   />
                 </div>
