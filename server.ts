@@ -62,6 +62,21 @@ function generateLicenseKey(): string {
   return `FC-${segment(4)}-${segment(4)}-${segment(4)}-${segment(4)}`;
 }
 
+// ─── Proxy config (IPRoyal Web Unblocker) ────────────────────────────────────
+
+function getProxyConfig() {
+  const raw = process.env.PROXY_URL || "http://QnTZEo1333120:QXJqBxlgtqkOsEeE@unblocker.iproyal.com:12323";
+  try {
+    const u = new URL(raw);
+    return {
+      protocol: "http" as const,
+      host: u.hostname,
+      port: parseInt(u.port) || 12323,
+      auth: { username: decodeURIComponent(u.username), password: decodeURIComponent(u.password) },
+    };
+  } catch { return undefined; }
+}
+
 // ─── Vinted Headers Builder ───────────────────────────────────────────────────
 
 function getVintedHeaders(cookie: string, domain: string = "es") {
@@ -207,39 +222,34 @@ async function reserveItemPuppeteer(itemId: string, cookiesStr: string, domain =
   const base = `https://www.vinted.${domain}`;
 
   headers["Referer"] = `${base}/items/${itemId}`;
+  const proxy = getProxyConfig();
   let sellerId: string | null = null;
-  const diag: string[] = [];
 
-  // Attempt 1: offers/request_options
+  // Attempt 1: item detail API via proxy
   try {
-    const r = await axios.get(`${base}/api/v2/offers/request_options`, {
-      params: { item_id: itemId }, headers, validateStatus: () => true, timeout: 10000,
+    const r = await axios.get(`${base}/api/v2/items/${itemId}`, {
+      headers, proxy, validateStatus: () => true, timeout: 20000,
     });
-    diag.push(`off:${r.status}`);
-    if (r.status === 200 && r.data?.request_options?.seller_id) sellerId = String(r.data.request_options.seller_id);
-    else diag.push(JSON.stringify(r.data).slice(0, 120));
-  } catch (e: any) { diag.push(`off_err:${e.message?.slice(0, 60)}`); }
+    if (r.status === 200 && r.data?.item?.user_id) sellerId = String(r.data.item.user_id);
+  } catch {}
 
-  // Attempt 2: item detail API
+  // Attempt 2: offers/request_options via proxy
   if (!sellerId) {
     try {
-      const r = await axios.get(`${base}/api/v2/items/${itemId}`, {
-        headers, validateStatus: () => true, timeout: 10000,
+      const r = await axios.get(`${base}/api/v2/offers/request_options`, {
+        params: { item_id: itemId }, headers, proxy, validateStatus: () => true, timeout: 20000,
       });
-      diag.push(`item:${r.status}`);
-      if (r.status === 200 && r.data?.item?.user_id) sellerId = String(r.data.item.user_id);
-      else diag.push(typeof r.data === "string" ? r.data.slice(0, 80) : JSON.stringify(r.data).slice(0, 120));
-    } catch (e: any) { diag.push(`item_err:${e.message?.slice(0, 60)}`); }
+      if (r.status === 200 && r.data?.request_options?.seller_id) sellerId = String(r.data.request_options.seller_id);
+    } catch {}
   }
 
-  // Attempt 3: HTML page — member links
+  // Attempt 3: HTML page via proxy — scan scripts + member links
   if (!sellerId) {
     try {
       const r = await axios.get(`${base}/items/${itemId}`, {
         headers: { "User-Agent": headers["User-Agent"], "Accept": "text/html,*/*;q=0.8", "Accept-Language": headers["Accept-Language"], "Cookie": headers["Cookie"] },
-        validateStatus: () => true, timeout: 15000,
+        proxy, validateStatus: () => true, timeout: 20000,
       });
-      diag.push(`html:${r.status}`);
       if (r.status === 200) {
         const $ = cheerio.load(r.data as string);
         $("script").each((_, el) => {
@@ -253,18 +263,17 @@ async function reserveItemPuppeteer(itemId: string, cookiesStr: string, domain =
           const m = ($(el).attr("href") || "").match(/\/member\/(\d+)/);
           if (m) sellerId = m[1];
         });
-        if (!sellerId) diag.push(`no_seller_in_html`);
       }
-    } catch (e: any) { diag.push(`html_err:${e.message?.slice(0, 60)}`); }
+    } catch {}
   }
 
-  if (!sellerId) throw new Error(`seller_id_not_found [${diag.join(" | ")}]`);
+  if (!sellerId) throw new Error(`seller_id_not_found: proxy activo pero no se pudo obtener el vendedor`);
 
   // Step 2: open conversation (reserves the item)
   const convResp = await axios.post(
     `${base}/api/v2/conversations`,
     { initiator: "buy", item_id: String(itemId), opposite_user_id: sellerId },
-    { headers, validateStatus: () => true }
+    { headers, proxy, validateStatus: () => true, timeout: 20000 }
   );
   if (convResp.status !== 200 && convResp.status !== 201) {
     const preview = JSON.stringify(convResp.data).slice(0, 300);
@@ -277,7 +286,7 @@ async function reserveItemPuppeteer(itemId: string, cookiesStr: string, domain =
   const buildResp = await axios.post(
     `${base}/api/v2/purchases/checkout/build`,
     { purchase_items: [{ id: transactionId, type: "transaction" }] },
-    { headers, validateStatus: () => true }
+    { headers, proxy, validateStatus: () => true, timeout: 20000 }
   );
   const purchaseId = buildResp.data?.checkout?.purchase_id || buildResp.data?.purchase_id || String(transactionId);
 
