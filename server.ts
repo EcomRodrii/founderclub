@@ -590,6 +590,19 @@ async function startServer() {
 
   // ── Tongue / Gemini endpoints ───────────────────────────────────────────────
 
+  app.get("/api/tongue/models", requireAuth as any, async (req: AuthRequest, res) => {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: "No API key" });
+    try {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+      const data = await r.json();
+      const names = (data.models || []).map((m: any) => m.name);
+      res.json({ models: names });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.post("/api/tongue/analyze", requireLicense as any, async (req: AuthRequest, res) => {
     const { imageBase64, brand } = req.body;
     if (!imageBase64) return res.status(400).json({ error: "Se requiere imagen" });
