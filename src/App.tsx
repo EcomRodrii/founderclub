@@ -191,6 +191,7 @@ function MainApp({ token, user, license, onLogout }: { token: string; user: any;
   const [copied, setCopied] = useState(false);
   const [sessionValid, setSessionValid] = useState<boolean | null>(null);
   const [cookieWarning, setCookieWarning] = useState<string | null>(null);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   // Persistence
   useEffect(() => {
@@ -491,50 +492,124 @@ function MainApp({ token, user, license, onLogout }: { token: string; user: any;
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-[#e0e0e0] font-sans selection:bg-emerald-500/30 selection:text-emerald-400">
       {/* Top Banner / Navigation */}
-      <nav className="border-b border-white/10 px-6 py-4 flex items-center justify-between bg-black/50 backdrop-blur-md sticky top-0 z-50">
-        <div className="flex items-center gap-3">
+      <nav className="border-b border-white/10 px-4 lg:px-6 py-3 lg:py-4 flex items-center justify-between bg-black/50 backdrop-blur-md sticky top-0 z-50">
+        <div className="flex items-center gap-2 lg:gap-3">
           <div className="w-8 h-8 bg-emerald-500 rounded-lg flex items-center justify-center shadow-[0_0_15px_rgba(16,185,129,0.3)]">
             <ShieldCheck className="w-5 h-5 text-black" />
           </div>
           <div>
-            <h1 id="nav-title" className="text-xl font-bold tracking-tighter bg-gradient-to-r from-white to-white/70 bg-clip-text text-transparent">
-              FounderClub by Lamine
+            <h1 className="text-base lg:text-xl font-bold tracking-tighter bg-gradient-to-r from-white to-white/70 bg-clip-text text-transparent">
+              FounderClub
             </h1>
-            <p className="text-[10px] text-white/40 uppercase tracking-[0.2em] font-mono leading-none">Automated Privacy Controller</p>
+            <p className="hidden lg:block text-[10px] text-white/40 uppercase tracking-[0.2em] font-mono leading-none">Automated Privacy Controller</p>
           </div>
         </div>
-        
-        <div className="flex items-center gap-4">
+
+        <div className="flex items-center gap-2 lg:gap-4">
+          {/* Session indicator */}
+          <div className={`w-2 h-2 rounded-full ${sessionValid === true ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : sessionValid === false ? 'bg-red-500' : 'bg-white/20'}`} />
+          <span className={`hidden sm:inline text-xs font-mono ${sessionValid === true ? 'text-emerald-400' : sessionValid === false ? 'text-red-400' : 'text-white/40'}`}>
+            {sessionValid === true ? 'Active' : sessionValid === false ? 'Expired' : '...'}
+          </span>
+          <div className="hidden lg:block h-6 w-[1px] bg-white/10" />
           <button
             onClick={() => setShowCookieHelp(!showCookieHelp)}
-            className="p-2 hover:bg-white/5 rounded-full transition-colors text-white/60 hover:text-white"
+            className="hidden lg:flex p-2 hover:bg-white/5 rounded-full transition-colors text-white/60 hover:text-white"
           >
             <HelpCircle className="w-5 h-5" />
           </button>
-          <div className="h-6 w-[1px] bg-white/10 mx-2" />
-          <div className="flex items-center gap-2 text-xs font-mono">
-            <div className={`w-2 h-2 rounded-full ${sessionValid === true ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : sessionValid === false ? 'bg-red-500' : 'bg-white/20'}`} />
-            <span className={sessionValid === true ? 'text-emerald-400' : sessionValid === false ? 'text-red-400' : 'text-white/40'}>
-              {sessionValid === true ? 'Vinted Session Active' : sessionValid === false ? 'Session Expired' : 'Checking Session...'}
-            </span>
-          </div>
-          <div className="h-6 w-[1px] bg-white/10 mx-2" />
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-white/50 font-mono">{user.username}</span>
-            <button
-              onClick={onLogout}
-              title="Cerrar sesión"
-              className="p-1.5 hover:bg-white/5 rounded-lg transition-colors text-white/40 hover:text-red-400"
-            >
-              <LogOut className="w-4 h-4" />
-            </button>
-          </div>
+          <div className="hidden lg:block h-6 w-[1px] bg-white/10" />
+          <span className="hidden lg:inline text-xs text-white/50 font-mono">{user.username}</span>
+          <button
+            onClick={onLogout}
+            title="Cerrar sesión"
+            className="p-2 hover:bg-white/5 rounded-lg transition-colors text-white/40 hover:text-red-400"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
         </div>
       </nav>
 
-      <main className="max-w-7xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-[380px_1fr] gap-8">
-        {/* Sidebar Configuration */}
-        <div className="space-y-6">
+      {/* Mobile sidebar drawer overlay */}
+      <AnimatePresence>
+        {mobileSidebarOpen && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setMobileSidebarOpen(false)}
+              className="fixed inset-0 bg-black/60 z-40 lg:hidden"
+            />
+            <motion.div
+              initial={{ y: '100%' }}
+              animate={{ y: 0 }}
+              exit={{ y: '100%' }}
+              transition={{ type: 'spring', damping: 30, stiffness: 300 }}
+              className="fixed bottom-16 left-0 right-0 z-50 bg-[#141414] border-t border-white/10 rounded-t-3xl p-5 max-h-[80vh] overflow-y-auto lg:hidden"
+            >
+              <div className="w-10 h-1 bg-white/20 rounded-full mx-auto mb-5" />
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-[10px] uppercase tracking-wider text-white/30 mb-1.5 ml-1">Dominio Vinted</label>
+                  <select value={domain} onChange={e => setDomain(e.target.value)}
+                    className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-3 text-sm focus:outline-none focus:border-emerald-500/50 appearance-none">
+                    {DOMAINS.map(d => <option key={d} value={d}>vinted.{d}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[10px] uppercase tracking-wider text-white/30 mb-1.5 ml-1">URL de perfil</label>
+                  <div className="flex gap-2">
+                    <input type="text" placeholder="https://www.vinted.es/member/..."
+                      value={profileUrl} onChange={e => setProfileUrl(e.target.value)}
+                      className="flex-1 bg-black/30 border border-white/10 rounded-lg px-3 py-3 text-sm focus:outline-none focus:border-emerald-500/50" />
+                    <button onClick={() => { resolveUserId(); setMobileSidebarOpen(false); }}
+                      className="p-3 bg-emerald-500/10 text-emerald-400 rounded-lg border border-emerald-500/20">
+                      <Search className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-[10px] uppercase tracking-wider text-white/30 mb-1.5 ml-1">Cookie de sesión</label>
+                  <textarea value={cookie} onChange={e => setCookie(e.target.value)}
+                    placeholder="_vinted_fr_session=..."
+                    className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-3 text-sm font-mono h-24 resize-none focus:outline-none focus:border-emerald-500/50" />
+                </div>
+                <button onClick={() => { fetchItems(); setMobileSidebarOpen(false); }} disabled={loading}
+                  className="w-full bg-emerald-500 text-black font-bold py-3.5 rounded-xl hover:bg-emerald-400 transition-all flex items-center justify-center gap-2 disabled:opacity-50 text-base">
+                  {loading ? <RefreshCcw className="w-5 h-5 animate-spin" /> : <LayoutGrid className="w-5 h-5" />}
+                  Cargar inventario
+                </button>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* Mobile bottom navigation */}
+      <div className="fixed bottom-0 left-0 right-0 z-40 lg:hidden bg-black/90 backdrop-blur-xl border-t border-white/10">
+        <div className="flex items-center justify-around px-2 py-2 pb-safe">
+          {[
+            { id: 'config', icon: <Settings className="w-5 h-5" />, label: 'Config', action: () => setMobileSidebarOpen(o => !o) },
+            { id: 'mine', icon: <LayoutGrid className="w-5 h-5" />, label: 'Mis artículos', action: () => { setActiveTab('mine'); setMobileSidebarOpen(false); } },
+            { id: 'external', icon: <ShieldCheck className="w-5 h-5" />, label: 'Ocultar', action: () => { setActiveTab('external'); setMobileSidebarOpen(false); } },
+            { id: 'tongues', icon: <Scissors className="w-5 h-5" />, label: 'Lengüeta', action: () => { setActiveTab('tongues'); setMobileSidebarOpen(false); } },
+          ].map(item => {
+            const isActive = item.id === 'config' ? mobileSidebarOpen : (item.id !== 'config' && activeTab === item.id);
+            return (
+              <button key={item.id} onClick={item.action}
+                className={`flex flex-col items-center gap-1 px-4 py-1.5 rounded-xl transition-all ${isActive ? 'text-emerald-400' : 'text-white/30'}`}>
+                {item.icon}
+                <span className="text-[9px] font-medium uppercase tracking-wider">{item.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <main className="max-w-7xl mx-auto p-4 lg:p-6 pb-24 lg:pb-6 grid grid-cols-1 lg:grid-cols-[380px_1fr] gap-8">
+        {/* Sidebar Configuration — desktop only */}
+        <div className="hidden lg:block space-y-6">
           <section className="bg-[#141414] border border-white/5 rounded-2xl p-6 shadow-xl relative overflow-hidden group">
             <div className="absolute top-0 left-0 w-1 h-full bg-emerald-500 opacity-50 group-hover:opacity-100 transition-opacity" />
             
@@ -672,15 +747,15 @@ function MainApp({ token, user, license, onLogout }: { token: string; user: any;
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-4 px-2 gap-4">
             <div>
-              <h2 className="text-xl font-bold tracking-tight">Panel de Control</h2>
-              <div className="flex gap-4 mt-2">
-                <button 
+              <h2 className="hidden lg:block text-xl font-bold tracking-tight">Panel de Control</h2>
+              <div className="hidden lg:flex gap-4 mt-2">
+                <button
                   onClick={() => setActiveTab('mine')}
                   className={`text-xs uppercase tracking-widest font-bold pb-1 border-b-2 transition-all ${activeTab === 'mine' ? 'border-emerald-500 text-white' : 'border-transparent text-white/30 hover:text-white/60'}`}
                 >
                   Mis Productos
                 </button>
-                <button 
+                <button
                   onClick={() => setActiveTab('external')}
                   className={`text-xs uppercase tracking-widest font-bold pb-1 border-b-2 transition-all ${activeTab === 'external' ? 'border-emerald-500 text-white' : 'border-transparent text-white/30 hover:text-white/60'}`}
                 >
@@ -719,7 +794,7 @@ function MainApp({ token, user, license, onLogout }: { token: string; user: any;
                 </div>
               )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 gap-3 lg:gap-4">
                 <AnimatePresence>
                   {items.map((item, idx) => (
                     <motion.div

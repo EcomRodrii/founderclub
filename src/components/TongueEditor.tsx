@@ -371,9 +371,9 @@ ${customPromptNB}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         {/* Left Side: Upload & OCR */}
         <div className="space-y-6">
-          <div 
+          <div
             onClick={() => fileInputRef.current?.click()}
-            className={`h-[300px] border-2 border-dashed rounded-3xl flex flex-col items-center justify-center transition-all cursor-pointer overflow-hidden relative group ${
+            className={`h-[240px] lg:h-[300px] border-2 border-dashed rounded-3xl flex flex-col items-center justify-center transition-all cursor-pointer overflow-hidden relative group ${
               originalImage ? 'border-emerald-500/50 bg-black' : 'border-white/10 hover:border-white/20 bg-white/5'
             }`}
           >
@@ -381,17 +381,18 @@ ${customPromptNB}
               <img src={originalImage} className="w-full h-full object-contain opacity-50 group-hover:opacity-30 transition-opacity" />
             ) : (
               <>
-                <Upload className="w-12 h-12 text-white/10 mb-4 group-hover:scale-110 transition-transform" />
-                <p className="text-sm text-white/40 font-medium">Subir imagen de lengüeta</p>
-                <p className="text-[10px] text-white/20 uppercase tracking-widest mt-2 font-mono">JPG, PNG - Max 5MB</p>
+                <Upload className="w-10 h-10 text-white/10 mb-3 group-hover:scale-110 transition-transform" />
+                <p className="text-sm text-white/40 font-medium">Subir o fotografiar lengüeta</p>
+                <p className="text-[10px] text-white/20 uppercase tracking-widest mt-1 font-mono">JPG, PNG · Cámara disponible</p>
               </>
             )}
-            <input 
-              type="file" 
-              ref={fileInputRef} 
-              className="hidden" 
-              accept="image/*" 
-              onChange={handleFileUpload} 
+            <input
+              type="file"
+              ref={fileInputRef}
+              className="hidden"
+              accept="image/*"
+              capture="environment"
+              onChange={handleFileUpload}
             />
           </div>
 

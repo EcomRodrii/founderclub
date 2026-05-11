@@ -126,7 +126,7 @@ export default function AdminPanel({ token, onLogout }: AdminPanelProps) {
 
       <div className="max-w-6xl mx-auto p-6">
         {/* Tabs */}
-        <div className="flex gap-2 mb-6">
+        <div className="flex gap-2 mb-6 overflow-x-auto pb-1">
           {tabs.map(t => (
             <button
               key={t.id}
@@ -167,8 +167,8 @@ export default function AdminPanel({ token, onLogout }: AdminPanelProps) {
 
         {/* Users */}
         {tab === 'users' && (
-          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden">
-            <table className="w-full text-sm">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-x-auto">
+            <table className="w-full text-sm min-w-[600px]">
               <thead>
                 <tr className="border-b border-zinc-800">
                   {['Usuario', 'Email', 'Licencia', 'Tipo', 'Expira', 'HWID', 'IP', 'Rol', ''].map(h => (
@@ -294,8 +294,8 @@ export default function AdminPanel({ token, onLogout }: AdminPanelProps) {
             </div>
 
             {/* Table */}
-            <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden">
-              <table className="w-full text-sm">
+            <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-x-auto">
+              <table className="w-full text-sm min-w-[600px]">
                 <thead>
                   <tr className="border-b border-zinc-800">
                     {['Clave', 'Tipo', 'Usuario', 'Expira', 'HWID', 'IP', 'Activa', 'Acciones'].map(h => (
@@ -357,8 +357,8 @@ export default function AdminPanel({ token, onLogout }: AdminPanelProps) {
 
         {/* Sessions */}
         {tab === 'sessions' && (
-          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden">
-            <table className="w-full text-sm">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-x-auto">
+            <table className="w-full text-sm min-w-[600px]">
               <thead>
                 <tr className="border-b border-zinc-800">
                   {['Usuario', 'IP', 'HWID', 'Creada', 'Última actividad'].map(h => (
