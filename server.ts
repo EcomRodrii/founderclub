@@ -87,30 +87,30 @@ function parseCookieStr(str: string): Record<string, string> {
   return out;
 }
 
-async function reserveItemPuppeteer(itemId: string, cookiesStr: string): Promise<{ transactionId: string; purchaseId: string }> {
+async function reserveItemPuppeteer(itemId: string, cookiesStr: string, domain = "es"): Promise<{ transactionId: string; purchaseId: string }> {
   const cookieMap = parseCookieStr(cookiesStr);
   const accessToken = cookieMap["access_token_web"] || "";
   const csrfToken = cookieMap["csrf_token"] || cookieMap["_csrf_token"] || "";
   const anonId = cookieMap["anon_id"] || "";
+  const base = `https://www.vinted.${domain}`;
 
-  const headers: Record<string, string> = {
+  const getHeaders: Record<string, string> = {
     "accept": "application/json, text/plain, */*",
     "accept-language": "es-ES,es;q=0.9,en;q=0.8",
-    "content-type": "application/json",
     "cookie": cookiesStr,
     "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "x-csrf-token": csrfToken,
     "x-anon-id": anonId,
     "authorization": `Bearer ${accessToken}`,
     "x-requested-with": "XMLHttpRequest",
-    "locale": "es-ES",
-    "referer": `https://www.vinted.es/items/${itemId}`,
-    "origin": "https://www.vinted.es",
+    "referer": `${base}/items/${itemId}`,
+    "origin": base,
   };
+  const postHeaders = { ...getHeaders, "content-type": "application/json", "locale": "es-ES" };
 
   // Step 1: get seller_id from item API
-  const itemResp = await axios.get(`https://www.vinted.es/api/v2/items/${itemId}`, {
-    headers,
+  const itemResp = await axios.get(`${base}/api/v2/items/${itemId}`, {
+    headers: getHeaders,
     validateStatus: () => true,
   });
   if (itemResp.status !== 200 || !itemResp.data?.item?.user_id) {
@@ -121,9 +121,9 @@ async function reserveItemPuppeteer(itemId: string, cookiesStr: string): Promise
 
   // Step 2: open conversation (reserves the item)
   const convResp = await axios.post(
-    "https://www.vinted.es/api/v2/conversations",
+    `${base}/api/v2/conversations`,
     { initiator: "buy", item_id: String(itemId), opposite_user_id: sellerId },
-    { headers, validateStatus: () => true }
+    { headers: postHeaders, validateStatus: () => true }
   );
   if (convResp.status !== 200 && convResp.status !== 201) {
     const preview = JSON.stringify(convResp.data).slice(0, 300);
@@ -134,9 +134,9 @@ async function reserveItemPuppeteer(itemId: string, cookiesStr: string): Promise
 
   // Step 3: build checkout (locks the reservation)
   const buildResp = await axios.post(
-    "https://www.vinted.es/api/v2/purchases/checkout/build",
+    `${base}/api/v2/purchases/checkout/build`,
     { purchase_items: [{ id: transactionId, type: "transaction" }] },
-    { headers, validateStatus: () => true }
+    { headers: postHeaders, validateStatus: () => true }
   );
   const purchaseId = buildResp.data?.checkout?.purchase_id || buildResp.data?.purchase_id || String(transactionId);
 
@@ -145,8 +145,6 @@ async function reserveItemPuppeteer(itemId: string, cookiesStr: string): Promise
 
 async function startBazookaWorker() {
   console.log("Bazooka worker arrancado");
-  // Pre-warm browser
-  try { await getBrowser(); console.log("Browser Puppeteer listo"); } catch (e: any) { console.warn("Browser init:", e.message); }
 
   while (true) {
     try {
@@ -155,7 +153,9 @@ async function startBazookaWorker() {
       if (job) {
         await pool.query("UPDATE bazooka_jobs SET status = 'processing', updated_at = NOW() WHERE id = $1", [job.id]);
         try {
-          const r = await reserveItemPuppeteer(job.item_id, job.vinted_cookies);
+          const domainMatch = (job.url as string).match(/vinted\.([a-z.]+)\//);
+          const domain = domainMatch ? domainMatch[1] : "es";
+          const r = await reserveItemPuppeteer(job.item_id, job.vinted_cookies, domain);
           await pool.query("UPDATE bazooka_jobs SET status = 'done', note = $1, updated_at = NOW() WHERE id = $2", [`tx=${r.transactionId} purchase=${r.purchaseId}`, job.id]);
           console.log(`Bazooka job #${job.id} DONE`);
         } catch (err: any) {
