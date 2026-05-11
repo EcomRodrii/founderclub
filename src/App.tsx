@@ -102,6 +102,7 @@ export default function App() {
   const [authUser, setAuthUser] = useState<any>(null);
   const [license, setLicense] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [showAdmin, setShowAdmin] = useState(false);
 
   useEffect(() => {
     if (!authToken) { setAuthLoading(false); return; }
@@ -139,8 +140,6 @@ export default function App() {
       </div>
     );
   }
-
-  const [showAdmin, setShowAdmin] = useState(false);
 
   if (!authToken || !authUser) return <AuthPage onAuth={handleAuth} />;
   if (!license && !authUser.is_admin) return <LicenseActivation token={authToken} onActivated={() => {
