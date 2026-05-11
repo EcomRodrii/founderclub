@@ -240,18 +240,22 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
 
   return (
     <div className="space-y-6">
-      <div className="flex gap-4">
-        {['ADIDAS', 'NEW BALANCE', 'ASICS'].map((brand) => (
+      <div className="flex gap-2">
+        {([
+          { key: 'ADIDAS', label: 'ADIDAS' },
+          { key: 'NEW BALANCE', label: 'NEW BALANCE' },
+          { key: 'ASICS', label: 'ASICS' },
+        ] as { key: 'ADIDAS' | 'NEW BALANCE' | 'ASICS'; label: string }[]).map(({ key, label }) => (
           <button
-            key={brand}
-            onClick={() => setActiveBrand(brand as any)}
-            className={`flex-1 py-4 rounded-2xl border-2 transition-all font-bold tracking-widest text-sm flex items-center justify-center gap-2 ${
-              activeBrand === brand 
-                ? 'bg-emerald-500 border-emerald-400 text-black shadow-[0_0_20px_rgba(16,185,129,0.3)]' 
+            key={key}
+            onClick={() => setActiveBrand(key)}
+            className={`flex-1 py-3 rounded-2xl border-2 transition-all font-bold tracking-wider text-xs flex items-center justify-center ${
+              activeBrand === key
+                ? 'bg-emerald-500 border-emerald-400 text-black shadow-[0_0_20px_rgba(16,185,129,0.3)]'
                 : 'bg-white/5 border-white/10 text-white/40 hover:bg-white/10 hover:border-white/20'
             }`}
           >
-            {brand === 'ADIDAS' ? '/// ADIDAS' : brand === 'NEW BALANCE' ? 'NB NEW BALANCE' : '/// ASICS'}
+            {label}
           </button>
         ))}
       </div>
