@@ -95,15 +95,19 @@ async function reserveItemPuppeteer(itemId: string, cookiesStr: string): Promise
     await page.evaluateOnNewDocument(() => {
       Object.defineProperty(navigator, "webdriver", { get: () => false });
       (window as any).chrome = { runtime: {} };
+      (window as any).__selenium_unwrapped = undefined;
+      (window as any).__webdriver_script_fn = undefined;
     });
-    await page.setExtraHTTPHeaders({ "accept-language": "es-ES,es;q=0.9" });
+    await page.setExtraHTTPHeaders({ "accept-language": "es-ES,es;q=0.9,en;q=0.8" });
+    await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
 
-    // Inject user cookies
+    // Parse user cookies — exclude DataDome cookie to avoid fingerprint mismatch.
+    // DataDome ties its cookie to the browser fingerprint that generated it.
+    // Injecting it into Puppeteer (different fingerprint) causes the block.
     const cookieMap = parseCookieStr(cookiesStr);
-    const toSet = Object.entries(cookieMap)
-      .filter(([, v]) => v)
+    const authCookies = Object.entries(cookieMap)
+      .filter(([name, v]) => v && !name.toLowerCase().includes("datadome"))
       .map(([name, value]) => ({ name, value, domain: ".vinted.es", path: "/", secure: true, sameSite: "Lax" as const }));
-    if (toSet.length) await page.setCookie(...toSet);
 
     let sellerId: string | null = null;
     let csrfToken: string | null = null;
@@ -133,7 +137,14 @@ async function reserveItemPuppeteer(itemId: string, cookiesStr: string): Promise
       } catch {}
     });
 
-    await page.goto(`https://www.vinted.es/items/${itemId}`, { waitUntil: "networkidle2", timeout: 35000 });
+    // Step 1: Visit homepage WITHOUT any cookies so DataDome fingerprints Puppeteer's session
+    await page.goto("https://www.vinted.es", { waitUntil: "domcontentloaded", timeout: 30000 });
+
+    // Step 2: Inject auth cookies AFTER DataDome has seen our browser fingerprint
+    if (authCookies.length) await page.setCookie(...authCookies);
+
+    // Step 3: Navigate to item page — DataDome now accepts our browser
+    await page.goto(`https://www.vinted.es/items/${itemId}`, { waitUntil: "networkidle2", timeout: 45000 });
 
     if (!sellerId || !csrfToken) await new Promise(r => setTimeout(r, 3000));
 
@@ -141,12 +152,11 @@ async function reserveItemPuppeteer(itemId: string, cookiesStr: string): Promise
     const bcMap = Object.fromEntries(bc.map(c => [c.name, c.value]));
     if (!csrfToken) csrfToken = bcMap["csrf_token"] || bcMap["_csrf_token"] || null;
     if (!anonId) anonId = bcMap["anon_id"] || cookieMap["anon_id"] || null;
-    if (!accessToken || accessToken.length < 10) accessToken = bcMap["access_token_web"] || null;
+    if (!accessToken || accessToken.length < 10) accessToken = bcMap["access_token_web"] || cookieMap["access_token_web"] || null;
 
     // Fallback 1: extract seller_id from page HTML / window state
     if (!sellerId) {
       sellerId = await page.evaluate((iid: string) => {
-        // Search in script tags
         for (const s of Array.from(document.querySelectorAll("script"))) {
           const t = s.textContent || "";
           const m1 = t.match(/"user_id"\s*:\s*(\d+)/);
@@ -156,7 +166,6 @@ async function reserveItemPuppeteer(itemId: string, cookiesStr: string): Promise
           const m3 = t.match(/"seller"\s*:\s*\{[^}]*?"id"\s*:\s*(\d+)/);
           if (m3) return m3[1];
         }
-        // Try preloaded state
         const w = window as any;
         const state = w.__PRELOADED_STATE__ || w.__INITIAL_STATE__ || w.APP_STATE;
         if (state) {
@@ -168,20 +177,20 @@ async function reserveItemPuppeteer(itemId: string, cookiesStr: string): Promise
       }, itemId).catch(() => null);
     }
 
-    // Fallback 2: direct API call from page context
-    if (!sellerId && accessToken) {
+    // Fallback 2: fetch item API from page context (same-origin, uses Puppeteer's DataDome session)
+    if (!sellerId) {
+      const tok = accessToken || cookieMap["access_token_web"] || null;
       const apiResult: any = await page.evaluate(async (p: any) => {
-        const r = await fetch(`/api/v2/items/${p.itemId}`, {
-          credentials: "include",
-          headers: { "accept": "application/json", "authorization": `Bearer ${p.accessToken}` }
-        });
+        const headers: Record<string, string> = { "accept": "application/json" };
+        if (p.tok) headers["authorization"] = `Bearer ${p.tok}`;
+        const r = await fetch(`/api/v2/items/${p.itemId}`, { credentials: "include", headers });
         const j = await r.json().catch(() => null);
         return j?.item?.user_id ? String(j.item.user_id) : null;
-      }, { itemId, accessToken }).catch(() => null);
+      }, { itemId, tok }).catch(() => null);
       if (apiResult) sellerId = apiResult;
     }
 
-    if (!sellerId) throw new Error("seller_id_not_found — DataDome bloqueó la página o el artículo no existe");
+    if (!sellerId) throw new Error("seller_id_not_found — no se pudo obtener el vendedor del artículo");
 
     // POST conversations from page context (same-origin, bypasses DataDome)
     const convResult: any = await page.evaluate(async (p: any) => {
