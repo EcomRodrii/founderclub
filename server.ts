@@ -6,6 +6,8 @@ import * as cheerio from "cheerio";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 import { pool, initDB } from "./db.js";
 
 dotenv.config({ path: ".env.local" });
@@ -65,12 +67,40 @@ async function startServer() {
   await initDB();
 
   const app = express();
+
+  // ── Seguridad ─────────────────────────────────────────────────────────────
+  app.use(helmet({ contentSecurityPolicy: false })); // cabeceras HTTP de seguridad
+  app.set("trust proxy", 1); // necesario para rate limit detrás de Railway
+
+  // Rate limit general: 200 peticiones por IP cada 15 minutos
+  app.use(rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 200,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Demasiadas peticiones. Espera unos minutos." }
+  }));
+
+  // Rate limit estricto para login/registro: 10 intentos cada 15 minutos
+  const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    message: { error: "Demasiados intentos. Espera 15 minutos." }
+  });
+
+  // Rate limit para Gemini: 20 llamadas por IP cada 10 minutos
+  const geminiLimiter = rateLimit({
+    windowMs: 10 * 60 * 1000,
+    max: 20,
+    message: { error: "Limite de analisis alcanzado. Espera unos minutos." }
+  });
+
   app.use(express.json({ limit: "20mb" }));
   const PORT = parseInt(process.env.PORT || "3000");
 
   // ── Auth Routes ─────────────────────────────────────────────────────────────
 
-  app.post("/api/auth/register", async (req, res) => {
+  app.post("/api/auth/register", authLimiter, async (req, res) => {
     const { username, email, password } = req.body;
     if (!username || !email || !password)
       return res.status(400).json({ error: "Todos los campos son obligatorios" });
@@ -95,7 +125,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/auth/login", async (req, res) => {
+  app.post("/api/auth/login", authLimiter, async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ error: "Email y contraseña requeridos" });
 
@@ -598,7 +628,7 @@ async function startServer() {
     res.json(data);
   });
 
-  app.post("/api/tongue/analyze", requireLicense as any, async (req: AuthRequest, res) => {
+  app.post("/api/tongue/analyze", geminiLimiter, requireLicense as any, async (req: AuthRequest, res) => {
     const { imageBase64, brand } = req.body;
     if (!imageBase64) return res.status(400).json({ error: "Se requiere imagen" });
 
@@ -658,7 +688,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/tongue/generate", requireLicense as any, async (req: AuthRequest, res) => {
+  app.post("/api/tongue/generate", geminiLimiter, requireLicense as any, async (req: AuthRequest, res) => {
     const { imageBase64, brand, detections, customPrompt } = req.body;
     if (!detections) return res.status(400).json({ error: "Se requieren los datos detectados" });
 
