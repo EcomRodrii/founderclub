@@ -65,7 +65,7 @@ async function startServer() {
   await initDB();
 
   const app = express();
-  app.use(express.json({ limit: "5mb" }));
+  app.use(express.json({ limit: "20mb" }));
   const PORT = parseInt(process.env.PORT || "3000");
 
   // ── Auth Routes ─────────────────────────────────────────────────────────────

@@ -73,14 +73,29 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const compressImage = (dataUrl: string, maxPx = 1280, quality = 0.85): Promise<string> =>
+    new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const scale = Math.min(1, maxPx / Math.max(img.width, img.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.src = dataUrl;
+    });
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onloadend = () => {
-      setOriginalImage(reader.result as string);
-      runOCR(reader.result as string);
+    reader.onloadend = async () => {
+      const compressed = await compressImage(reader.result as string);
+      setOriginalImage(compressed);
+      runOCR(compressed);
     };
     reader.readAsDataURL(file);
   };
