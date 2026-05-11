@@ -206,52 +206,69 @@ async function reserveItemPuppeteer(itemId: string, cookiesStr: string, domain =
   const { headers } = getVintedHeaders(cookiesStr, domain);
   const base = `https://www.vinted.${domain}`;
 
-  // Step 1: scrape seller_id from the public item HTML page (avoids API 404 issues)
-  const pageResp = await axios.get(`${base}/items/${itemId}`, {
-    headers: {
-      "User-Agent": headers["User-Agent"],
-      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": headers["Accept-Language"],
-      "Cookie": headers["Cookie"],
-    },
-    validateStatus: () => true,
-  });
-  if (pageResp.status !== 200) {
-    throw new Error(`page_fetch_${pageResp.status}: el artículo no existe o fue eliminado`);
-  }
-  const html: string = pageResp.data;
-  const $ = cheerio.load(html);
+  headers["Referer"] = `${base}/items/${itemId}`;
   let sellerId: string | null = null;
 
-  // Try Next.js SSR data blob first
-  const nextDataRaw = $("script#__NEXT_DATA__").html();
-  if (nextDataRaw) {
+  // Attempt 1: offers/request_options — authenticated endpoint that returns seller_id directly
+  try {
+    const offResp = await axios.get(`${base}/api/v2/offers/request_options`, {
+      params: { item_id: itemId },
+      headers,
+      validateStatus: () => true,
+      timeout: 10000,
+    });
+    if (offResp.status === 200 && offResp.data?.request_options?.seller_id) {
+      sellerId = String(offResp.data.request_options.seller_id);
+    }
+  } catch {}
+
+  // Attempt 2: item detail API
+  if (!sellerId) {
     try {
-      const nd = JSON.parse(nextDataRaw);
-      const pp = nd?.props?.pageProps;
-      const it = pp?.item || pp?.initialState?.item?.item || pp?.initialState?.items?.[itemId];
-      if (it?.user_id) sellerId = String(it.user_id);
-      else if (it?.seller?.id) sellerId = String(it.seller.id);
-      else if (it?.userId) sellerId = String(it.userId);
+      const itemResp = await axios.get(`${base}/api/v2/items/${itemId}`, {
+        headers,
+        validateStatus: () => true,
+        timeout: 10000,
+      });
+      if (itemResp.status === 200 && itemResp.data?.item?.user_id) {
+        sellerId = String(itemResp.data.item.user_id);
+      }
     } catch {}
   }
 
-  // Fallback: scan all inline scripts with regex
+  // Attempt 3: HTML page — scan scripts + member profile links
   if (!sellerId) {
-    $("script").each((_, el) => {
-      if (sellerId) return;
-      const t = $(el).text();
-      const m = t.match(/"user_id"\s*:\s*(\d+)/) ||
-                t.match(/"seller_id"\s*:\s*(\d+)/) ||
-                t.match(/"userId"\s*:\s*(\d+)/) ||
-                t.match(/"seller"\s*:\s*\{[^}]{0,200}"id"\s*:\s*(\d+)/);
-      if (m) sellerId = m[1];
-    });
+    try {
+      const pageResp = await axios.get(`${base}/items/${itemId}`, {
+        headers: {
+          "User-Agent": headers["User-Agent"],
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Accept-Language": headers["Accept-Language"],
+          "Cookie": headers["Cookie"],
+        },
+        validateStatus: () => true,
+        timeout: 15000,
+      });
+      if (pageResp.status === 200) {
+        const $ = cheerio.load(pageResp.data as string);
+        $("script").each((_, el) => {
+          if (sellerId) return;
+          const t = $(el).text();
+          const m = t.match(/"user_id"\s*:\s*(\d+)/) || t.match(/"seller_id"\s*:\s*(\d+)/) || t.match(/"userId"\s*:\s*(\d+)/);
+          if (m) sellerId = m[1];
+        });
+        if (!sellerId) {
+          $("a[href*='/member/']").each((_, el) => {
+            if (sellerId) return;
+            const m = ($(el).attr("href") || "").match(/\/member\/(\d+)/);
+            if (m) sellerId = m[1];
+          });
+        }
+      }
+    } catch {}
   }
 
-  if (!sellerId) throw new Error(`seller_id_not_found: página cargó pero no contiene seller_id (Next.js data: ${nextDataRaw ? "sí" : "no"})`);
-
-  headers["Referer"] = `${base}/items/${itemId}`;
+  if (!sellerId) throw new Error(`seller_id_not_found: los 3 métodos fallaron. Comprueba que la URL es válida y las cookies no han expirado.`);
 
   // Step 2: open conversation (reserves the item)
   const convResp = await axios.post(
