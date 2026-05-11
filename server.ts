@@ -206,19 +206,28 @@ async function reserveItemPuppeteer(itemId: string, cookiesStr: string, domain =
   const { headers } = getVintedHeaders(cookiesStr, domain);
   const base = `https://www.vinted.${domain}`;
 
-  // Override referer to point at the item page
-  headers["Referer"] = `${base}/items/${itemId}`;
-
-  // Step 1: get seller_id from item API
-  const itemResp = await axios.get(`${base}/api/v2/items/${itemId}`, {
-    headers,
+  // Step 1: scrape seller_id from the public item HTML page (avoids API 404 issues)
+  const pageResp = await axios.get(`${base}/items/${itemId}`, {
+    headers: {
+      "User-Agent": headers["User-Agent"],
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": headers["Accept-Language"],
+      "Cookie": headers["Cookie"],
+    },
     validateStatus: () => true,
   });
-  if (itemResp.status !== 200 || !itemResp.data?.item?.user_id) {
-    const preview = JSON.stringify(itemResp.data).slice(0, 300);
-    throw new Error(`item_fetch_${itemResp.status}: ${preview}`);
+  if (pageResp.status !== 200) {
+    throw new Error(`page_fetch_${pageResp.status}: el artículo no existe o fue eliminado`);
   }
-  const sellerId = String(itemResp.data.item.user_id);
+  const html: string = pageResp.data;
+  const sellerMatch =
+    html.match(/"user_id"\s*:\s*(\d+)/) ||
+    html.match(/"seller_id"\s*:\s*(\d+)/) ||
+    html.match(/"seller"\s*:\s*\{[^}]{0,100}"id"\s*:\s*(\d+)/);
+  if (!sellerMatch) throw new Error(`seller_id_not_in_page_${pageResp.status}: DataDome puede estar bloqueando desde este servidor`);
+  const sellerId = sellerMatch[1];
+
+  headers["Referer"] = `${base}/items/${itemId}`;
 
   // Step 2: open conversation (reserves the item)
   const convResp = await axios.post(
