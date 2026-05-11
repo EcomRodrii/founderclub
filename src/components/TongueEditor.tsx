@@ -251,7 +251,7 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
                 : 'bg-white/5 border-white/10 text-white/40 hover:bg-white/10 hover:border-white/20'
             }`}
           >
-            {brand === 'ADIDAS' ? '/// ADIDAS' : 'NB NEW BALANCE'}
+            {brand === 'ADIDAS' ? '/// ADIDAS' : brand === 'NEW BALANCE' ? 'NB NEW BALANCE' : '/// ASICS'}
           </button>
         ))}
       </div>
