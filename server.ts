@@ -224,7 +224,15 @@ async function reserveItemPuppeteer(itemId: string, cookiesStr: string, domain =
   headers["Referer"] = `${base}/items/${itemId}`;
   const proxy = getProxyConfig();
   let sellerId: string | null = null;
-  const diag: string[] = [`proxy:${proxy ? "si" : "no"}`];
+  const diag: string[] = [`proxy:${proxy ? "si" : "no"}`, `item_id:${itemId}`, `domain:${domain}`];
+
+  // Auth check via proxy
+  try {
+    const authR = await axios.get(`${base}/api/v2/users/current`, {
+      headers, proxy, validateStatus: () => true, timeout: 15000,
+    });
+    diag.push(`auth:${authR.status}${authR.status === 200 ? `(user:${authR.data?.user?.id})` : ""}`);
+  } catch (e: any) { diag.push(`auth_err:${e.message?.slice(0, 60)}`); }
 
   // Attempt 1: item detail API via proxy
   try {
