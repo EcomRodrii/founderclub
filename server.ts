@@ -88,143 +88,59 @@ function parseCookieStr(str: string): Record<string, string> {
 }
 
 async function reserveItemPuppeteer(itemId: string, cookiesStr: string): Promise<{ transactionId: string; purchaseId: string }> {
-  const browser = await getBrowser();
-  const page = await browser.newPage();
+  const cookieMap = parseCookieStr(cookiesStr);
+  const accessToken = cookieMap["access_token_web"] || "";
+  const csrfToken = cookieMap["csrf_token"] || cookieMap["_csrf_token"] || "";
+  const anonId = cookieMap["anon_id"] || "";
 
-  try {
-    await page.evaluateOnNewDocument(() => {
-      Object.defineProperty(navigator, "webdriver", { get: () => false });
-      (window as any).chrome = { runtime: {} };
-      (window as any).__selenium_unwrapped = undefined;
-      (window as any).__webdriver_script_fn = undefined;
-    });
-    await page.setExtraHTTPHeaders({ "accept-language": "es-ES,es;q=0.9,en;q=0.8" });
-    await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
+  const headers: Record<string, string> = {
+    "accept": "application/json, text/plain, */*",
+    "accept-language": "es-ES,es;q=0.9,en;q=0.8",
+    "content-type": "application/json",
+    "cookie": cookiesStr,
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "x-csrf-token": csrfToken,
+    "x-anon-id": anonId,
+    "authorization": `Bearer ${accessToken}`,
+    "x-requested-with": "XMLHttpRequest",
+    "locale": "es-ES",
+    "referer": `https://www.vinted.es/items/${itemId}`,
+    "origin": "https://www.vinted.es",
+  };
 
-    // Parse user cookies — exclude DataDome cookie to avoid fingerprint mismatch.
-    // DataDome ties its cookie to the browser fingerprint that generated it.
-    // Injecting it into Puppeteer (different fingerprint) causes the block.
-    const cookieMap = parseCookieStr(cookiesStr);
-    const authCookies = Object.entries(cookieMap)
-      .filter(([name, v]) => v && !name.toLowerCase().includes("datadome"))
-      .map(([name, value]) => ({ name, value, domain: ".vinted.es", path: "/", secure: true, sameSite: "Lax" as const }));
-
-    let sellerId: string | null = null;
-    let csrfToken: string | null = null;
-    let anonId: string | null = null;
-    let accessToken: string | null = null;
-
-    await page.setRequestInterception(true);
-    page.on("request", req => {
-      const h = req.headers();
-      if (req.url().includes("/api/v2/") && h["x-csrf-token"]) {
-        csrfToken = csrfToken || h["x-csrf-token"];
-        anonId = anonId || h["x-anon-id"];
-        accessToken = accessToken || (h["authorization"] || "").replace("Bearer ", "") || null;
-      }
-      req.continue();
-    });
-    page.on("response", async resp => {
-      try {
-        if (resp.url().includes("/api/v2/offers/request_options") && !sellerId) {
-          const j = await resp.json().catch(() => null);
-          if (j?.request_options?.seller_id) sellerId = String(j.request_options.seller_id);
-        }
-        if (resp.url().includes(`/api/v2/items/${itemId}`) && !sellerId) {
-          const j = await resp.json().catch(() => null);
-          if (j?.item?.user_id) sellerId = String(j.item.user_id);
-        }
-      } catch {}
-    });
-
-    // Step 1: Visit homepage WITHOUT any cookies so DataDome fingerprints Puppeteer's session
-    await page.goto("https://www.vinted.es", { waitUntil: "domcontentloaded", timeout: 30000 });
-
-    // Step 2: Inject auth cookies AFTER DataDome has seen our browser fingerprint
-    if (authCookies.length) await page.setCookie(...authCookies);
-
-    // Step 3: Navigate to item page — DataDome now accepts our browser
-    await page.goto(`https://www.vinted.es/items/${itemId}`, { waitUntil: "networkidle2", timeout: 45000 });
-
-    if (!sellerId || !csrfToken) await new Promise(r => setTimeout(r, 3000));
-
-    const bc = await page.cookies("https://www.vinted.es");
-    const bcMap = Object.fromEntries(bc.map(c => [c.name, c.value]));
-    if (!csrfToken) csrfToken = bcMap["csrf_token"] || bcMap["_csrf_token"] || null;
-    if (!anonId) anonId = bcMap["anon_id"] || cookieMap["anon_id"] || null;
-    if (!accessToken || accessToken.length < 10) accessToken = bcMap["access_token_web"] || cookieMap["access_token_web"] || null;
-
-    // Fallback 1: extract seller_id from page HTML / window state
-    if (!sellerId) {
-      sellerId = await page.evaluate((iid: string) => {
-        for (const s of Array.from(document.querySelectorAll("script"))) {
-          const t = s.textContent || "";
-          const m1 = t.match(/"user_id"\s*:\s*(\d+)/);
-          if (m1) return m1[1];
-          const m2 = t.match(/"seller_id"\s*:\s*(\d+)/);
-          if (m2) return m2[1];
-          const m3 = t.match(/"seller"\s*:\s*\{[^}]*?"id"\s*:\s*(\d+)/);
-          if (m3) return m3[1];
-        }
-        const w = window as any;
-        const state = w.__PRELOADED_STATE__ || w.__INITIAL_STATE__ || w.APP_STATE;
-        if (state) {
-          const item = state?.item?.item || state?.items?.[iid] || state?.item;
-          if (item?.user_id) return String(item.user_id);
-          if (item?.seller?.id) return String(item.seller.id);
-        }
-        return null;
-      }, itemId).catch(() => null);
-    }
-
-    // Fallback 2: fetch item API from page context (same-origin, uses Puppeteer's DataDome session)
-    if (!sellerId) {
-      const tok = accessToken || cookieMap["access_token_web"] || null;
-      const apiResult: any = await page.evaluate(async (p: any) => {
-        const headers: Record<string, string> = { "accept": "application/json" };
-        if (p.tok) headers["authorization"] = `Bearer ${p.tok}`;
-        const r = await fetch(`/api/v2/items/${p.itemId}`, { credentials: "include", headers });
-        const j = await r.json().catch(() => null);
-        return j?.item?.user_id ? String(j.item.user_id) : null;
-      }, { itemId, tok }).catch(() => null);
-      if (apiResult) sellerId = apiResult;
-    }
-
-    if (!sellerId) throw new Error("seller_id_not_found — no se pudo obtener el vendedor del artículo");
-
-    // POST conversations from page context (same-origin, bypasses DataDome)
-    const convResult: any = await page.evaluate(async (p: any) => {
-      const h: Record<string, string> = { "accept": "application/json, text/plain, */*", "content-type": "application/json", "x-requested-with": "XMLHttpRequest", "locale": "es-ES" };
-      if (p.csrfToken) h["x-csrf-token"] = p.csrfToken;
-      if (p.anonId) h["x-anon-id"] = p.anonId;
-      if (p.accessToken) h["authorization"] = `Bearer ${p.accessToken}`;
-      const r = await fetch("/api/v2/conversations", { method: "POST", credentials: "include", headers: h, body: JSON.stringify({ initiator: "buy", item_id: String(p.itemId), opposite_user_id: String(p.sellerId) }) });
-      return { ok: r.ok, status: r.status, text: await r.text().catch(() => "") };
-    }, { itemId, sellerId, csrfToken, anonId, accessToken });
-
-    if (!convResult.ok) throw new Error(`conversations_${convResult.status}: ${convResult.text.slice(0, 200)}`);
-    const convJson = JSON.parse(convResult.text);
-    const transactionId = convJson?.conversation?.transaction?.id;
-    if (!transactionId) throw new Error(`no_transaction_id: ${convResult.text.slice(0, 150)}`);
-
-    // POST checkout/build from page context
-    const buildResult: any = await page.evaluate(async (p: any) => {
-      const h: Record<string, string> = { "accept": "application/json, text/plain, */*", "content-type": "application/json", "x-requested-with": "XMLHttpRequest", "locale": "es-ES" };
-      if (p.csrfToken) h["x-csrf-token"] = p.csrfToken;
-      if (p.anonId) h["x-anon-id"] = p.anonId;
-      if (p.accessToken) h["authorization"] = `Bearer ${p.accessToken}`;
-      const r = await fetch("/api/v2/purchases/checkout/build", { method: "POST", credentials: "include", headers: h, body: JSON.stringify({ purchase_items: [{ id: p.transactionId, type: "transaction" }] }) });
-      return { ok: r.ok, status: r.status, text: await r.text().catch(() => "") };
-    }, { transactionId, csrfToken, anonId, accessToken });
-
-    if (!buildResult.ok) throw new Error(`checkout_build_${buildResult.status}: ${buildResult.text.slice(0, 150)}`);
-    const buildJson = JSON.parse(buildResult.text);
-    const purchaseId = buildJson?.checkout?.purchase_id || buildJson?.purchase_id || String(transactionId);
-
-    return { transactionId: String(transactionId), purchaseId: String(purchaseId) };
-  } finally {
-    await page.close().catch(() => {});
+  // Step 1: get seller_id from item API
+  const itemResp = await axios.get(`https://www.vinted.es/api/v2/items/${itemId}`, {
+    headers,
+    validateStatus: () => true,
+  });
+  if (itemResp.status !== 200 || !itemResp.data?.item?.user_id) {
+    const preview = JSON.stringify(itemResp.data).slice(0, 300);
+    throw new Error(`item_fetch_${itemResp.status}: ${preview}`);
   }
+  const sellerId = String(itemResp.data.item.user_id);
+
+  // Step 2: open conversation (reserves the item)
+  const convResp = await axios.post(
+    "https://www.vinted.es/api/v2/conversations",
+    { initiator: "buy", item_id: String(itemId), opposite_user_id: sellerId },
+    { headers, validateStatus: () => true }
+  );
+  if (convResp.status !== 200 && convResp.status !== 201) {
+    const preview = JSON.stringify(convResp.data).slice(0, 300);
+    throw new Error(`conversations_${convResp.status}: ${preview}`);
+  }
+  const transactionId = convResp.data?.conversation?.transaction?.id;
+  if (!transactionId) throw new Error(`no_transaction_id: ${JSON.stringify(convResp.data).slice(0, 200)}`);
+
+  // Step 3: build checkout (locks the reservation)
+  const buildResp = await axios.post(
+    "https://www.vinted.es/api/v2/purchases/checkout/build",
+    { purchase_items: [{ id: transactionId, type: "transaction" }] },
+    { headers, validateStatus: () => true }
+  );
+  const purchaseId = buildResp.data?.checkout?.purchase_id || buildResp.data?.purchase_id || String(transactionId);
+
+  return { transactionId: String(transactionId), purchaseId: String(purchaseId) };
 }
 
 async function startBazookaWorker() {
