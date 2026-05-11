@@ -588,6 +588,111 @@ async function startServer() {
     res.json({ success: totalSuccess > 0, count: totalSuccess, message: `BOMBARDEO FINALIZADO. ${totalSuccess} impactos en 2 minutos.` });
   });
 
+  // ── Tongue / Gemini endpoints ───────────────────────────────────────────────
+
+  app.post("/api/tongue/analyze", requireLicense as any, async (req: AuthRequest, res) => {
+    const { imageBase64, brand } = req.body;
+    if (!imageBase64) return res.status(400).json({ error: "Se requiere imagen" });
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY no configurada en el servidor" });
+
+    try {
+      const { GoogleGenAI } = await import("@google/genai");
+      const ai = new GoogleGenAI({ apiKey });
+
+      const prompt = `Analiza esta imagen de una lengüeta de zapatilla ${brand}.
+
+      1. Extrae los datos técnicos:
+      - model (ID de modelo, ej: JQ5874 o MR530SG)
+      - sku (lo mismo que model)
+      - reference (referencia de 12 dígitos en NB, o serie en Adidas ej: #123456789)
+      - reference2 (7 dígitos en NB)
+      - brandSerial (ej: LXCK1298 CLX o FGwKZ39<82143)
+      - date (ej: 05/22)
+      - lvl (ej: EVN 791001)
+      - sizes (un objeto con us, uk, fr, jp)
+
+      2. Genera el JSON con estos campos adicionales:
+      - modelName: Nombre comercial real (ej: Adidas Samba Leopard)
+      - color: Color dominante en francés (ej: blanc et vert)
+      - listingTitle: Título para Vinted EXACTAMENTE así: "[modelName] - Pointure [FR] [color] / [model]"
+      - listingDescription: Descripción en francés con formato: "[Frase natural]\n\nCouleur : [color]\nModèle : [model]\nTaille : [fr]"
+
+      Si no encuentras algún dato, pon "Desconocido". Solo devuelve el JSON puro sin markdown.`;
+
+      const result = await ai.models.generateContent({
+        model: "gemini-2.0-flash",
+        contents: {
+          parts: [
+            { inlineData: { mimeType: "image/jpeg", data: imageBase64.split(",")[1] || imageBase64 } },
+            { text: prompt }
+          ]
+        }
+      });
+
+      const text = result.text || "";
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) return res.status(422).json({ error: "No se pudo extraer JSON de la respuesta", raw: text });
+
+      res.json(JSON.parse(jsonMatch[0]));
+    } catch (err: any) {
+      console.error("Tongue analyze error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/tongue/generate", requireLicense as any, async (req: AuthRequest, res) => {
+    const { imageBase64, brand, detections, customPrompt } = req.body;
+    if (!detections) return res.status(400).json({ error: "Se requieren los datos detectados" });
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY no configurada en el servidor" });
+
+    try {
+      const { GoogleGenAI } = await import("@google/genai");
+      const ai = new GoogleGenAI({ apiKey });
+
+      let brandPrompt = "";
+      if (brand === "ADIDAS") {
+        brandPrompt = `CRITICAL IDENTITY RECONSTRUCTION - ADIDAS tongue label.
+STRICTLY DO NOT CHANGE: ART NO/SKU "${detections.sku}", DATE "${detections.date}", FACTORY/LVL "${detections.lvl}", ALL SIZES (US ${detections.sizes?.us}, UK ${detections.sizes?.uk}, FR ${detections.sizes?.fr}, JP ${detections.sizes?.jp}).
+ONLY UPDATE: Brand Serial (bottom-left): "${detections.brandSerial}", Reference (#): "${detections.reference}".
+RAW LOOK: 12MP smartphone photo, natural grain. NO AI watermarks. Bold Adidas sans-serif font.
+${customPrompt || ""}`;
+      } else {
+        brandPrompt = `NEW BALANCE internal tongue label reconstruction.
+STYLE/MODEL: "${detections.sku}". DATE: "${detections.date}". FACTORY: "${detections.lvl}".
+SIZES: US ${detections.sizes?.us} | UK ${detections.sizes?.uk} | EU ${detections.sizes?.fr} | CM ${detections.sizes?.jp}.
+CHANGE ONLY THESE 3 CODES: SERIAL1 (12 digits): "${detections.reference}", SERIAL2 (7 digits): "${detections.reference2}", BRAND CODE: "${detections.brandSerial}".
+LOOK: macro phone photo, white satin material, heavy industrial font. No AI artifacts.
+${customPrompt || ""}`;
+      }
+
+      const parts: any[] = [{ text: brandPrompt }];
+      if (imageBase64) {
+        parts.unshift({ inlineData: { mimeType: "image/jpeg", data: imageBase64.split(",")[1] || imageBase64 } });
+      }
+
+      const response = await ai.models.generateContent({
+        model: "gemini-2.0-flash-exp-image-generation",
+        contents: { parts },
+        config: { responseModalities: ["TEXT", "IMAGE"] }
+      });
+
+      for (const part of response.candidates?.[0]?.content?.parts || []) {
+        if (part.inlineData) {
+          return res.json({ image: `data:image/png;base64,${part.inlineData.data}` });
+        }
+      }
+
+      res.status(422).json({ error: "El modelo no devolvió imagen. Intenta de nuevo." });
+    } catch (err: any) {
+      console.error("Tongue generate error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ── Vite / Static ───────────────────────────────────────────────────────────
 
   if (process.env.NODE_ENV !== "production") {

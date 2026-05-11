@@ -6,7 +6,16 @@ import {
   ArrowRight, Camera
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { GoogleGenAI } from "@google/genai";
+
+const authFetch = (url: string, body: any) =>
+  fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${localStorage.getItem("fc_token") || ""}`,
+    },
+    body: JSON.stringify(body),
+  });
 
 interface DetectionResult {
   model: string;
@@ -78,64 +87,16 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
 
   const runOCR = async (base64Image: string) => {
     setLoading(true);
-    setStatus('Analizando lengüeta con OCR...');
+    setStatus(‘Analizando lengüeta con OCR...’);
     setError(null);
-
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
-      const prompt = `Analiza esta imagen de una lengüeta de zapatilla ${activeBrand}. 
-      
-      1. Extrae los datos técnicos:
-      - model (ID de modelo, ej: JQ5874 o MR530SG)
-      - sku (lo mismo que model)
-      - reference (referencia de 12 dígitos en NB, o serie en Adidas ej: #123456789)
-      - reference2 (7 dígitos en NB)
-      - brandSerial (ej: LXCK1298 CLX o FGwKZ39<82143)
-      - date (ej: 05/22)
-      - lvl (ej: EVN 791001)
-      - sizes (un objeto con us, uk, fr, jp)
-
-      2. BÚSQUEDA EN INTERNET: Utiliza Google Search para encontrar el nombre comercial exacto (ej: "Adidas Samba Leopard") usando la marca y el código del modelo detectado.
-
-      3. Genera el JSON con estos campos adicionales:
-      - modelName: Nombre comercial real (ej: Adidas Samba Leopard)
-      - color: Color dominante en francés (ej: blanc et vert)
-      - listingTitle: Título para Vinted EXACTAMENTE así: "[modelName] - Pointure [FR] [color] / [model]"
-      - listingDescription: Descripción en francés EXACTAMENTE con este formato: "[Frase aleatoria natural como 'Ma sœur me les a offertes, mais ce n’est finalmente pas mon style, donc je préfère les vendre' o similar]\n\nCouleur : [color]\nModèle : [model]\nTaille : [fr]"
-
-      Si no encuentras algún dato, pon "Desconocido". Solo devuelve el JSON puro.`;
-
-      const imagePart = {
-        inlineData: {
-          mimeType: "image/jpeg",
-          data: base64Image.split(',')[1],
-        },
-      };
-
-      const result = await ai.models.generateContent({
-        model: "gemini-2.0-flash",
-        contents: { parts: [imagePart, { text: prompt }] },
-      });
-
-      const text = result.text || '';
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        const data = JSON.parse(jsonMatch[0]);
-        setDetections(data);
-        setStatus('Datos extraídos correctamente.');
-      } else {
-        setError('No se pudo procesar la respuesta del OCR.');
-      }
+      const res = await authFetch(‘/api/tongue/analyze’, { imageBase64: base64Image, brand: activeBrand });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || ‘Error en el servidor’);
+      setDetections(data);
+      setStatus(‘Datos extraídos correctamente.’);
     } catch (err: any) {
-      console.error('OCR Error:', err);
-      const msg = err.message || String(err);
-      if (msg.includes('401') || msg.toLowerCase().includes('permission denied')) {
-        setError('Error de sesión (401) o permisos en OCR. Por favor, refresca la página.');
-      } else if (msg.toLowerCase().includes('quota') || msg.includes('429')) {
-        setError('Límite de uso alcanzado (Quota Exceeded) en el escáner. Por favor, espera un momento.');
-      } else {
-        setError('Error en el análisis OCR: ' + msg);
-      }
+      setError(‘Error en el análisis OCR: ‘ + err.message);
     } finally {
       setLoading(false);
     }
@@ -227,119 +188,26 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
     if (!detections) return;
     setLoading(true);
     setStatus('Generando nueva imagen de lengüeta...');
-
+    setError(null);
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
-      
-      // Construct the final prompt using the detection data to prevent hallucinations
-      let brandPrompt = '';
-      const dataStr = `
-        USE THESE EXACT VALUES:
-        - MODEL/SKU: ${detections.sku}
-        - DATE: ${detections.date}
-        - FACTORY/LVL: ${detections.lvl}
-        - REFERENCE: ${detections.reference}
-        - REFERENCE_2: ${detections.reference2 || ''}
-        - BRAND_SERIAL: ${detections.brandSerial}
-        - SIZES: US ${detections.sizes.us}, UK ${detections.sizes.uk}, FR ${detections.sizes.fr}, JP ${detections.sizes.jp}
-      `;
-
-      if (activeBrand === 'ADIDAS') {
-        brandPrompt = `
-### CRITICAL IDENTITY RECONSTRUCTION - ADIDAS
-Precision printing engine task. Recreate the label with 100% adherence to fixed data.
-
-STRICTLY DO NOT CHANGE (FORBIDDEN):
-- ART NO / SKU: "${detections.sku}"
-- DATE: "${detections.date}"
-- FACTORY / LVL: "${detections.lvl}"
-- ALL SIZES (US ${detections.sizes.us}, UK ${detections.sizes.uk}, FR ${detections.sizes.fr}, JP ${detections.sizes.jp})
-
-ONLY UPDATE (MANDATORY CHANGE):
-- Brand Serial (Bottom-Left code): "${detections.brandSerial}"
-- Reference Serial (Bottom-Right code #): "${detections.reference}"
-
-PHOTOGRAPHIC CONSTRAINTS:
-1. RAW LOOK: 12MP smartphone photo with natural grain and lens distortion.
-2. NO AI TRACES: No watermarks, no "Generated by" text, no AI artifacts.
-3. FONT: Bold Adidas sans-serif.
-
-USER CUSTOM PROMPT:
-${customPromptAdidas}
-`;
-      } else {
-        brandPrompt = `
-### NEW BALANCE INTERNAL LABEL SPECIFICATIONS
-You are recreating a NEW BALANCE tongue label. THIS IS NOT AN ADIDAS LABEL. The architecture is completely different.
-
-GEOMETRY & LAYOUT:
-- The text is organized in a strict GRID/TABLE matrix.
-- Each size (US, UK, EU, CM) must be in its own defined rectangular box or column.
-- The "Style" SKU "${detections.sku}" is typically the most prominent text at the top or bottom left of the grid.
-
-DATA INTEGRITY (STRICT):
-- STYLE / MODEL: "${detections.sku}"
-- DATE CODE: "${detections.date}"
-- FACTORY CODE: "${detections.lvl}"
-- SIZES: US ${detections.sizes.us} | UK ${detections.sizes.uk} | EU ${detections.sizes.fr} | CM ${detections.sizes.jp}
-
-PRIMARY MODIFICATIONS (3 CODES):
-- SERIAL 1 (12 digits): "${detections.reference}"
-- SERIAL 2 (7 digits): "${detections.reference2}"
-- ALPHANUMERIC BRAND CODE: "${detections.brandSerial}"
-
-AESTHETIC RULES:
-1. MATERIAL: White satin or gloss synthetic material. It reflects light differently than fabric.
-2. FONT: Use a heavy, industrial, blocky sans-serif. It is NOT the same as Adidas.
-3. LOOK: Recreate a macro photo taken with a phone. Natural focus blur, some grain, maybe a slight crease in the label.
-4. NO AI ARTIFACTS: No generic "perfect" white backgrounds. Should look like it's inside a shoe.
-
-USER CUSTOM PROMPT:
-${customPromptNB}
-`;
-      }
-
-      const imagePart = originalImage ? {
-        inlineData: {
-          mimeType: "image/jpeg",
-          data: originalImage.split(',')[1],
-        },
-      } : null;
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.0-flash-exp-image-generation',
-        contents: {
-          parts: [
-            ...(imagePart ? [imagePart] : []),
-            { text: brandPrompt }
-          ],
-        },
-        config: {
-          responseModalities: ['TEXT', 'IMAGE'],
-        }
+      const res = await authFetch('/api/tongue/generate', {
+        imageBase64: originalImage,
+        brand: activeBrand,
+        detections,
+        customPrompt: activeBrand === 'ADIDAS' ? customPromptAdidas : customPromptNB,
       });
-
-      let foundImage = false;
-      for (const part of response.candidates?.[0]?.content?.parts || []) {
-        if (part.inlineData) {
-          setGeneratedImage(`data:image/png;base64,${part.inlineData.data}`);
-          foundImage = true;
-          break;
-        }
-      }
-
-      if (foundImage) {
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Error en el servidor');
+      if (data.image) {
+        setGeneratedImage(data.image);
         setStatus('¡Lengüeta generada con éxito!');
       } else {
-        setError('El modelo no devolvió una imagen. Reintentando...');
+        setError('El modelo no devolvió imagen. Intenta de nuevo.');
       }
     } catch (err: any) {
-      console.error('Error generating image:', err);
       const msg = err.message || String(err);
-      if (msg.includes('401') || msg.toLowerCase().includes('permission denied')) {
-        setError('Error de sesión (401) o permisos. Por favor, refresca la página e inténtalo de nuevo.');
-      } else if (msg.toLowerCase().includes('quota') || msg.includes('429')) {
-        setError('Límite de uso alcanzado (Quota Exceeded). La IA de Google tiene un límite diario de generaciones gratuitas. Por favor, espera unos minutos o intenta mañana.');
+      if (msg.toLowerCase().includes('quota') || msg.includes('429')) {
+        setError('Límite de uso alcanzado. Espera unos minutos e inténtalo de nuevo.');
       } else {
         setError('Error al generar la imagen: ' + msg);
       }
