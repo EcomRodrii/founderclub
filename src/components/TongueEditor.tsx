@@ -87,16 +87,16 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
 
   const runOCR = async (base64Image: string) => {
     setLoading(true);
-    setStatus(‘Analizando lengueta con OCR...’);
+    setStatus('Analizando lengueta con OCR...');
     setError(null);
     try {
-      const res = await authFetch(‘/api/tongue/analyze’, { imageBase64: base64Image, brand: activeBrand });
+      const res = await authFetch('/api/tongue/analyze', { imageBase64: base64Image, brand: activeBrand });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || ‘Error en el servidor’);
+      if (!res.ok) throw new Error(data.error || 'Error en el servidor');
       setDetections(data);
-      setStatus(‘Datos extraídos correctamente.’);
+      setStatus('Datos extraídos correctamente.');
     } catch (err: any) {
-      setError(‘Error en el análisis OCR: ‘ + err.message);
+      setError('Error en el análisis OCR: ' + err.message);
     } finally {
       setLoading(false);
     }
