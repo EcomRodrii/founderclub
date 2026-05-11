@@ -625,27 +625,33 @@ async function startServer() {
 
       Si no encuentras algun dato, pon "Desconocido". Solo devuelve el JSON puro sin markdown.`;
 
+    const MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-preview-04-17", "gemini-2.0-flash", "gemini-1.5-flash"];
     try {
       const base64Data = imageBase64.includes(",") ? imageBase64.split(",")[1] : imageBase64;
-      const r = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ parts: [
-              { inline_data: { mime_type: "image/jpeg", data: base64Data } },
-              { text: prompt }
-            ]}]
-          })
-        }
-      );
-      const data = await r.json();
-      if (!r.ok) return res.status(r.status).json({ error: JSON.stringify(data) });
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) return res.status(422).json({ error: "No se pudo extraer JSON", raw: text });
-      res.json(JSON.parse(jsonMatch[0]));
+      let lastError = "";
+      for (const model of MODELS) {
+        const r = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ parts: [
+                { inlineData: { mimeType: "image/jpeg", data: base64Data } },
+                { text: prompt }
+              ]}],
+              tools: [{ googleSearch: {} }]
+            })
+          }
+        );
+        const data = await r.json();
+        if (!r.ok) { lastError = JSON.stringify(data); console.error(`Model ${model} failed:`, lastError); continue; }
+        const text = data.candidates?.[0]?.content?.parts?.find((p: any) => p.text)?.text || "";
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) return res.status(422).json({ error: "No se pudo extraer JSON", raw: text });
+        return res.json(JSON.parse(jsonMatch[0]));
+      }
+      return res.status(500).json({ error: "Ningun modelo disponible: " + lastError });
     } catch (err: any) {
       console.error("Tongue analyze error:", err.message);
       res.status(500).json({ error: err.message });
@@ -679,26 +685,29 @@ ${customPrompt || ""}`;
       const parts: any[] = [{ text: brandPrompt }];
       if (imageBase64) {
         const base64Data = imageBase64.includes(",") ? imageBase64.split(",")[1] : imageBase64;
-        parts.unshift({ inline_data: { mime_type: "image/jpeg", data: base64Data } });
+        parts.unshift({ inlineData: { mimeType: "image/jpeg", data: base64Data } });
       }
 
-      const r = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp-image-generation:generateContent?key=${apiKey}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ parts }],
-            generationConfig: { responseModalities: ["TEXT", "IMAGE"] }
-          })
-        }
-      );
-      const data = await r.json();
-      if (!r.ok) return res.status(r.status).json({ error: JSON.stringify(data) });
-
-      for (const part of data.candidates?.[0]?.content?.parts || []) {
-        if (part.inline_data) {
-          return res.json({ image: `data:image/png;base64,${part.inline_data.data}` });
+      const IMG_MODELS = ["gemini-2.0-flash-exp-image-generation", "gemini-2.0-flash-preview-image-generation"];
+      let lastErr = "";
+      for (const model of IMG_MODELS) {
+        const r = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ parts }],
+              generationConfig: { responseModalities: ["TEXT", "IMAGE"] }
+            })
+          }
+        );
+        const data = await r.json();
+        if (!r.ok) { lastErr = JSON.stringify(data); continue; }
+        for (const part of data.candidates?.[0]?.content?.parts || []) {
+          if (part.inlineData) {
+            return res.json({ image: `data:image/png;base64,${part.inlineData.data}` });
+          }
         }
       }
 
