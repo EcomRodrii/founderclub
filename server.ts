@@ -599,7 +599,7 @@ async function startServer() {
 
     try {
       const { GoogleGenAI } = await import("@google/genai");
-      const ai = new GoogleGenAI({ apiKey });
+      const ai = new GoogleGenAI({ apiKey, httpOptions: { apiVersion: "v1" } });
 
       const prompt = `Analiza esta imagen de una lengüeta de zapatilla ${brand}.
 
@@ -651,7 +651,7 @@ async function startServer() {
 
     try {
       const { GoogleGenAI } = await import("@google/genai");
-      const ai = new GoogleGenAI({ apiKey });
+      const ai = new GoogleGenAI({ apiKey, httpOptions: { apiVersion: "v1" } });
 
       let brandPrompt = "";
       if (brand === "ADIDAS") {
