@@ -606,10 +606,12 @@ function nextDeviceId(): string {
 
 // ─── MODULE 3: THE GHOST — headers dinámicos que imitan la App iOS de Vinted ──
 function buildSniperHeaders(cookiesStr: string, domain = "es", extra: Record<string, string> = {}): Record<string, string> {
-  // Extraer Bearer token
+  // Extraer Bearer token — soporta access_token_web (legacy) y v_udt (Vinted ES nuevo)
   let bearerToken = "";
   const jwtMatch = cookiesStr.match(/access_token_web=([A-Za-z0-9._-]+)/);
-  if (jwtMatch) bearerToken = jwtMatch[1];
+  const vudtMatch = cookiesStr.match(/v_udt=([A-Za-z0-9+/=_-]+)/);
+  if (jwtMatch)       bearerToken = jwtMatch[1];
+  else if (vudtMatch) bearerToken = vudtMatch[1];   // v_udt = token auth en Vinted.es moderno
   else if (cookiesStr.trim().startsWith("eyJ")) bearerToken = cookiesStr.trim();
 
   const appVersions = ["22.10.0", "23.1.0", "23.4.2", "23.6.0", "24.0.1"];
@@ -1667,7 +1669,7 @@ async function startServer() {
     };
 
     if (!url)        return res.status(400).json({ error: "url requerida" });
-    if (!cookiesStr) return res.status(400).json({ error: "cookies requeridas (access_token_web + _vinted_fr_session)" });
+    if (!cookiesStr) return res.status(400).json({ error: "cookies requeridas (v_udt + v_uid + v_sid)" });
 
     const N = Math.min(Math.max(Number(workersCount) || 3, 1), 5); // 1-5 workers
 
