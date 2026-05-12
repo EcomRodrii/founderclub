@@ -125,15 +125,57 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
 
   const runOCR = async (base64Image: string) => {
     setLoading(true);
-    setStatus('Analizando lengueta con OCR...');
+    setStatus('Analizando lengüeta con OCR...');
     setError(null);
     try {
-      const res = await authFetch('/api/tongue/analyze', { imageBase64: base64Image, brand: activeBrand });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Error en el servidor');
-      setDetections(data);
-      setStatus('Datos extraídos correctamente.');
+      const { GoogleGenAI } = await import('@google/genai');
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || (window as any).__GEMINI_KEY__ || '' });
+      const prompt = `Analiza esta imagen de una lengüeta de zapatilla ${activeBrand}.
+
+    1. Extrae los datos técnicos:
+    - model (ID de modelo, ej: JQ5874 o MR530SG)
+    - sku (lo mismo que model)
+    - reference (referencia de 12 dígitos en NB, o serie en Adidas ej: #123456789)
+    - reference2 (7 dígitos en NB)
+    - brandSerial (ej: LXCK1298 CLX o FGwKZ39<82143)
+    - date (ej: 05/22)
+    - lvl (ej: EVN 791001)
+    - sizes (un objeto con us, uk, fr, jp)
+
+    2. BÚSQUEDA EN INTERNET: Utiliza Google Search para encontrar el nombre comercial exacto (ej: "Adidas Samba Leopard") usando la marca y el código del modelo detectado.
+
+    3. Genera el JSON con estos campos adicionales:
+    - modelName: Nombre comercial real (ej: Adidas Samba Leopard)
+    - color: Color dominante en francés (ej: blanc et vert)
+    - listingTitle: Título para Vinted EXACTAMENTE así: "[modelName] - Pointure [FR] [color] / [model]"
+    - listingDescription: Descripción en francés EXACTAMENTE con este formato: "[Frase aleatoria natural]\\n\\nCouleur : [color]\\nModèle : [model]\\nTaille : [fr]"
+
+    Si no encuentras algún dato, pon "Desconocido". Solo devuelve el JSON puro sin markdown.`;
+
+      const imagePart = {
+        inlineData: {
+          mimeType: "image/jpeg" as const,
+          data: base64Image.includes(',') ? base64Image.split(',')[1] : base64Image,
+        },
+      };
+
+      const result = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: { parts: [imagePart, { text: prompt }] },
+        config: { tools: [{ googleSearch: {} }] },
+      });
+
+      const text = result.text || '';
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const data = JSON.parse(jsonMatch[0]);
+        setDetections(data);
+        setStatus('Datos extraídos correctamente.');
+      } else {
+        throw new Error('No se encontró JSON en la respuesta de Gemini');
+      }
     } catch (err: any) {
+      console.error('OCR Error:', err);
       setError('Error en el análisis OCR: ' + err.message);
     } finally {
       setLoading(false);
@@ -235,23 +277,44 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
   const generateModifiedTongue = async () => {
     if (!detections) return;
     setLoading(true);
-    setStatus('Generando nueva imagen de lengueta...');
+    setStatus('Generando nueva imagen de lengüeta...');
     setError(null);
     try {
-      const res = await authFetch('/api/tongue/generate', {
-        imageBase64: originalImage,
-        brand: activeBrand,
-        detections,
-        customPrompt: activeBrand === 'ADIDAS' ? customPromptAdidas : activeBrand === 'ASICS' ? customPromptAsics : activeBrand === 'ONITSUKA' ? customPromptOnitsuka : customPromptNB,
+      const { GoogleGenAI } = await import('@google/genai');
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || (window as any).__GEMINI_KEY__ || '' });
+
+      const customPrompt = activeBrand === 'ADIDAS' ? customPromptAdidas
+        : activeBrand === 'ASICS' ? customPromptAsics
+        : activeBrand === 'ONITSUKA' ? customPromptOnitsuka
+        : customPromptNB;
+
+      const imagePart = originalImage ? {
+        inlineData: {
+          mimeType: "image/jpeg" as const,
+          data: originalImage.includes(',') ? originalImage.split(',')[1] : originalImage,
+        },
+      } : null;
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.0-flash-exp-image-generation',
+        contents: {
+          parts: [
+            ...(imagePart ? [imagePart] : []),
+            { text: customPrompt },
+          ],
+        },
+        config: { responseModalities: ['Text', 'Image'] },
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Error en el servidor');
-      if (data.image) {
-        setGeneratedImage(data.image);
-        setStatus('¡Lengüeta generada con éxito!');
-      } else {
-        setError('El modelo no devolvió imagen. Intenta de nuevo.');
+
+      for (const part of response.candidates?.[0]?.content?.parts || []) {
+        if ((part as any).inlineData) {
+          const d = (part as any).inlineData;
+          setGeneratedImage(`data:${d.mimeType};base64,${d.data}`);
+          setStatus('¡Lengüeta generada con éxito!');
+          return;
+        }
       }
+      setError('El modelo no devolvió imagen. Intenta de nuevo.');
     } catch (err: any) {
       const msg = err.message || String(err);
       if (msg.toLowerCase().includes('quota') || msg.includes('429')) {
