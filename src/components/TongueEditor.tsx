@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Upload, Scissors, Info, RefreshCcw,
   CheckCircle2, AlertCircle, ScanText,
@@ -98,6 +98,22 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
+
+  // Load admin-defined prompts from server on mount
+  useEffect(() => {
+    fetch('/api/tongue/prompts')
+      .then(r => r.ok ? r.json() : [])
+      .then((rows: { brand: string; prompt: string }[]) => {
+        rows.forEach(({ brand, prompt }) => {
+          if (!prompt) return;
+          if (brand === 'ADIDAS') setCustomPromptAdidas(prompt);
+          else if (brand === 'NEW BALANCE') setCustomPromptNB(prompt);
+          else if (brand === 'ASICS') setCustomPromptAsics(prompt);
+          else if (brand === 'ONITSUKA') setCustomPromptOnitsuka(prompt);
+        });
+      })
+      .catch(() => {}); // silently ignore if offline
+  }, []);
 
   const compressImage = (dataUrl: string, maxPx = 1280, quality = 0.85): Promise<string> =>
     new Promise((resolve) => {

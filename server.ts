@@ -811,6 +811,36 @@ ${customPrompt || ""}`;
     }
   });
 
+  // ── Tongue Prompts (admin manage / public read) ────────────────────────────
+
+  app.get("/api/tongue/prompts", async (_req, res) => {
+    try {
+      const result = await pool.query("SELECT brand, prompt, updated_at FROM tongue_prompts ORDER BY brand");
+      res.json(result.rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/admin/tongue/prompts", requireAdmin as any, async (req, res) => {
+    const { brand, prompt } = req.body;
+    const validBrands = ["ADIDAS", "NEW BALANCE", "ASICS", "ONITSUKA"];
+    if (!brand || !validBrands.includes(brand))
+      return res.status(400).json({ error: "Marca inválida. Usa: ADIDAS, NEW BALANCE, ASICS u ONITSUKA" });
+    try {
+      const result = await pool.query(
+        `INSERT INTO tongue_prompts (brand, prompt, updated_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (brand) DO UPDATE SET prompt = EXCLUDED.prompt, updated_at = NOW()
+         RETURNING *`,
+        [brand, prompt ?? ""]
+      );
+      res.json(result.rows[0]);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ── Vite / Static ───────────────────────────────────────────────────────────
 
   if (process.env.NODE_ENV !== "production") {

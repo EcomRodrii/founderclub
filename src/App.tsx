@@ -4,13 +4,15 @@ import {
   Lock, User, ExternalLink, RefreshCcw,
   CheckCircle2, AlertCircle, ShieldCheck,
   ChevronRight, LayoutGrid, List as ListIcon,
-  HelpCircle, Copy, Check, Scissors, Key, LogOut, TrendingUp, Zap, Trash2
+  HelpCircle, Copy, Check, Scissors, Key, LogOut, TrendingUp, Zap, Trash2,
+  Image as ImageIcon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import TongueEditor from './components/TongueEditor';
 import AuthPage from './components/AuthPage';
 import AdminPanel from './components/AdminPanel';
 import ProfitControl from './components/ProfitControl';
+import ImageUniquifier from './components/ImageUniquifier';
 
 // ─── Auth wrapper ─────────────────────────────────────────────────────────────
 
@@ -185,7 +187,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
   const [userId, setUserId] = useState<string>(() => localStorage.getItem('vinted_user_id') || '3152763908');
   const [domain, setDomain] = useState<string>(() => localStorage.getItem('vinted_domain') || 'es');
   const [profileUrl, setProfileUrl] = useState('https://www.vinted.es/member/3152763908');
-  const [activeTab, setActiveTab] = useState<'mine' | 'external' | 'tongues' | 'profits'>('mine');
+  const [activeTab, setActiveTab] = useState<'mine' | 'external' | 'tongues' | 'profits' | 'photos'>('mine');
   
   // External Report State
   const [externalUrl, setExternalUrl] = useState('');
@@ -749,6 +751,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
             { id: 'external', icon: <ShieldCheck className="w-5 h-5" />, label: 'Ocultar', action: () => { setActiveTab('external'); setMobileSidebarOpen(false); } },
             { id: 'tongues', icon: <Scissors className="w-5 h-5" />, label: 'Lengüeta', action: () => { setActiveTab('tongues'); setMobileSidebarOpen(false); } },
             { id: 'profits', icon: <TrendingUp className="w-5 h-5" />, label: 'Beneficios', action: () => { setActiveTab('profits'); setMobileSidebarOpen(false); } },
+            { id: 'photos', icon: <ImageIcon className="w-5 h-5" />, label: 'Fotos', action: () => { setActiveTab('photos'); setMobileSidebarOpen(false); } },
           ].map(item => {
             const isActive = item.id === 'config' ? mobileSidebarOpen : (item.id !== 'config' && activeTab === item.id);
             return (
@@ -984,6 +987,12 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                   className={`text-xs uppercase tracking-widest font-bold pb-1 border-b-2 transition-all ${activeTab === 'profits' ? 'border-emerald-500 text-white' : 'border-transparent text-white/30 hover:text-white/60'}`}
                 >
                   Beneficios
+                </button>
+                <button
+                  onClick={() => setActiveTab('photos')}
+                  className={`text-xs uppercase tracking-widest font-bold pb-1 border-b-2 transition-all ${activeTab === 'photos' ? 'border-emerald-500 text-white' : 'border-transparent text-white/30 hover:text-white/60'}`}
+                >
+                  Fotos Únicas
                 </button>
               </div>
             </div>
@@ -1314,6 +1323,18 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
               <p className="text-sm text-white/40 font-medium uppercase tracking-[0.3em]">Facturación · Gastos · Net Profit</p>
             </div>
             <ProfitControl token={token} />
+          </motion.div>
+        )}
+
+        {activeTab === 'photos' && (
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
+            <div className="space-y-2">
+              <h2 className="text-3xl md:text-4xl font-black tracking-tighter text-white">
+                FOTOS <span className="text-emerald-500 italic">ÚNICAS</span>
+              </h2>
+              <p className="text-sm text-white/40 font-medium uppercase tracking-[0.3em]">Anti-Detección · Hash Único · Sin EXIF</p>
+            </div>
+            <ImageUniquifier />
           </motion.div>
         )}
 

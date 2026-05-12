@@ -3,7 +3,8 @@ import { motion } from 'motion/react';
 import {
   Users, Key, Activity, LogOut, Plus, Trash2,
   RefreshCcw, Shield, ShieldOff, Copy, Check,
-  ToggleLeft, ToggleRight, Fingerprint, Globe, Clock
+  ToggleLeft, ToggleRight, Fingerprint, Globe, Clock,
+  FileText, Save
 } from 'lucide-react';
 
 interface AdminPanelProps {
@@ -12,7 +13,10 @@ interface AdminPanelProps {
   onBack?: () => void;
 }
 
-type Tab = 'stats' | 'users' | 'licenses' | 'sessions';
+type Tab = 'stats' | 'users' | 'licenses' | 'sessions' | 'prompts';
+
+const BRANDS = ['ADIDAS', 'NEW BALANCE', 'ASICS', 'ONITSUKA'] as const;
+type Brand = typeof BRANDS[number];
 
 const api = (token: string) => ({
   get: (url: string) => fetch(url, { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()),
@@ -75,6 +79,17 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
   const [generatedKeys, setGeneratedKeys] = useState<string[]>([]);
   const [genLoading, setGenLoading] = useState(false);
 
+  // Tongue prompts
+  const [prompts, setPrompts] = useState<Record<Brand, string>>({
+    'ADIDAS': '', 'NEW BALANCE': '', 'ASICS': '', 'ONITSUKA': '',
+  });
+  const [promptSaving, setPromptSaving] = useState<Record<Brand, boolean>>({
+    'ADIDAS': false, 'NEW BALANCE': false, 'ASICS': false, 'ONITSUKA': false,
+  });
+  const [promptSaved, setPromptSaved] = useState<Record<Brand, boolean>>({
+    'ADIDAS': false, 'NEW BALANCE': false, 'ASICS': false, 'ONITSUKA': false,
+  });
+
   const client = api(token);
 
   const loadTab = useCallback(async (t: Tab) => {
@@ -84,10 +99,24 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
       else if (t === 'users') setUsers(await client.get('/api/admin/users'));
       else if (t === 'licenses') setLicenses(await client.get('/api/admin/licenses'));
       else if (t === 'sessions') setSessions(await client.get('/api/admin/sessions'));
+      else if (t === 'prompts') {
+        const rows: { brand: string; prompt: string }[] = await client.get('/api/tongue/prompts');
+        const map: Partial<Record<Brand, string>> = {};
+        rows.forEach(r => { if (BRANDS.includes(r.brand as Brand)) map[r.brand as Brand] = r.prompt; });
+        setPrompts(prev => ({ ...prev, ...map }));
+      }
     } finally {
       setLoading(false);
     }
   }, [token]);
+
+  const savePrompt = async (brand: Brand) => {
+    setPromptSaving(prev => ({ ...prev, [brand]: true }));
+    await client.post('/api/admin/tongue/prompts', { brand, prompt: prompts[brand] });
+    setPromptSaving(prev => ({ ...prev, [brand]: false }));
+    setPromptSaved(prev => ({ ...prev, [brand]: true }));
+    setTimeout(() => setPromptSaved(prev => ({ ...prev, [brand]: false })), 2000);
+  };
 
   useEffect(() => { loadTab(tab); }, [tab]);
 
@@ -107,6 +136,7 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
     { id: 'users', label: 'Usuarios', icon: <Users className="w-4 h-4" /> },
     { id: 'licenses', label: 'Licencias', icon: <Key className="w-4 h-4" /> },
     { id: 'sessions', label: 'Sesiones', icon: <Globe className="w-4 h-4" /> },
+    { id: 'prompts', label: 'Prompts', icon: <FileText className="w-4 h-4" /> },
   ];
 
   return (
@@ -360,6 +390,49 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
                 <p className="text-center text-zinc-600 py-8 text-sm">Sin licencias todavía</p>
               )}
             </div>
+          </div>
+        )}
+
+        {/* Prompts */}
+        {tab === 'prompts' && (
+          <div className="space-y-4">
+            <p className="text-sm text-zinc-400">
+              Escribe el prompt personalizado para cada marca. Se guardará en la base de datos y todos los usuarios lo recibirán automáticamente al abrir el Editor de Lengüeta.
+            </p>
+            {BRANDS.map(brand => (
+              <motion.div
+                key={brand}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-semibold text-sm flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-violet-400" />
+                    {brand}
+                  </h3>
+                  <button
+                    onClick={() => savePrompt(brand)}
+                    disabled={promptSaving[brand]}
+                    className="flex items-center gap-2 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white px-4 py-1.5 rounded-xl text-sm font-medium transition"
+                  >
+                    {promptSaved[brand]
+                      ? <><Check className="w-4 h-4 text-green-300" /> Guardado</>
+                      : promptSaving[brand]
+                        ? <><RefreshCcw className="w-4 h-4 animate-spin" /> Guardando…</>
+                        : <><Save className="w-4 h-4" /> Guardar</>
+                    }
+                  </button>
+                </div>
+                <textarea
+                  value={prompts[brand]}
+                  onChange={e => setPrompts(prev => ({ ...prev, [brand]: e.target.value }))}
+                  rows={8}
+                  placeholder={`Escribe aquí el prompt para ${brand}…`}
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-violet-500 resize-y font-mono leading-relaxed"
+                />
+              </motion.div>
+            ))}
           </div>
         )}
 

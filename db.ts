@@ -107,6 +107,12 @@ export async function initDB() {
       banned BOOLEAN DEFAULT FALSE,
       updated_at TIMESTAMP DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS tongue_prompts (
+      brand VARCHAR(30) PRIMARY KEY,
+      prompt TEXT NOT NULL DEFAULT '',
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
   `);
 
   // Create first admin from env if no admins exist
