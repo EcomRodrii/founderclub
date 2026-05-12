@@ -1697,49 +1697,77 @@ async function startServer() {
       }
     }
 
-    // Testear cada proxy llamando al echo de ipify a través de él
+    // Deduplicar por URL para detectar si es un unblocker (todas iguales)
+    const uniqueUrls = [...new Set(pool2.map(e => e.url))];
+    const isUnblocker = uniqueUrls.length === 1 && pool2.length > 1;
+
+    // Si todas las entradas son la misma URL (ej: IPRoyal Unblocker),
+    // testear con N=max(pool.length, 3) workers en paralelo usando agentes FRESCOS
+    // (sin caché) para forzar conexiones TCP separadas → IPs distintas reales.
+    const slotsToTest = isUnblocker
+      ? Math.max(pool2.length, 3)
+      : pool2.length;
+
     const tests = await Promise.allSettled(
-      pool2.map(async (entry, i) => {
-        const t0 = Date.now();
-        try {
-          const r = await axios.get("https://api.ipify.org?format=json", {
-            httpsAgent: getProxyAgent(entry.url),
-            proxy:      false as const,
-            timeout:    10_000,
-          });
-          const ip = r.data?.ip ?? "unknown";
+      Array.from({ length: slotsToTest }, (_, i) => {
+        const entry = pool2[i % pool2.length];
+        return (async () => {
+          const t0 = Date.now();
+          // Agente fresco por slot — NO usar caché para evitar reutilizar TCP
+          const freshAgent = new HttpsProxyAgent(entry.url, { keepAlive: false });
+          try {
+            const r = await axios.get("https://api.ipify.org?format=json", {
+              httpsAgent: freshAgent,
+              proxy:      false as const,
+              timeout:    10_000,
+            });
+            const ip = r.data?.ip ?? "unknown";
 
-          // Actualizar proxy_health en BD
-          await pool.query(
-            `INSERT INTO proxy_health (proxy_label, last_status, success_count, last_used, updated_at)
-             VALUES ($1,'ok',1,NOW(),NOW())
-             ON CONFLICT (proxy_label) DO UPDATE
-             SET success_count = proxy_health.success_count + 1,
-                 last_status = 'ok', last_used = NOW(), updated_at = NOW(), banned = FALSE`,
-            [entry.label]
-          ).catch(() => {});
+            // Actualizar proxy_health en BD
+            await pool.query(
+              `INSERT INTO proxy_health (proxy_label, last_status, success_count, last_used, updated_at)
+               VALUES ($1,'ok',1,NOW(),NOW())
+               ON CONFLICT (proxy_label) DO UPDATE
+               SET success_count = proxy_health.success_count + 1,
+                   last_status = 'ok', last_used = NOW(), updated_at = NOW(), banned = FALSE`,
+              [entry.label]
+            ).catch(() => {});
 
-          return { index: i, proxy: entry.label, ip, latencyMs: Date.now() - t0, ok: true };
-        } catch (e: any) {
-          await pool.query(
-            `INSERT INTO proxy_health (proxy_label, last_status, fail_count, last_used, updated_at)
-             VALUES ($1,'fail',1,NOW(),NOW())
-             ON CONFLICT (proxy_label) DO UPDATE
-             SET fail_count = proxy_health.fail_count + 1,
-                 last_status = 'fail', last_used = NOW(), updated_at = NOW()`,
-            [entry.label]
-          ).catch(() => {});
-          return { index: i, proxy: entry.label, ip: null, latencyMs: Date.now() - t0, ok: false, error: e.message };
-        }
+            return { index: i, proxy: entry.label, ip, latencyMs: Date.now() - t0, ok: true };
+          } catch (e: any) {
+            await pool.query(
+              `INSERT INTO proxy_health (proxy_label, last_status, fail_count, last_used, updated_at)
+               VALUES ($1,'fail',1,NOW(),NOW())
+               ON CONFLICT (proxy_label) DO UPDATE
+               SET fail_count = proxy_health.fail_count + 1,
+                   last_status = 'fail', last_used = NOW(), updated_at = NOW()`,
+              [entry.label]
+            ).catch(() => {});
+            return { index: i, proxy: entry.label, ip: null, latencyMs: Date.now() - t0, ok: false, error: e.message };
+          }
+        })();
       })
     );
 
-    const results = tests.map(t => t.status === "fulfilled" ? t.value : { ok: false, error: String((t as any).reason) });
-    const ips     = results.filter(r => r.ok).map(r => r.ip);
-    const unique  = new Set(ips).size;
-    const leak    = unique < ips.length; // si hay IPs repetidas, posible leak
+    const results  = tests.map(t => t.status === "fulfilled" ? t.value : { ok: false, error: String((t as any).reason) });
+    const ips      = results.filter(r => r.ok).map(r => (r as any).ip as string);
+    const unique   = new Set(ips).size;
 
-    return res.json({ ok: true, proxies: results, uniqueIps: unique, totalOk: ips.length, ipLeakWarning: leak });
+    // Para unblockers (misma URL), leak REAL = todas las IPs son idénticas en paralelo
+    // Para proxies distintos, leak = IPs repetidas entre entradas diferentes
+    const ipLeakWarning = isUnblocker
+      ? (ips.length > 1 && unique === 1)   // unblocker no está rotando
+      : (unique < ips.length);              // proxies distintos con IP repetida
+
+    return res.json({
+      ok: true,
+      mode: isUnblocker ? "rotating-unblocker" : "dedicated-proxies",
+      proxies: results,
+      uniqueIps: unique,
+      totalOk: ips.length,
+      ipLeakWarning,
+      ...(isUnblocker && { note: "IPRoyal Unblocker: cada slot fuerza conexión TCP nueva → IPs distintas esperadas" }),
+    });
   });
 
   // ── WAR LOG — historial de disparos ─────────────────────────────────────────
