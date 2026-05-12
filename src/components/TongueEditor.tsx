@@ -295,26 +295,42 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
         },
       } : null;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.0-flash-exp-image-generation',
-        contents: {
-          parts: [
-            ...(imagePart ? [imagePart] : []),
-            { text: customPrompt },
-          ],
-        },
-        config: { responseModalities: ['Text', 'Image'] },
-      });
+      const MODELS = [
+        'gemini-2.0-flash-preview-image-generation',
+        'gemini-2.0-flash-exp-image-generation',
+        'imagen-3.0-generate-002',
+      ];
 
-      for (const part of response.candidates?.[0]?.content?.parts || []) {
-        if ((part as any).inlineData) {
-          const d = (part as any).inlineData;
-          setGeneratedImage(`data:${d.mimeType};base64,${d.data}`);
-          setStatus('¡Lengüeta generada con éxito!');
-          return;
+      let generated = false;
+      for (const model of MODELS) {
+        try {
+          const response = await ai.models.generateContent({
+            model,
+            contents: {
+              parts: [
+                ...(imagePart ? [imagePart] : []),
+                { text: customPrompt },
+              ],
+            },
+            config: { responseModalities: ['TEXT', 'IMAGE'] },
+          });
+
+          for (const part of response.candidates?.[0]?.content?.parts || []) {
+            if ((part as any).inlineData) {
+              const d = (part as any).inlineData;
+              setGeneratedImage(`data:${d.mimeType};base64,${d.data}`);
+              setStatus('¡Lengüeta generada con éxito!');
+              generated = true;
+              break;
+            }
+          }
+          if (generated) break;
+        } catch (modelErr: any) {
+          console.warn(`Model ${model} failed:`, modelErr.message);
+          continue;
         }
       }
-      setError('El modelo no devolvió imagen. Intenta de nuevo.');
+      if (!generated) setError('El modelo no devolvió imagen. Intenta de nuevo.');
     } catch (err: any) {
       const msg = err.message || String(err);
       if (msg.toLowerCase().includes('quota') || msg.includes('429')) {
