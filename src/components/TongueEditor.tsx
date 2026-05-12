@@ -311,6 +311,14 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
         ))}
       </div>
 
+      {error && (
+        <div className="px-5 py-3 bg-red-500/15 border border-red-500/40 rounded-2xl flex items-start gap-3">
+          <span className="text-red-400 font-bold text-sm mt-0.5">✕</span>
+          <p className="text-sm text-red-300 font-medium">{error}</p>
+          <button onClick={() => setError(null)} className="ml-auto text-red-400/60 hover:text-red-300 text-xs">✕</button>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         {/* Left Side: Upload & OCR */}
         <div className="space-y-6">
@@ -602,10 +610,11 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
               )}
             </AnimatePresence>
 
-            {loading && generatedImage && (
-              <div className="absolute inset-0 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center gap-4 z-10">
+            {loading && (
+              <div className="absolute inset-0 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center gap-4 z-10 rounded-3xl">
                 <RefreshCcw className="w-10 h-10 text-emerald-500 animate-spin" />
                 <p className="text-xs font-bold text-white uppercase tracking-widest">{status}</p>
+                <p className="text-[10px] text-white/40">Puede tardar 20-40 segundos...</p>
               </div>
             )}
           </div>
