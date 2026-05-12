@@ -666,30 +666,35 @@ async function scoutItem(itemUrl: string, cookiesStr: string): Promise<ScoutResu
 
   if (!itemId) throw new Error(`scout_no_item_id: ${itemUrl}`);
 
-  const proxy = getProxyConfig();
-  const base  = `https://www.vinted.${domain}`;
-
+  const base = `https://www.vinted.${domain}`;
   const { agent: scoutAgent, label: scoutProxy } = pickProxy(0);
-  console.log(`[SNIPER][scout] proxy=${scoutProxy}`);
+  const { agent: htmlAgent } = pickProxy(1);
 
-  // Intento 1 — API mobile
+  // Web unblockers residenciales necesitan más tiempo para asignar IP y enrutar
+  const PROXY_TIMEOUT = 30_000;
+
+  console.log(`[SNIPER][scout] item=${itemId} domain=${domain} proxy=${scoutProxy}`);
+
+  // Intento 1 — API mobile (más rápida, menos bloqueada)
   try {
+    console.log(`[SNIPER][scout] → API mobile ${base}/api/v2/items/${itemId}`);
     const r = await axios.get(`${base}/api/v2/items/${itemId}`, {
       headers: buildSniperHeaders(cookiesStr, domain),
       httpsAgent: scoutAgent, proxy: false as const,
-      validateStatus: () => true, timeout: 10_000,
+      validateStatus: () => true, timeout: PROXY_TIMEOUT,
     });
+    console.log(`[SNIPER][scout] API status=${r.status}`);
     if (r.status === 200 && r.data?.item?.user_id) {
       return { itemId, sellerId: String(r.data.item.user_id), title: r.data.item.title ?? "", domain };
     }
-    console.log(`[SNIPER][scout] API ${r.status} — intentando HTML`);
+    console.log(`[SNIPER][scout] API no seller (status=${r.status}) — intentando HTML`);
   } catch (e: any) {
-    console.log(`[SNIPER][scout] API err: ${e.message}`);
+    console.log(`[SNIPER][scout] API err: ${e.message} — intentando HTML`);
   }
 
-  // Intento 2 — HTML page
-  const { agent: htmlAgent } = pickProxy(1);
+  // Intento 2 — HTML scraping (más lento pero funciona sin auth)
   try {
+    console.log(`[SNIPER][scout] → HTML ${base}/items/${itemId}`);
     const r = await axios.get(`${base}/items/${itemId}`, {
       headers: {
         "User-Agent":      "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/21A329",
@@ -699,11 +704,11 @@ async function scoutItem(itemUrl: string, cookiesStr: string): Promise<ScoutResu
         "Via":             "",
       },
       httpsAgent: htmlAgent, proxy: false as const,
-      validateStatus: () => true, timeout: 15_000,
+      validateStatus: () => true, timeout: PROXY_TIMEOUT,
     });
+    console.log(`[SNIPER][scout] HTML status=${r.status}`);
     if (r.status === 200) {
       const html = String(r.data);
-      // Buscar seller_id en JSON embebido
       const patterns = [
         /"user_id"\s*:\s*(\d+)/,
         /"seller_id"\s*:\s*(\d+)/,
@@ -713,13 +718,17 @@ async function scoutItem(itemUrl: string, cookiesStr: string): Promise<ScoutResu
       for (const p of patterns) {
         const m = html.match(p);
         if (m?.[1]) {
+          console.log(`[SNIPER][scout] HTML seller=${m[1]} via pattern ${p}`);
           return { itemId, sellerId: m[1], title: "", domain };
         }
       }
+      throw new Error(`html_200_no_seller_id`);
     }
-    throw new Error(`scout_html_${r.status}_no_seller`);
+    throw new Error(`html_status_${r.status}`);
   } catch (e: any) {
-    throw new Error(`scout_failed: ${e.message}`);
+    // Evitar double-wrap si el error ya viene de este try
+    const msg = e.message.startsWith("scout_failed:") ? e.message : `scout_failed: ${e.message}`;
+    throw new Error(msg);
   }
 }
 
@@ -1648,7 +1657,8 @@ async function startServer() {
       scout = await scoutItem(url, cookiesStr);
       console.log(`[SNIPER] scout OK item=${scout.itemId} seller=${scout.sellerId}`);
     } catch (e: any) {
-      return res.status(422).json({ error: `scout_failed: ${e.message}` });
+      // scoutItem ya añade el prefijo scout_failed — no duplicar
+      return res.status(422).json({ error: e.message });
     }
 
     // ── 2. Gun: disparar N workers en paralelo con offset de 10ms entre cada uno ──
