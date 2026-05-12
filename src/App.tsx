@@ -362,6 +362,8 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
   const [extraCookies, setExtraCookies] = useState('');      // multi-account cookies
   const [reportResult, setReportResult] = useState<{ hits: number; total: number; accounts: number; byReason: Record<number, number> } | null>(null);
   const [nukeLoading, setNukeLoading] = useState(false);
+  const [likeOfferLoading, setLikeOfferLoading] = useState(false);
+  const [likeOfferResult, setLikeOfferResult] = useState<{ favourites: number; offers: number; accounts: number; offerPrice: string | null } | null>(null);
 
   // Bazooka queue
   interface BazookaJob { id: number; url: string; title: string | null; item_id: string; status: string; note: string | null; error_message: string | null; created_at: string; }
@@ -579,6 +581,40 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
     } finally {
       setLoading(false);
     }
+  };
+
+  const likeOfferItem = async () => {
+    if (!cookie) { setError('⚠️ Cookie requerida.'); return; }
+    let targetId = externalId;
+    if (!targetId && externalUrl) {
+      try {
+        const r = await fetch(`/api/vinted/resolve-product?url=${encodeURIComponent(externalUrl)}`);
+        const d = await r.json();
+        if (d.itemId) { targetId = d.itemId; setExternalId(d.itemId); setExternalTitle(d.title || ''); }
+        else { setError('No se pudo detectar el ID del producto.'); return; }
+      } catch { setError('Error resolviendo URL.'); return; }
+    }
+    if (!targetId) { setError('⚠️ URL requerida.'); return; }
+    const allCookies = [cookie, ...extraCookies.split('\n').map(c => c.trim()).filter(c => c.length > 10)].join('\n');
+    setLikeOfferLoading(true);
+    setLikeOfferResult(null);
+    setStatus('❤️ Enviando favoritos + ofertas...');
+    try {
+      const r = await apiFetch('/api/vinted/like-offer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cookie: allCookies, itemId: targetId, domain })
+      });
+      const d = await r.json();
+      if (d.success) {
+        setLikeOfferResult({ favourites: d.favourites, offers: d.offers, accounts: d.accounts, offerPrice: d.offerPrice });
+        setStatus(`✅ ${d.message}`);
+        setTimeout(checkPublicStatus, 5000);
+      } else {
+        setError(d.error || 'Error enviando like+offer');
+      }
+    } catch { setError('Error de red.'); }
+    finally { setLikeOfferLoading(false); }
   };
 
   const spamCheckout = async () => {
@@ -1249,6 +1285,32 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                           >
                            <span>{loadingReserve ? 'ENCOLANDO...' : 'Reserva clásica (Goolazo)'}</span>
                           </button>
+
+                          {/* ── Like + Offer — método Blackstock ── */}
+                          <button
+                           onClick={likeOfferItem}
+                           disabled={likeOfferLoading}
+                           className="w-full bg-gradient-to-r from-pink-700 to-rose-500 text-white font-bold py-4 rounded-2xl hover:from-pink-600 hover:to-rose-400 transition-all shadow-[0_0_25px_rgba(244,63,94,0.25)] flex flex-col items-center justify-center gap-0.5 border border-rose-500/40 disabled:opacity-50"
+                          >
+                           <div className="flex items-center gap-2">
+                             <span className="text-base">{likeOfferLoading ? '⏳ ENVIANDO...' : '❤️ LIKE + OFFER'}</span>
+                           </div>
+                           <span className="text-[10px] opacity-70 font-normal uppercase tracking-wider">
+                             Favorito + Oferta · Método Blackstock
+                           </span>
+                          </button>
+
+                          {/* Resultado like+offer */}
+                          {likeOfferResult && (
+                            <div className="rounded-xl border border-rose-500/20 bg-rose-500/5 p-3 text-[11px] font-mono space-y-1">
+                              <div className="font-bold text-rose-400 text-xs">
+                                ❤️ {likeOfferResult.favourites} favoritos · 💬 {likeOfferResult.offers} ofertas · {likeOfferResult.accounts} cuenta(s)
+                              </div>
+                              {likeOfferResult.offerPrice && (
+                                <div className="text-white/40">Precio oferta: {likeOfferResult.offerPrice}€ (70% del precio)</div>
+                              )}
+                            </div>
+                          )}
 
                           {/* ── NUKE v2 — multi-reason multi-account ── */}
                           <button

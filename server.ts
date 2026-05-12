@@ -718,6 +718,94 @@ async function startServer() {
     });
   });
 
+  // ── Vinted Like+Offer — replicates Blackstock's worker action ──────────────
+  // Blackstock workers: open tab → click heart → open offer dialog → submit offer
+  // We replicate the underlying API calls: favourite + offer at minimum price
+  app.post("/api/vinted/like-offer", requireLicense as any, async (req: AuthRequest, res) => {
+    const { cookie, itemId, domain = "es" } = req.body;
+    if (!cookie || !itemId) return res.status(400).json({ error: "Cookie and itemId required" });
+
+    const uuid = () => "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
+      const r = Math.random() * 16 | 0, v = c === "x" ? r : (r & 0x3 | 0x8); return v.toString(16);
+    });
+
+    const rawCookie = cookie as string;
+    const allCookies: string[] = rawCookie.includes("\n")
+      ? rawCookie.split("\n").map(c => c.trim()).filter(c => c.length > 10)
+      : [rawCookie.trim()];
+
+    const id = parseInt(itemId.toString());
+
+    // Step 1: fetch item details to get price
+    let itemPrice: number | null = null;
+    let currency = "EUR";
+    let sellerId: number | null = null;
+    try {
+      const { headers } = getVintedHeaders(allCookies[0], domain);
+      const itemRes = await axios.get(
+        `https://www.vinted.${domain}/api/v2/items/${id}`,
+        { headers, timeout: 8000, validateStatus: () => true }
+      );
+      if (itemRes.status === 200 && itemRes.data?.item) {
+        const item = itemRes.data.item;
+        itemPrice = parseFloat(item.price_numeric || item.price || "0");
+        currency = item.currency || "EUR";
+        sellerId = item.user?.id || null;
+      }
+    } catch {}
+
+    // Minimum offer = 70% of price (Vinted minimum), rounded down to .00
+    const offerPrice = itemPrice ? Math.max(1, Math.floor(itemPrice * 0.70 * 100) / 100).toFixed(2) : null;
+
+    const results: { cookie_idx: number; favourite: boolean; offer: boolean; error?: string }[] = [];
+
+    await Promise.all(allCookies.map(async (ck, idx) => {
+      const result = { cookie_idx: idx, favourite: false, offer: false };
+      try {
+        const { headers } = getVintedHeaders(ck, domain);
+        headers["Referer"] = `https://www.vinted.${domain}/items/${id}`;
+        headers["Origin"] = `https://www.vinted.${domain}`;
+        headers["X-Vinted-Idempotency-Key"] = uuid();
+
+        // 1. Add to favourites — exact same call as clicking ❤️ button
+        const favRes = await axios.post(
+          `https://www.vinted.${domain}/api/v2/items/${id}/favourite`,
+          {},
+          { headers, timeout: 8000, validateStatus: () => true }
+        );
+        result.favourite = favRes.status < 300;
+
+        // 2. Send offer at minimum price (buyer must differ from seller)
+        if (offerPrice && sellerId) {
+          await new Promise(r => setTimeout(r, 600 + Math.random() * 400));
+          headers["X-Vinted-Idempotency-Key"] = uuid();
+          const offerRes = await axios.post(
+            `https://www.vinted.${domain}/api/v2/offers`,
+            { offer: { item_id: id, price: offerPrice, currency_code: currency } },
+            { headers, timeout: 8000, validateStatus: () => true }
+          );
+          result.offer = offerRes.status < 300;
+        }
+      } catch (e: any) {
+        (result as any).error = e.message;
+      }
+      results.push(result);
+    }));
+
+    const favHits = results.filter(r => r.favourite).length;
+    const offerHits = results.filter(r => r.offer).length;
+
+    res.json({
+      success: favHits > 0,
+      favourites: favHits,
+      offers: offerHits,
+      accounts: allCookies.length,
+      itemPrice,
+      offerPrice,
+      message: `❤️ ${favHits} favoritos + 💬 ${offerHits} ofertas enviadas desde ${allCookies.length} cuenta(s).`,
+    });
+  });
+
   // ── Profits / Sales endpoints ────────────────────────────────────────────────
 
   // Accounts
