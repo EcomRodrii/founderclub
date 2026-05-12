@@ -77,18 +77,24 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
    - Número de Serie (N4VDCSSVG6CSMGH): Cámbialo por una combinación aleatoria de 15 caracteres (letras mayúsculas y números).
 3. Mantén la estructura: Respeta las líneas verticales divisorias (|) en la tabla de tallas y la tipografía comprimida y limpia característica de Asics.`);
 
-  const [customPromptOnitsuka, setCustomPromptOnitsuka] = useState<string>(`PROMPT ONITSUKA TIGER - PROTOCOLO DE PRECISION:
-1. Integridad del SKU: PROHIBIDO alterar el codigo de modelo. Debe aparecer en la parte superior, centrado.
-2. Bloque de Tallas: Mantener exactamente la cuadricula de celdas separadas por lineas verticales finas (|). No redondear ni cambiar formatos.
-3. Reglas de Variacion Inferior:
-   - Codigo de Lote: Debe empezar por F seguido de exactamente 6 digitos aleatorios (ej. F602841).
-   - Identificador de Region: Mantener las siglas PI a la derecha del codigo de lote.
-   - Serial de Unidad: Generar un codigo alfanumerico de 15 caracteres en mayusculas.
-4. Especificaciones Tecnicas:
-   - Tipografia: Sans-Serif ultra-condensada (Helvetica Compressed). Transferencia termica.
-   - Sin logo del tigre ni palabra "Onitsuka". Etiqueta estrictamente informativa.
-   - Fondo blanco mate con textura sintetica, bordes termosellados.
-   - "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
+  const [customPromptOnitsuka, setCustomPromptOnitsuka] = useState<string>(`PROMPT ONITSUKA TIGER - PROTOCOLO DE PRECISIÓN:
+1. Integridad del SKU (Modelo):
+PROHIBIDO alterar el código THL7C2. Debe aparecer en la parte superior, centrado y con un ligero espaciado entre caracteres.
+
+2. Bloque de Tallas (Matriz de Datos):
+Mantener exactamente la cuadrícula de 2x3 celdas separadas por líneas verticales finas (|).
+Valores Obligatorios: CM 24.0, EURO 38, US 5½, UK 4.5, BR 36, CN 240(2.5). No redondear ni cambiar formatos (ej. mantener el "½" en formato pequeño).
+
+3. Reglas de Variación Inferior (Identidad Única):
+Código de Lote: Debe empezar por F seguido de exactamente 6 dígitos aleatorios (ej. F602841).
+Identificador de Región: Mantener las siglas PI a la derecha del código de lote.
+Serial de Unidad: Generar un código alfanumérico de 15 caracteres en mayúsculas. Regla estricta: Debe ser diferente para la zapatilla izquierda y la derecha para simular un par auténtico.
+
+4. Especificaciones Técnicas de Diseño:
+Tipografía: Usar una fuente Sans-Serif ultra-condensada (tipo Helvetica Compressed o similar), con impresión de transferencia térmica (puntos de tinta ligeramente visibles bajo aumento).
+Ausencia de Branding: No incluir el logo del tigre ni la palabra "Onitsuka". La etiqueta debe ser estrictamente informativa.
+Soporte: Fondo blanco mate con textura de tejido sintético, bordes termosellados y costura perimetral que la une a la lengüeta.
+Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
