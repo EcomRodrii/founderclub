@@ -1956,18 +1956,22 @@ async function startServer() {
         const jsonMatch = text.match(/\{[\s\S]*\}/);
         if (!jsonMatch) return res.status(422).json({ error: "No se pudo extraer JSON", raw: text });
         try {
-          // Reemplazar control characters literales dentro de strings JSON
-          const clean = jsonMatch[0]
-            .replace(/\r\n/g, '\\n')
-            .replace(/\n/g, '\\n')
-            .replace(/\r/g, '\\r')
-            .replace(/\t/g, '\\t')
-            // Corregir doble-escape accidental
-            .replace(/\\\\n/g, '\\n');
+          const raw = jsonMatch[0];
+          console.log("[TONGUE] raw Gemini JSON:", raw.slice(0, 300));
+
+          const clean = raw
+            // 1. Trailing commas antes de } o ]
+            .replace(/,\s*([}\]])/g, '$1')
+            // 2. Control chars literales dentro de strings
+            .replace(/("(?:[^"\\]|\\.)*")|[\x00-\x1F]/g, (m, str) =>
+              str ? str : ({ '\n':'\\n','\r':'\\r','\t':'\\t' } as Record<string,string>)[m] ?? '')
+            // 3. Single quotes → double quotes (si Gemini usa comillas simples)
+            .replace(/'/g, '"');
+
           return res.json(JSON.parse(clean));
-        } catch {
-          // Último recurso: extraer campos manualmente del texto raw
-          return res.status(422).json({ error: "JSON malformado de Gemini", raw: text.slice(0, 500) });
+        } catch (parseErr: any) {
+          console.error("[TONGUE] JSON parse failed:", parseErr.message, "raw:", jsonMatch[0].slice(0, 300));
+          return res.status(422).json({ error: "JSON malformado de Gemini", raw: jsonMatch[0].slice(0, 500) });
         }
       }
       return res.status(500).json({ error: "Ningun modelo disponible: " + lastError });
