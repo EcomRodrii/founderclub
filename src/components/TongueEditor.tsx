@@ -110,6 +110,32 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
     reader.readAsDataURL(file);
   };
 
+  const repairJson = (raw: string): string => {
+    // Eliminar bloques markdown
+    let s = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+    // Extraer el objeto JSON
+    const start = s.indexOf('{');
+    if (start === -1) return s;
+    s = s.slice(start);
+    // Cerrar strings sin terminar: si hay un número impar de " no escapadas, añadir "
+    const quoteCount = (s.match(/(?<!\\)"/g) || []).length;
+    if (quoteCount % 2 !== 0) s += '"';
+    // Cerrar arrays/objetos abiertos
+    let opens = 0, closes = 0, arrOpens = 0, arrCloses = 0;
+    for (const c of s) {
+      if (c === '{') opens++;
+      if (c === '}') closes++;
+      if (c === '[') arrOpens++;
+      if (c === ']') arrCloses++;
+    }
+    // Cerrar la última propiedad con coma suelta si es necesario
+    s = s.replace(/,\s*$/, '');
+    s = s.replace(/,\s*\}/, '}');
+    while (arrCloses < arrOpens) { s += ']'; arrCloses++; }
+    while (closes < opens) { s += '}'; closes++; }
+    return s;
+  };
+
   const runOCR = async (base64Image: string) => {
     setLoading(true);
     setStatus('Analizando lengüeta con OCR...');
@@ -118,26 +144,13 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
       const prompt = `Analiza esta imagen de una lengüeta de zapatilla ${activeBrand}.
+Extrae los datos y devuelve SOLO un JSON compacto sin saltos de línea extra, sin markdown.
 
-      1. Extrae los datos técnicos:
-      - model (ID de modelo, ej: JQ5874 o MR530SG)
-      - sku (lo mismo que model)
-      - reference (referencia de 12 dígitos en NB, o serie en Adidas ej: #123456789)
-      - reference2 (7 dígitos en NB)
-      - brandSerial (ej: LXCK1298 CLX o FGwKZ39<82143)
-      - date (ej: 05/22)
-      - lvl (ej: EVN 791001)
-      - sizes (un objeto con us, uk, fr, jp)
+Campos obligatorios (usa "?" si no se ve):
+{"model":"...","sku":"...","reference":"...","reference2":"...","brandSerial":"...","date":"...","lvl":"...","sizes":{"us":"...","uk":"...","fr":"...","jp":"..."},"modelName":"...","color":"...","listingTitle":"[modelName] - Pointure [fr] [color] / [model]","listingDescription":"[frase natural en francés]\\n\\nCouleur : [color]\\nModèle : [model]\\nTaille : [fr]"}
 
-      2. BÚSQUEDA EN INTERNET: Utiliza Google Search para encontrar el nombre comercial exacto (ej: "Adidas Samba Leopard") usando la marca y el código del modelo detectado.
-
-      3. Genera el JSON con estos campos adicionales:
-      - modelName: Nombre comercial real (ej: Adidas Samba Leopard)
-      - color: Color dominante en francés (ej: blanc et vert)
-      - listingTitle: Título para Vinted EXACTAMENTE así: "[modelName] - Pointure [FR] [color] / [model]"
-      - listingDescription: Descripción en francés EXACTAMENTE con este formato: "[Frase aleatoria natural]\n\nCouleur : [color]\nModèle : [model]\nTaille : [fr]"
-
-      Si no encuentras algún dato, pon "Desconocido". Solo devuelve el JSON puro.`;
+Busca en Google el nombre comercial exacto del modelo para rellenar modelName.
+IMPORTANTE: Devuelve SOLO el JSON, sin texto adicional.`;
 
       const imagePart = {
         inlineData: {
@@ -149,17 +162,32 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
       const result = await ai.models.generateContent({
         model: "gemini-2.5-flash",
         contents: { parts: [imagePart, { text: prompt }] },
-        config: { tools: [{ googleSearch: {} }] },
+        config: {
+          tools: [{ googleSearch: {} }],
+          maxOutputTokens: 1024,
+        },
       });
 
       const text = result.text || '';
       const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
+      if (!jsonMatch) {
+        setError('No se encontró JSON en la respuesta del OCR.');
+        return;
+      }
+      try {
         const data = JSON.parse(jsonMatch[0]);
         setDetections(data);
         setStatus('Datos extraídos correctamente.');
-      } else {
-        setError('No se pudo procesar la respuesta del OCR.');
+      } catch {
+        // Intentar reparar el JSON truncado
+        try {
+          const repaired = repairJson(jsonMatch[0]);
+          const data = JSON.parse(repaired);
+          setDetections(data);
+          setStatus('Datos extraídos (JSON reparado).');
+        } catch (repairErr: any) {
+          setError('JSON malformado en la respuesta. Vuelve a intentarlo.');
+        }
       }
     } catch (err: any) {
       console.error('OCR Error:', err);
