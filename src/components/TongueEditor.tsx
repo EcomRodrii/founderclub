@@ -295,31 +295,35 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
         },
       } : null;
 
-      // --- Intento 1: gemini-2.0-flash con generación de imágenes ---
       const FLASH_MODELS = [
         'gemini-2.0-flash-exp-image-generation',
         'gemini-2.0-flash-exp',
       ];
 
       let generated = false;
+      const attemptErrors: string[] = [];
 
       for (const model of FLASH_MODELS) {
         if (generated) break;
         try {
-          console.log(`[TongueEditor] Trying generateContent model: ${model}`);
           const response = await ai.models.generateContent({
             model,
-            contents: {
-              parts: [
-                ...(imagePart ? [imagePart] : []),
-                { text: customPrompt },
-              ],
-            },
+            contents: [
+              {
+                role: 'user',
+                parts: [
+                  ...(imagePart ? [imagePart] : []),
+                  { text: customPrompt },
+                ],
+              },
+            ],
             config: { responseModalities: ['TEXT', 'IMAGE'] },
           });
 
           const parts = response.candidates?.[0]?.content?.parts || [];
-          console.log(`[TongueEditor] ${model} parts count:`, parts.length, parts.map((p: any) => Object.keys(p)));
+          const partKeys = parts.map((p: any) => Object.keys(p).join('+'));
+          attemptErrors.push(`${model}: ${parts.length} parts [${partKeys.join(', ')}]`);
+
           for (const part of parts) {
             if ((part as any).inlineData) {
               const d = (part as any).inlineData;
@@ -330,32 +334,32 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
             }
           }
         } catch (modelErr: any) {
-          console.warn(`[TongueEditor] ${model} failed:`, modelErr.message);
+          attemptErrors.push(`${model}: ERROR ${modelErr.message}`);
         }
       }
 
-      // --- Intento 2: imagen-3.0 vía generateImages() ---
+      // imagen-3 vía generateImages()
       if (!generated) {
         try {
-          console.log('[TongueEditor] Trying imagen-3.0-generate-002 via generateImages...');
           const imgResponse = await (ai.models as any).generateImages({
             model: 'imagen-3.0-generate-002',
             prompt: customPrompt,
-            config: { numberOfImages: 1, outputMimeType: 'image/jpeg' },
+            config: { numberOfImages: 1 },
           });
           const imageBytes = imgResponse?.generatedImages?.[0]?.image?.imageBytes;
-          console.log('[TongueEditor] imagen-3 imageBytes:', imageBytes ? 'ok' : 'empty');
           if (imageBytes) {
             setGeneratedImage(`data:image/jpeg;base64,${imageBytes}`);
             setStatus('¡Lengüeta generada con éxito!');
             generated = true;
+          } else {
+            attemptErrors.push(`imagen-3: no imageBytes`);
           }
         } catch (imgErr: any) {
-          console.warn('[TongueEditor] imagen-3 failed:', imgErr.message);
+          attemptErrors.push(`imagen-3: ERROR ${imgErr.message}`);
         }
       }
 
-      if (!generated) setError('El modelo no devolvió imagen. Intenta de nuevo.');
+      if (!generated) setError(attemptErrors.join(' | '));
     } catch (err: any) {
       const msg = err.message || String(err);
       if (msg.toLowerCase().includes('quota') || msg.includes('429')) {
