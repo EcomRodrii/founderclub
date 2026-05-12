@@ -739,48 +739,91 @@ async function startServer() {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY no configurada en el servidor" });
 
+    // ── Prompts ultra-específicos por marca ─────────────────────────────────
+    // Framing: "photo editor" task, not "reconstruction". Much clearer instructions.
     let brandPrompt = "";
+
     if (brand === "ADIDAS") {
-      brandPrompt = `CRITICAL IDENTITY RECONSTRUCTION - ADIDAS tongue label.
-STRICTLY DO NOT CHANGE: ART NO/SKU "${detections.sku}", DATE "${detections.date}", FACTORY/LVL "${detections.lvl}", ALL SIZES (US ${detections.sizes?.us}, UK ${detections.sizes?.uk}, FR ${detections.sizes?.fr}, JP ${detections.sizes?.jp}).
-ONLY UPDATE: Brand Serial (bottom-left): "${detections.brandSerial}", Reference (#): "${detections.reference}".
-RAW LOOK: 12MP smartphone photo, natural grain. NO AI watermarks. Bold Adidas sans-serif font.
-${customPrompt || ""}`;
+      brandPrompt = `You are a precise photo editor. I am giving you a photo of an Adidas shoe tongue label.
+
+YOUR TASK: Edit ONLY these two text values in the image. Change nothing else.
+
+VALUES TO UPDATE:
+- The barcode/serial number that starts with "#" → replace with: ${detections.reference}
+- The 13-character alphanumeric code at the very bottom (after the word "adidas") → replace with: ${detections.brandSerial}
+
+DO NOT TOUCH (keep pixel-perfect identical):
+- ART NO / article number: ${detections.sku}
+- Date code: ${detections.date}
+- Factory / LVL code: ${detections.lvl}
+- All size info: US ${detections.sizes?.us} / UK ${detections.sizes?.uk} / FR ${detections.sizes?.fr} / JP ${detections.sizes?.jp}
+- All graphics, logos, fonts, colors, background texture, stitching, lighting
+
+OUTPUT: A photorealistic image of a real Adidas tongue label, taken with a smartphone camera. Same angle, same lighting, same fabric texture as the input. No watermarks. No AI artifacts.
+${customPrompt ? `\nADDITIONAL RULES:\n${customPrompt}` : ""}`;
+
     } else if (brand === "ASICS") {
-      brandPrompt = `CRITICAL IDENTITY RECONSTRUCTION - ASICS tongue label.
-STRICTLY DO NOT CHANGE: SKU "${detections.sku}", DATE "${detections.date}", ALL SIZES (US ${detections.sizes?.us}, UK ${detections.sizes?.uk}, FR ${detections.sizes?.fr}, JP ${detections.sizes?.jp}).
-ONLY UPDATE: Tracking code "${detections.reference}" (change first letter + 6 digits to random), Serial number "${detections.brandSerial}" (replace with 15 random uppercase alphanumeric chars).
-LOOK: Keep vertical dividers (|) in size table, compressed clean ASICS typography, macro photo style.
-${customPrompt || ""}`;
+      brandPrompt = `You are a precise photo editor. I am giving you a photo of an ASICS shoe tongue label.
+
+YOUR TASK: Edit ONLY these two text values in the image. Change nothing else.
+
+VALUES TO UPDATE:
+- Tracking/batch code (format: letter + 6 digits, e.g. F960925) → replace with: ${detections.reference}
+- Unit serial number (15 uppercase alphanumeric chars) → replace with: ${detections.brandSerial}
+
+DO NOT TOUCH (keep pixel-perfect identical):
+- SKU / model code: ${detections.sku}
+- Date: ${detections.date}
+- All size info: US ${detections.sizes?.us} / UK ${detections.sizes?.uk} / FR ${detections.sizes?.fr} / JP ${detections.sizes?.jp}
+- Size table vertical dividers (|), compressed ASICS typography, all other text
+
+OUTPUT: A photorealistic macro photo of a real ASICS tongue label. Same lighting, angle, fabric texture as the input. No AI artifacts.
+${customPrompt ? `\nADDITIONAL RULES:\n${customPrompt}` : ""}`;
+
     } else if (brand === "ONITSUKA") {
-      brandPrompt = `CRITICAL IDENTITY RECONSTRUCTION - ONITSUKA TIGER tongue label.
-STRICTLY DO NOT CHANGE: SKU "${detections.sku}", DATE "${detections.date}", ALL SIZES (US ${detections.sizes?.us}, UK ${detections.sizes?.uk}, FR ${detections.sizes?.fr}, CM ${detections.sizes?.jp}), country text "MADE IN INDONESIA / FABRIQUE EN INDONESIE".
-ONLY UPDATE: Batch Code "${detections.reference}" (F + 6 random digits), Unit Serial "${detections.brandSerial}" (15 random uppercase alphanumeric chars).
-LOOK: Sans-serif ultra-condensed font, white matte background, thermal transfer print style, no tiger logo, strictly informative label.
-${customPrompt || ""}`;
+      brandPrompt = `You are a precise photo editor. I am giving you a photo of an Onitsuka Tiger shoe tongue label.
+
+YOUR TASK: Edit ONLY these two text values in the image. Change nothing else.
+
+VALUES TO UPDATE:
+- Batch code (format: F + 6 digits) → replace with: ${detections.reference}
+- Unit serial (15 uppercase alphanumeric chars) → replace with: ${detections.brandSerial}
+
+DO NOT TOUCH (keep pixel-perfect identical):
+- Top SKU code: ${detections.sku}
+- Date: ${detections.date}
+- Size grid: CM ${detections.sizes?.jp} / EURO ${detections.sizes?.fr} / US ${detections.sizes?.us} / UK ${detections.sizes?.uk}
+- "MADE IN INDONESIA" and "FABRIQUE EN INDONESIE" text
+- All fonts, borders, background, stitching, thermal-print look
+
+OUTPUT: A photorealistic photo of a real Onitsuka Tiger tongue label. Same angle, lighting and white matte fabric texture as input. No AI artifacts.
+${customPrompt ? `\nADDITIONAL RULES:\n${customPrompt}` : ""}`;
+
     } else {
-      brandPrompt = `NEW BALANCE internal tongue label reconstruction.
-STYLE/MODEL: "${detections.sku}". DATE: "${detections.date}". FACTORY: "${detections.lvl}".
-SIZES: US ${detections.sizes?.us} | UK ${detections.sizes?.uk} | EU ${detections.sizes?.fr} | CM ${detections.sizes?.jp}.
-CHANGE ONLY THESE 3 CODES: SERIAL1 (12 digits): "${detections.reference}", SERIAL2 (7 digits): "${detections.reference2}", BRAND CODE: "${detections.brandSerial}".
-LOOK: macro phone photo, white satin material, heavy industrial font. No AI artifacts.
-${customPrompt || ""}`;
+      // NEW BALANCE
+      brandPrompt = `You are a precise photo editor. I am giving you a photo of a New Balance shoe tongue label.
+
+YOUR TASK: Edit ONLY these three serial codes in the image. Change nothing else.
+
+VALUES TO UPDATE:
+- 12-digit barcode number → replace with: ${detections.reference}
+- 7-digit number → replace with: ${detections.reference2}
+- Brand serial code (format: 4 letters + 4 digits + space + 3 letters) → replace with: ${detections.brandSerial}
+
+DO NOT TOUCH (keep pixel-perfect identical):
+- Model / style code: ${detections.sku}
+- Date: ${detections.date}
+- Factory code: ${detections.lvl}
+- All size info: US ${detections.sizes?.us} / UK ${detections.sizes?.uk} / EU ${detections.sizes?.fr} / CM ${detections.sizes?.jp}
+- White satin fabric texture, all fonts, stitching, logo, lighting, angle
+
+OUTPUT: A photorealistic macro photo of a real New Balance tongue label taken with a smartphone. Same lighting and fabric texture as input. No watermarks, no AI artifacts.
+${customPrompt ? `\nADDITIONAL RULES:\n${customPrompt}` : ""}`;
     }
 
-    try {
-      const parts: any[] = [{ text: brandPrompt }];
-      if (imageBase64) {
-        const base64Data = imageBase64.includes(",") ? imageBase64.split(",")[1] : imageBase64;
-        parts.unshift({ inlineData: { mimeType: "image/jpeg", data: base64Data } });
-      }
-
-      const IMG_MODELS = [
-        "gemini-2.5-flash-image",
-        "gemini-2.0-flash-exp-image-generation",
-        "gemini-2.0-flash-preview-image-generation"
-      ];
-      let lastErr = "";
-      for (const model of IMG_MODELS) {
+    // ── Helper: one attempt at one model ────────────────────────────────────
+    const tryGenerate = async (model: string, parts: any[]): Promise<string | null> => {
+      try {
         const r = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
           {
@@ -790,21 +833,69 @@ ${customPrompt || ""}`;
               contents: [{ parts }],
               generationConfig: {
                 responseModalities: ["TEXT", "IMAGE"],
-                imageConfig: { aspectRatio: "1:1" }
+                // Portrait ratio — tongue labels are taller than wide
+                imageConfig: { aspectRatio: "3:4" }
               }
             })
           }
         );
         const data = await r.json();
-        if (!r.ok) { lastErr = JSON.stringify(data); console.error(`ImgModel ${model} failed:`, JSON.stringify(data)); continue; }
+        if (!r.ok) { console.error(`[tongue] ${model} HTTP error:`, JSON.stringify(data).slice(0, 200)); return null; }
         for (const part of data.candidates?.[0]?.content?.parts || []) {
-          if (part.inlineData) {
-            return res.json({ image: `data:image/png;base64,${part.inlineData.data}` });
-          }
+          if (part.inlineData?.data) return `data:image/png;base64,${part.inlineData.data}`;
+        }
+        return null;
+      } catch (e: any) {
+        console.error(`[tongue] ${model} exception:`, e.message);
+        return null;
+      }
+    };
+
+    try {
+      const base64Data = imageBase64?.includes(",") ? imageBase64.split(",")[1] : (imageBase64 || "");
+      const parts: any[] = [];
+      if (base64Data) parts.push({ inlineData: { mimeType: "image/jpeg", data: base64Data } });
+      parts.push({ text: brandPrompt });
+
+      // ── Strategy: fire 2 parallel attempts per model, use first success ──
+      const IMG_MODELS = [
+        "gemini-2.0-flash-exp-image-generation",
+        "gemini-2.0-flash-preview-image-generation",
+        "gemini-2.5-flash-image",
+      ];
+
+      // Round 1: fire first two models in parallel
+      console.log(`[tongue] Starting parallel generation for ${brand}`);
+      const round1 = await Promise.allSettled([
+        tryGenerate(IMG_MODELS[0], parts),
+        tryGenerate(IMG_MODELS[1], parts),
+      ]);
+      for (const r of round1) {
+        if (r.status === "fulfilled" && r.value) {
+          console.log(`[tongue] Round 1 success`);
+          return res.json({ image: r.value });
         }
       }
 
-      res.status(422).json({ error: "El modelo no devolvió imagen. Intenta de nuevo." });
+      // Round 2: retry with the two best models simultaneously
+      console.log(`[tongue] Round 1 failed, starting round 2`);
+      const round2 = await Promise.allSettled([
+        tryGenerate(IMG_MODELS[0], parts),
+        tryGenerate(IMG_MODELS[2], parts),
+      ]);
+      for (const r of round2) {
+        if (r.status === "fulfilled" && r.value) {
+          console.log(`[tongue] Round 2 success`);
+          return res.json({ image: r.value });
+        }
+      }
+
+      // Round 3: last resort — single attempt on most reliable model
+      console.log(`[tongue] Round 2 failed, starting round 3`);
+      const final = await tryGenerate(IMG_MODELS[0], parts);
+      if (final) return res.json({ image: final });
+
+      res.status(422).json({ error: "El modelo no devolvió imagen tras 5 intentos. Espera 30 segundos e inténtalo de nuevo." });
     } catch (err: any) {
       console.error("Tongue generate error:", err.message);
       res.status(500).json({ error: err.message });
