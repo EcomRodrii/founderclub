@@ -680,7 +680,7 @@ function extractSellerId(html: string): string | null {
   return null;
 }
 
-async function scoutItem(itemUrl: string, _cookiesStr: string): Promise<ScoutResult> {
+async function scoutItem(itemUrl: string, cookiesStr: string): Promise<ScoutResult> {
   const domainMatch = itemUrl.match(/vinted\.([a-z.]+)\//);
   const domain = domainMatch?.[1] ?? "es";
   const itemIdMatch = itemUrl.match(/\/items\/(\d+)/) ?? itemUrl.match(/\/(\d+)-/);
@@ -693,7 +693,26 @@ async function scoutItem(itemUrl: string, _cookiesStr: string): Promise<ScoutRes
 
   console.log(`[SNIPER][scout] item=${itemId} domain=${domain}`);
 
-  // Intento 1 — HTML directo sin proxy (Railway IP, sin cookies, página pública)
+  // Intento 1 — API con Bearer token (más fiable, funciona aunque HTML esté bloqueado)
+  if (cookiesStr) {
+    try {
+      console.log(`[SNIPER][scout] → API autenticada ${base}/api/v2/items/${itemId}`);
+      const r = await axios.get(`${base}/api/v2/items/${itemId}`, {
+        headers: buildSniperHeaders(cookiesStr, domain),
+        httpsAgent: keepAliveAgent, proxy: false as const,
+        validateStatus: () => true, timeout: 15_000,
+      });
+      console.log(`[SNIPER][scout] API status=${r.status}`);
+      if (r.status === 200 && r.data?.item?.user_id) {
+        console.log(`[SNIPER][scout] API seller=${r.data.item.user_id}`);
+        return { itemId, sellerId: String(r.data.item.user_id), title: r.data.item.title ?? "", domain };
+      }
+    } catch (e: any) {
+      console.log(`[SNIPER][scout] API err: ${e.message}`);
+    }
+  }
+
+  // Intento 2 — HTML directo sin proxy
   try {
     console.log(`[SNIPER][scout] → HTML directo ${base}/items/${itemId}`);
     const r = await axios.get(`${base}/items/${itemId}`, {
@@ -715,7 +734,7 @@ async function scoutItem(itemUrl: string, _cookiesStr: string): Promise<ScoutRes
     console.log(`[SNIPER][scout] HTML(directo) err: ${e.message} — probando vía proxy`);
   }
 
-  // Intento 2 — HTML vía proxy residencial (si Railway IP está bloqueada)
+  // Intento 3 — HTML vía proxy residencial (si Railway IP está bloqueada)
   try {
     console.log(`[SNIPER][scout] → HTML proxy ${base}/items/${itemId}`);
     const r = await axios.get(`${base}/items/${itemId}`, {
@@ -1919,7 +1938,11 @@ async function startServer() {
         const text = data.candidates?.[0]?.content?.parts?.find((p: any) => p.text)?.text || "";
         const jsonMatch = text.match(/\{[\s\S]*\}/);
         if (!jsonMatch) return res.status(422).json({ error: "No se pudo extraer JSON", raw: text });
-        return res.json(JSON.parse(jsonMatch[0]));
+        // Sanitizar control characters que rompen JSON.parse (saltos de línea dentro de strings)
+        const sanitized = jsonMatch[0].replace(/[ -]/g, (c) =>
+          ['\\n','\\t','\\r','\\f','\\b']['\n\t\r\f\b'.indexOf(c)] ?? ''
+        );
+        return res.json(JSON.parse(sanitized));
       }
       return res.status(500).json({ error: "Ningun modelo disponible: " + lastError });
     } catch (err: any) {
