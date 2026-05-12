@@ -1955,11 +1955,20 @@ async function startServer() {
         const text = data.candidates?.[0]?.content?.parts?.find((p: any) => p.text)?.text || "";
         const jsonMatch = text.match(/\{[\s\S]*\}/);
         if (!jsonMatch) return res.status(422).json({ error: "No se pudo extraer JSON", raw: text });
-        // Sanitizar control characters que rompen JSON.parse (saltos de línea dentro de strings)
-        const sanitized = jsonMatch[0].replace(/[ -]/g, (c) =>
-          ['\\n','\\t','\\r','\\f','\\b']['\n\t\r\f\b'.indexOf(c)] ?? ''
-        );
-        return res.json(JSON.parse(sanitized));
+        try {
+          // Reemplazar control characters literales dentro de strings JSON
+          const clean = jsonMatch[0]
+            .replace(/\r\n/g, '\\n')
+            .replace(/\n/g, '\\n')
+            .replace(/\r/g, '\\r')
+            .replace(/\t/g, '\\t')
+            // Corregir doble-escape accidental
+            .replace(/\\\\n/g, '\\n');
+          return res.json(JSON.parse(clean));
+        } catch {
+          // Último recurso: extraer campos manualmente del texto raw
+          return res.status(422).json({ error: "JSON malformado de Gemini", raw: text.slice(0, 500) });
+        }
       }
       return res.status(500).json({ error: "Ningun modelo disponible: " + lastError });
     } catch (err: any) {
