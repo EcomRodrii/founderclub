@@ -658,7 +658,27 @@ interface ScoutResult {
   domain: string;
 }
 
-async function scoutItem(itemUrl: string, cookiesStr: string): Promise<ScoutResult> {
+const HTML_SCOUT_HEADERS = {
+  "User-Agent":      "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/21A329",
+  "Accept":          "text/html,application/xhtml+xml,*/*;q=0.9",
+  "Accept-Language": "es-ES,es;q=0.9",
+};
+
+function extractSellerId(html: string): string | null {
+  const patterns = [
+    /"user_id"\s*:\s*(\d+)/,
+    /"seller_id"\s*:\s*(\d+)/,
+    /"userId"\s*:\s*(\d+)/,
+    /\/member\/(\d+)/,
+  ];
+  for (const p of patterns) {
+    const m = html.match(p);
+    if (m?.[1]) return m[1];
+  }
+  return null;
+}
+
+async function scoutItem(itemUrl: string, _cookiesStr: string): Promise<ScoutResult> {
   const domainMatch = itemUrl.match(/vinted\.([a-z.]+)\//);
   const domain = domainMatch?.[1] ?? "es";
   const itemIdMatch = itemUrl.match(/\/items\/(\d+)/) ?? itemUrl.match(/\/(\d+)-/);
@@ -667,79 +687,15 @@ async function scoutItem(itemUrl: string, cookiesStr: string): Promise<ScoutResu
   if (!itemId) throw new Error(`scout_no_item_id: ${itemUrl}`);
 
   const base = `https://www.vinted.${domain}`;
-  const { agent: scoutAgent, label: scoutProxy } = pickProxy(0);
-  const { agent: htmlAgent } = pickProxy(1);
+  const { agent: htmlAgent } = pickProxy(0);
 
-  // Web unblockers residenciales necesitan más tiempo para asignar IP y enrutar
-  const PROXY_TIMEOUT = 30_000;
+  console.log(`[SNIPER][scout] item=${itemId} domain=${domain}`);
 
-  console.log(`[SNIPER][scout] item=${itemId} domain=${domain} proxy=${scoutProxy}`);
-
-  // Intento 1 — API mobile (más rápida, menos bloqueada)
+  // Intento 1 — HTML directo sin proxy (Railway IP, sin cookies, página pública)
   try {
-    console.log(`[SNIPER][scout] → API mobile ${base}/api/v2/items/${itemId}`);
-    const r = await axios.get(`${base}/api/v2/items/${itemId}`, {
-      headers: buildSniperHeaders(cookiesStr, domain),
-      httpsAgent: scoutAgent, proxy: false as const,
-      validateStatus: () => true, timeout: PROXY_TIMEOUT,
-    });
-    console.log(`[SNIPER][scout] API status=${r.status}`);
-    if (r.status === 200 && r.data?.item?.user_id) {
-      return { itemId, sellerId: String(r.data.item.user_id), title: r.data.item.title ?? "", domain };
-    }
-    console.log(`[SNIPER][scout] API no seller (status=${r.status}) — intentando HTML`);
-  } catch (e: any) {
-    console.log(`[SNIPER][scout] API err: ${e.message} — intentando HTML`);
-  }
-
-  const HTML_HEADERS = {
-    "User-Agent":      "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/21A329",
-    "Accept":          "text/html,application/xhtml+xml,*/*;q=0.9",
-    "Accept-Language": "es-ES,es;q=0.9",
-    "X-Forwarded-For": "",
-    "Via":             "",
-  };
-
-  function extractSellerId(html: string): string | null {
-    const patterns = [
-      /"user_id"\s*:\s*(\d+)/,
-      /"seller_id"\s*:\s*(\d+)/,
-      /"userId"\s*:\s*(\d+)/,
-      /\/member\/(\d+)/,
-    ];
-    for (const p of patterns) {
-      const m = html.match(p);
-      if (m?.[1]) return m[1];
-    }
-    return null;
-  }
-
-  // Intento 2 — HTML vía proxy
-  try {
-    console.log(`[SNIPER][scout] → HTML (proxy) ${base}/items/${itemId}`);
+    console.log(`[SNIPER][scout] → HTML directo ${base}/items/${itemId}`);
     const r = await axios.get(`${base}/items/${itemId}`, {
-      headers: HTML_HEADERS,
-      httpsAgent: htmlAgent, proxy: false as const,
-      validateStatus: () => true, timeout: PROXY_TIMEOUT,
-    });
-    console.log(`[SNIPER][scout] HTML(proxy) status=${r.status}`);
-    if (r.status === 200) {
-      const sid = extractSellerId(String(r.data));
-      if (sid) {
-        console.log(`[SNIPER][scout] HTML(proxy) seller=${sid}`);
-        return { itemId, sellerId: sid, title: "", domain };
-      }
-      console.log(`[SNIPER][scout] HTML(proxy) 200 pero sin seller_id — probando directo`);
-    }
-  } catch (e: any) {
-    console.log(`[SNIPER][scout] HTML(proxy) err: ${e.message} — probando directo`);
-  }
-
-  // Intento 3 — HTML directo sin proxy (Railway IP, útil cuando el proxy corta en páginas HTML)
-  try {
-    console.log(`[SNIPER][scout] → HTML (directo) ${base}/items/${itemId}`);
-    const r = await axios.get(`${base}/items/${itemId}`, {
-      headers: HTML_HEADERS,
+      headers: HTML_SCOUT_HEADERS,
       httpsAgent: keepAliveAgent,
       proxy: false as const,
       validateStatus: () => true, timeout: 15_000,
@@ -751,13 +707,51 @@ async function scoutItem(itemUrl: string, cookiesStr: string): Promise<ScoutResu
         console.log(`[SNIPER][scout] HTML(directo) seller=${sid}`);
         return { itemId, sellerId: sid, title: "", domain };
       }
-      throw new Error(`html_200_no_seller_id`);
+      console.log(`[SNIPER][scout] HTML(directo) 200 sin seller_id — probando vía proxy`);
     }
-    throw new Error(`html_status_${r.status}`);
   } catch (e: any) {
-    const msg = e.message.startsWith("scout_failed:") ? e.message : `scout_failed: ${e.message}`;
-    throw new Error(msg);
+    console.log(`[SNIPER][scout] HTML(directo) err: ${e.message} — probando vía proxy`);
   }
+
+  // Intento 2 — HTML vía proxy residencial (si Railway IP está bloqueada)
+  try {
+    console.log(`[SNIPER][scout] → HTML proxy ${base}/items/${itemId}`);
+    const r = await axios.get(`${base}/items/${itemId}`, {
+      headers: HTML_SCOUT_HEADERS,
+      httpsAgent: htmlAgent, proxy: false as const,
+      validateStatus: () => true, timeout: 30_000,
+    });
+    console.log(`[SNIPER][scout] HTML(proxy) status=${r.status}`);
+    if (r.status === 200) {
+      const sid = extractSellerId(String(r.data));
+      if (sid) {
+        console.log(`[SNIPER][scout] HTML(proxy) seller=${sid}`);
+        return { itemId, sellerId: sid, title: "", domain };
+      }
+      console.log(`[SNIPER][scout] HTML(proxy) 200 sin seller_id — probando directo`);
+    }
+  } catch (e: any) {
+    console.log(`[SNIPER][scout] HTML(proxy) err: ${e.message}`);
+  }
+
+  // Intento 3 — API pública sin auth (a veces devuelve datos sin cookies)
+  try {
+    console.log(`[SNIPER][scout] → API pública ${base}/api/v2/items/${itemId}`);
+    const r = await axios.get(`${base}/api/v2/items/${itemId}`, {
+      headers: { "User-Agent": "Vinted/22.10.0 (iPhone; iOS 16.0; Scale/3.00)", "Accept": "application/json" },
+      httpsAgent: keepAliveAgent, proxy: false as const,
+      validateStatus: () => true, timeout: 15_000,
+    });
+    console.log(`[SNIPER][scout] API status=${r.status}`);
+    if (r.status === 200 && r.data?.item?.user_id) {
+      return { itemId, sellerId: String(r.data.item.user_id), title: r.data.item.title ?? "", domain };
+    }
+  } catch (e: any) {
+    console.log(`[SNIPER][scout] API err: ${e.message}`);
+  }
+
+  // Sin resultados en ningún intento
+  throw new Error(`scout_failed: no_seller_id item=${itemId}`);
 }
 
 // ─── MODULE 2: THE GUN — ejecuta la compra con proxy rotation + smart retry ───
