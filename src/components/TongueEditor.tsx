@@ -277,14 +277,14 @@ ONLY UPDATE: Batch Code "${detections.reference}", Unit Serial "${detections.bra
       } : null;
 
       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-image',
+        model: 'gemini-2.5-flash',
         contents: {
           parts: [
             ...(imagePart ? [imagePart] : []),
             { text: brandPrompt },
           ],
         },
-        config: { imageConfig: { aspectRatio: "1:1" } },
+        config: { responseModalities: ['TEXT', 'IMAGE'] },
       });
 
       let generated = false;
