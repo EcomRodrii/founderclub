@@ -647,7 +647,24 @@ function buildSniperHeaders(cookiesStr: string, domain = "es", extra: Record<str
   Object.keys(headers).forEach(k => { if (headers[k] === "") delete headers[k]; });
 
   if (bearerToken) headers["Authorization"] = `Bearer ${bearerToken}`;
-  if (cookiesStr && cookiesStr.includes("=")) headers["Cookie"] = cookiesStr;
+
+  // Extraer cookies críticas para bypass de DataDome y Cloudflare
+  if (cookiesStr && cookiesStr.includes("=")) {
+    const cfClearance  = cookiesStr.match(/cf_clearance=([^;]+)/)?.[1];
+    const datadome     = cookiesStr.match(/datadome=([^;]+)/)?.[1];
+    const session      = cookiesStr.match(/_vinted_fr_session=([^;]+)/)?.[1];
+    const anon         = cookiesStr.match(/anon_id=([^;]+)/)?.[1];
+
+    // Construir cookie header sólo con las esenciales (evitar cookies largas de analytics)
+    const essentials: string[] = [];
+    if (session)     essentials.push(`_vinted_fr_session=${session}`);
+    if (bearerToken) essentials.push(`access_token_web=${bearerToken}`);
+    if (cfClearance) essentials.push(`cf_clearance=${cfClearance}`);
+    if (datadome)    essentials.push(`datadome=${datadome}`);
+    if (anon)        essentials.push(`anon_id=${anon}`);
+
+    if (essentials.length > 0) headers["Cookie"] = essentials.join("; ");
+  }
 
   return { ...headers, ...extra };
 }
