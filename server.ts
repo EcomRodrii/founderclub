@@ -1,3 +1,9 @@
+// IPRoyal Web Unblocker actúa como proxy MITM → presenta certificado propio.
+// Node.js rechaza certificados no reconocidos por defecto.
+// Desactivamos verificación TLS sólo cuando hay proxies configurados.
+// (se aplica a nivel de proceso; no afecta al frontend ni a las respuestas del servidor)
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+
 import express, { Request, Response, NextFunction } from "express";
 import axios from "axios";
 import https from "https";
