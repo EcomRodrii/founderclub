@@ -6,7 +6,6 @@ import {
   Camera
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { GoogleGenAI } from "@google/genai";
 
 const authFetch = (url: string, body: any) =>
   fetch(url, {
@@ -110,85 +109,23 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
     reader.readAsDataURL(file);
   };
 
-  const repairJson = (raw: string): string => {
-    // Eliminar bloques markdown
-    let s = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
-    // Extraer el objeto JSON
-    const start = s.indexOf('{');
-    if (start === -1) return s;
-    s = s.slice(start);
-    // Cerrar strings sin terminar: si hay un número impar de " no escapadas, añadir "
-    const quoteCount = (s.match(/(?<!\\)"/g) || []).length;
-    if (quoteCount % 2 !== 0) s += '"';
-    // Cerrar arrays/objetos abiertos
-    let opens = 0, closes = 0, arrOpens = 0, arrCloses = 0;
-    for (const c of s) {
-      if (c === '{') opens++;
-      if (c === '}') closes++;
-      if (c === '[') arrOpens++;
-      if (c === ']') arrCloses++;
-    }
-    // Cerrar la última propiedad con coma suelta si es necesario
-    s = s.replace(/,\s*$/, '');
-    s = s.replace(/,\s*\}/, '}');
-    while (arrCloses < arrOpens) { s += ']'; arrCloses++; }
-    while (closes < opens) { s += '}'; closes++; }
-    return s;
-  };
-
   const runOCR = async (base64Image: string) => {
     setLoading(true);
     setStatus('Analizando lengüeta con OCR...');
     setError(null);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
-      const prompt = `Analiza esta imagen de una lengüeta de zapatilla ${activeBrand}.
-Extrae los datos y devuelve SOLO un JSON compacto sin saltos de línea extra, sin markdown.
-
-Campos obligatorios (usa "?" si no se ve):
-{"model":"...","sku":"...","reference":"...","reference2":"...","brandSerial":"...","date":"...","lvl":"...","sizes":{"us":"...","uk":"...","fr":"...","jp":"..."},"modelName":"...","color":"...","listingTitle":"[modelName] - Pointure [fr] [color] / [model]","listingDescription":"[frase natural en francés]\\n\\nCouleur : [color]\\nModèle : [model]\\nTaille : [fr]"}
-
-Busca en Google el nombre comercial exacto del modelo para rellenar modelName.
-IMPORTANTE: Devuelve SOLO el JSON, sin texto adicional.`;
-
-      const imagePart = {
-        inlineData: {
-          mimeType: "image/jpeg" as const,
-          data: base64Image.split(',')[1],
-        },
-      };
-
-      const result = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: { parts: [imagePart, { text: prompt }] },
-        config: {
-          tools: [{ googleSearch: {} }],
-          maxOutputTokens: 1024,
-        },
+      const res = await authFetch('/api/tongue/analyze', {
+        imageBase64: base64Image,
+        brand: activeBrand,
       });
 
-      const text = result.text || '';
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        setError('No se encontró JSON en la respuesta del OCR.');
-        return;
-      }
-      try {
-        const data = JSON.parse(jsonMatch[0]);
-        setDetections(data);
-        setStatus('Datos extraídos correctamente.');
-      } catch {
-        // Intentar reparar el JSON truncado
-        try {
-          const repaired = repairJson(jsonMatch[0]);
-          const data = JSON.parse(repaired);
-          setDetections(data);
-          setStatus('Datos extraídos (JSON reparado).');
-        } catch (repairErr: any) {
-          setError('JSON malformado en la respuesta. Vuelve a intentarlo.');
-        }
-      }
+      const data = await res.json();
+
+      if (!res.ok) throw new Error(data.error || 'Error del servidor');
+
+      setDetections(data);
+      setStatus('Datos extraídos correctamente.');
     } catch (err: any) {
       console.error('OCR Error:', err);
       setError('Error en el análisis OCR: ' + err.message);
@@ -407,12 +344,6 @@ IMPORTANTE: Devuelve SOLO el JSON, sin texto adicional.`;
               </div>
             )}
 
-            {error && !loading && (
-              <div className="py-4 px-4 bg-red-500/10 border border-red-500/30 rounded-2xl">
-                <p className="text-[11px] text-red-400 font-medium">{error}</p>
-              </div>
-            )}
-
             {!loading && !detections && !error && (
               <div className="py-8 text-center border border-dashed border-white/5 rounded-2xl">
                 <ScanText className="w-8 h-8 text-white/5 mx-auto mb-2" />
@@ -610,7 +541,7 @@ IMPORTANTE: Devuelve SOLO el JSON, sin texto adicional.`;
                       <button
                         onClick={() => {
                           if (generatedImage) {
-                            fetch(generatedImage).then(res => res.blob()).then(blob => {
+                            fetch(generatedImage).then(r => r.blob()).then(blob => {
                               const item = new ClipboardItem({ "image/png": blob });
                               navigator.clipboard.write([item]);
                               setStatus("Imagen copiada al portapapeles");
