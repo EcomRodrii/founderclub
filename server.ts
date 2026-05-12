@@ -843,7 +843,7 @@ async function executeFastPurchase(
 
 async function startServer() {
   await initDB();
-  // Worker desactivado — los jobs ahora los gestiona Blackstock vía /api/bazooka/blackstock-bridge
+  // Worker desactivado — los jobs ahora los gestiona Goolazo vía /api/bazooka/goolazo-bridge
   // startBazookaWorker().catch(e => console.error("Bazooka worker crash:", e.message));
   // Limpiar jobs atascados de ejecuciones anteriores
   await pool.query("UPDATE bazooka_jobs SET status='failed', error_message='worker_disabled' WHERE status IN ('pending','processing')").catch(() => {});
@@ -1358,15 +1358,15 @@ async function startServer() {
   // ── Bazooka / Reserve endpoints ─────────────────────────────────────────────
 
   // ══════════════════════════════════════════════════════════════════
-  // BLACKSTOCK BRIDGE
-  // El endpoint POST /api/bazooka/client/jobs de Blackstock NO requiere
+  // GOOLAZO BRIDGE
+  // El endpoint POST /api/bazooka/client/jobs de Goolazo NO requiere
   // autenticación (confirmado en server.js línea 994):
   //   "Sin autenticación — cualquier extensión instalada puede enviar jobs."
   // Solo necesitamos replicar los headers de la extensión Chrome.
   // ══════════════════════════════════════════════════════════════════
 
   const EXT_ID        = "mbjjaobpmbcpnmmlmobkllamilnmbfap";
-  const BLACKSTOCK_API = "https://api.blackstock.es";
+  const GOOLAZO_API = "https://api.blackstock.es";
   const CLIENT_PREFIX  = "/api/bazooka/client";
 
   const jitter = (min = 800, max = 2500) =>
@@ -1392,15 +1392,15 @@ async function startServer() {
     };
   }
 
-  // LOGIN endpoint — mantenido por si el usuario tiene cuenta Blackstock
-  app.post("/api/bazooka/blackstock-login", requireAuth as any, async (req: AuthRequest, res) => {
+  // LOGIN endpoint — mantenido por si el usuario tiene cuenta Goolazo
+  app.post("/api/bazooka/goolazo-login", requireAuth as any, async (req: AuthRequest, res) => {
     const { email, password } = req.body as { email: string; password: string };
     if (!email || !password) return res.status(400).json({ error: "email y password requeridos" });
 
     // 1. Obtener CSRF antes del login (sin cookie todavía)
     let csrfToken = "";
     try {
-      const csrfResp = await axios.get(`${BLACKSTOCK_API}${CLIENT_PREFIX}/csrf`, {
+      const csrfResp = await axios.get(`${GOOLAZO_API}${CLIENT_PREFIX}/csrf`, {
         headers: {
           "Content-Type": "application/json",
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.207 Safari/537.36",
@@ -1430,7 +1430,7 @@ async function startServer() {
       // 2. POST /login con esa cookie + CSRF
       await jitter(800, 1800);
       const loginResp = await axios.post(
-        `${BLACKSTOCK_API}${CLIENT_PREFIX}/login`,
+        `${GOOLAZO_API}${CLIENT_PREFIX}/login`,
         { email, password },
         {
           headers: {
@@ -1488,14 +1488,14 @@ async function startServer() {
       const finalCookie = Array.from(cookieMap.values()).join("; ");
 
       console.log(`[BS-LOGIN] sesión obtenida: ${finalCookie.slice(0, 120)}…`);
-      return res.json({ ok: true, blackstockCookie: finalCookie, email: loginResp.data?.account?.email || email });
+      return res.json({ ok: true, goolazoCookie: finalCookie, email: loginResp.data?.account?.email || email });
 
     } catch (e: any) {
-      return res.status(502).json({ error: `Error en login Blackstock: ${e.message}` });
+      return res.status(502).json({ error: `Error en login Goolazo: ${e.message}` });
     }
   });
 
-  app.post("/api/bazooka/blackstock-bridge", requireLicense as any, async (req: AuthRequest, res) => {
+  app.post("/api/bazooka/goolazo-bridge", requireLicense as any, async (req: AuthRequest, res) => {
     const { url, title } = req.body as { url: string; title?: string };
 
     if (!url) return res.status(400).json({ error: "url requerida" });
@@ -1563,13 +1563,13 @@ async function startServer() {
     // ── 3. Jitter antes del POST ──
     await jitter(600, 1800);
 
-    // ── 4. POST directo a Blackstock — SIN autenticación (confirmado en source) ──
+    // ── 4. POST directo a Goolazo — SIN autenticación (confirmado en source) ──
     const jobPayload = { url, title: title || "", accountName, accountMemberId, accountUrl };
     console.log(`[BS] POST /jobs → ${JSON.stringify(jobPayload)}`);
 
     try {
       const resp = await axios.post(
-        `${BLACKSTOCK_API}${CLIENT_PREFIX}/jobs`,
+        `${GOOLAZO_API}${CLIENT_PREFIX}/jobs`,
         jobPayload,
         { headers: buildExtHeaders(), validateStatus: () => true, timeout: 20000 }
       );
@@ -1581,12 +1581,12 @@ async function startServer() {
         if (itemId) {
           await pool.query(
             "INSERT INTO bazooka_jobs (user_id, url, title, item_id, vinted_cookies, status, note) VALUES ($1,$2,$3,$4,$5,'done',$6) ON CONFLICT DO NOTHING",
-            [req.user!.id, url, title || null, itemId, "blackstock", `bs_job_id=${resp.data?.job?.id ?? ""}`]
+            [req.user!.id, url, title || null, itemId, "goolazo", `bs_job_id=${resp.data?.job?.id ?? ""}`]
           ).catch(() => {});
         }
         return res.json({ ok: true, job: resp.data?.job || null, dashboard: resp.data?.dashboard || null, accountMemberId, accountName });
       } else {
-        return res.status(resp.status).json({ error: `Blackstock ${resp.status}`, detail: resp.data });
+        return res.status(resp.status).json({ error: `Goolazo ${resp.status}`, detail: resp.data });
       }
     } catch (e: any) {
       return res.status(502).json({ error: `Error POST job: ${e.message}` });

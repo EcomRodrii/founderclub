@@ -177,7 +177,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
   const apiFetch = (url: string, options: RequestInit = {}) =>
     fetch(url, { ...options, headers: { ...options.headers as any, ...authHeader } });
   const [cookie, setCookie] = useState<string>(() => localStorage.getItem('vinted_cookie') || '');
-  const [blackstockCookie, setBlackstockCookie] = useState<string>(() => localStorage.getItem('blackstock_cookie') || '');
+  const [goolazoCookie, setGoolazoCookie] = useState<string>(() => localStorage.getItem('goolazo_cookie') || '');
   const [bsEmail, setBsEmail] = useState('');
   const [bsPassword, setBsPassword] = useState('');
   const [bsLoginLoading, setBsLoginLoading] = useState(false);
@@ -205,8 +205,8 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
 
   // Persistence
   useEffect(() => {
-    localStorage.setItem('blackstock_cookie', blackstockCookie);
-  }, [blackstockCookie]);
+    localStorage.setItem('goolazo_cookie', goolazoCookie);
+  }, [goolazoCookie]);
 
   useEffect(() => {
     localStorage.setItem('vinted_cookie', cookie);
@@ -389,26 +389,26 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
     return () => clearInterval(iv);
   }, [activeTab, loadJobs]);
 
-  const loginBlackstock = async () => {
+  const loginGoolazo = async () => {
     if (!bsEmail || !bsPassword) { setBsLoginMsg({ text: 'Introduce email y contraseña.', ok: false }); return; }
     setBsLoginLoading(true);
     setBsLoginMsg(null);
     try {
-      const r = await apiFetch('/api/bazooka/blackstock-login', {
+      const r = await apiFetch('/api/bazooka/goolazo-login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: bsEmail, password: bsPassword }),
       });
       const d = await r.json();
-      if (r.ok && d.ok && d.blackstockCookie) {
-        setBlackstockCookie(d.blackstockCookie);
+      if (r.ok && d.ok && d.goolazoCookie) {
+        setGoolazoCookie(d.goolazoCookie);
         setBsPassword('');
-        setBsLoginMsg({ text: `✅ Sesión Blackstock iniciada como ${d.email}`, ok: true });
+        setBsLoginMsg({ text: `✅ Sesión Goolazo iniciada como ${d.email}`, ok: true });
       } else {
         setBsLoginMsg({ text: `❌ ${d.error || 'Login fallido'}`, ok: false });
       }
     } catch {
-      setBsLoginMsg({ text: '❌ Error de red al conectar con Blackstock.', ok: false });
+      setBsLoginMsg({ text: '❌ Error de red al conectar con Goolazo.', ok: false });
     } finally {
       setBsLoginLoading(false);
     }
@@ -420,26 +420,26 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
 
     if (!targetUrl) { setError('⚠️ Introduce la URL del producto a reservar.'); return; }
 
-    // ── Modo Blackstock: SIN autenticación, POST directo ──
+    // ── Modo Goolazo: SIN autenticación, POST directo ──
     setLoadingReserve(true);
-    setStatus('⚡ Enviando job a Blackstock...');
+    setStatus('⚡ Enviando job a Goolazo...');
     try {
-      const r = await apiFetch('/api/bazooka/blackstock-bridge', {
+      const r = await apiFetch('/api/bazooka/goolazo-bridge', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: targetUrl, title: targetTitle }),
       });
       const d = await r.json();
       if (r.ok && d.ok) {
-        setStatus(`✅ Job enviado a Blackstock${d.accountName ? ` — vendedor: ${d.accountName}` : ''}. Sus workers harán la reserva.`);
+        setStatus(`✅ Job enviado a Goolazo${d.accountName ? ` — vendedor: ${d.accountName}` : ''}. Sus workers harán la reserva.`);
         loadJobs();
         return;
       } else {
-        setError(`❌ Blackstock error: ${d.error || JSON.stringify(d)}`);
+        setError(`❌ Goolazo error: ${d.error || JSON.stringify(d)}`);
         setLoadingReserve(false);
         return;
       }
-    } catch { setError('Error de red al contactar con Blackstock.'); setLoadingReserve(false); return; }
+    } catch { setError('Error de red al contactar con Goolazo.'); setLoadingReserve(false); return; }
     // si llegamos aquí (no debería), fallback
     // ── Modo fallback: reserva directa con cookies de Vinted ──
     if (!cookie) { setError('⚠️ Introduce tu Cookie de Vinted en el panel lateral.'); return; }
@@ -838,17 +838,17 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                 )}
               </div>
 
-              {/* ── Blackstock Login ── */}
+              {/* ── Goolazo Login ── */}
               <div className="relative border border-white/10 rounded-xl p-3 bg-white/[0.02]">
                 <label className="block text-[10px] uppercase tracking-wider text-white/30 mb-2 ml-1 flex items-center gap-1.5">
-                  <span>Blackstock Bazooka</span>
-                  {blackstockCookie
+                  <span>Goolazo Bazooka</span>
+                  {goolazoCookie
                     ? <span className="text-emerald-400 font-semibold">● Sesión activa</span>
                     : <span className="text-white/20">● Sin sesión</span>
                   }
                 </label>
 
-                {blackstockCookie ? (
+                {goolazoCookie ? (
                   <div className="space-y-2">
                     {bsLoginMsg && (
                       <p className={`text-[10px] ${bsLoginMsg.ok ? 'text-emerald-400' : 'text-red-400'} bg-white/5 rounded-lg px-2 py-1.5`}>
@@ -856,17 +856,17 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                       </p>
                     )}
                     <button
-                      onClick={() => { setBlackstockCookie(''); setBsLoginMsg(null); }}
+                      onClick={() => { setGoolazoCookie(''); setBsLoginMsg(null); }}
                       className="w-full text-[11px] py-1.5 rounded-lg border border-red-500/20 text-red-400/70 hover:text-red-400 hover:border-red-500/40 transition-colors"
                     >
-                      Cerrar sesión Blackstock
+                      Cerrar sesión Goolazo
                     </button>
                   </div>
                 ) : (
                   <div className="space-y-2">
                     <input
                       type="email"
-                      placeholder="Email de Blackstock"
+                      placeholder="Email de Goolazo"
                       value={bsEmail}
                       onChange={e => setBsEmail(e.target.value)}
                       className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500/50 transition-colors"
@@ -876,7 +876,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                       placeholder="Contraseña"
                       value={bsPassword}
                       onChange={e => setBsPassword(e.target.value)}
-                      onKeyDown={e => e.key === 'Enter' && loginBlackstock()}
+                      onKeyDown={e => e.key === 'Enter' && loginGoolazo()}
                       className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500/50 transition-colors"
                     />
                     {bsLoginMsg && (
@@ -885,11 +885,11 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                       </p>
                     )}
                     <button
-                      onClick={loginBlackstock}
+                      onClick={loginGoolazo}
                       disabled={bsLoginLoading}
                       className="w-full py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-sm font-medium hover:bg-emerald-500/20 transition-colors disabled:opacity-50"
                     >
-                      {bsLoginLoading ? 'Iniciando sesión...' : 'Iniciar sesión en Blackstock'}
+                      {bsLoginLoading ? 'Iniciando sesión...' : 'Iniciar sesión en Goolazo'}
                     </button>
                   </div>
                 )}
@@ -1228,7 +1228,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                            disabled={loadingReserve}
                            className="w-full bg-white/5 text-white/50 font-bold py-3 rounded-xl hover:bg-white/10 transition-all flex items-center justify-center gap-2 border border-white/10 disabled:opacity-50 text-sm"
                           >
-                           <span>{loadingReserve ? 'ENCOLANDO...' : 'Reserva clásica (Blackstock)'}</span>
+                           <span>{loadingReserve ? 'ENCOLANDO...' : 'Reserva clásica (Goolazo)'}</span>
                           </button>
 
                           <div className="grid grid-cols-2 gap-2">
