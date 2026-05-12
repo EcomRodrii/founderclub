@@ -319,8 +319,10 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
       } else {
         const rawDetail = data.details;
         let detailMessage = '';
-        
-        if (typeof rawDetail === 'string') {
+
+        if (rawDetail === undefined || rawDetail === null) {
+          detailMessage = '';
+        } else if (typeof rawDetail === 'string') {
           if (rawDetail.includes('<html')) {
             detailMessage = 'Vinted devolvió una página de error HTML (404/Block). Verifica que el ID de usuario sea correcto para el dominio seleccionado.';
           } else {
@@ -329,8 +331,8 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
         } else {
           detailMessage = JSON.stringify(rawDetail);
         }
-        
-        setError(`${data.error || 'Error'}: ${detailMessage}`);
+
+        setError(detailMessage ? `${data.error || 'Error'}: ${detailMessage}` : (data.error || 'Error desconocido'));
         if (data.status === 401) {
           setSessionValid(false);
         }
