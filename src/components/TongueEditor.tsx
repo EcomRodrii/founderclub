@@ -277,21 +277,20 @@ ONLY UPDATE: Batch Code "${detections.reference}", Unit Serial "${detections.bra
       } : null;
 
       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-preview-05-20',
+        model: 'gemini-2.5-flash-image',
         contents: {
           parts: [
             ...(imagePart ? [imagePart] : []),
             { text: brandPrompt },
           ],
         },
-        config: { responseModalities: ['TEXT', 'IMAGE'] },
+        config: { imageConfig: { aspectRatio: "1:1" } },
       });
 
       let generated = false;
       for (const part of response.candidates?.[0]?.content?.parts || []) {
-        if ((part as any).inlineData) {
-          const d = (part as any).inlineData;
-          setGeneratedImage(`data:${d.mimeType};base64,${d.data}`);
+        if (part.inlineData) {
+          setGeneratedImage(`data:image/png;base64,${part.inlineData.data}`);
           setStatus('¡Lengüeta generada con éxito!');
           generated = true;
           break;
