@@ -2,6 +2,7 @@ import express, { Request, Response, NextFunction } from "express";
 import axios from "axios";
 import https from "https";
 import { randomUUID } from "crypto";
+import { HttpsProxyAgent } from "https-proxy-agent";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import * as cheerio from "cheerio";
@@ -393,13 +394,121 @@ async function startBazookaWorker() {
 // SNIPER-BAZOOKA v1
 // ══════════════════════════════════════════════════════════════════════════════
 
-// ─── Keep-Alive HTTPS agent (reutiliza conexiones TCP/TLS) ────────────────────
+// ─── Keep-Alive HTTPS agent fallback (sin proxy) ─────────────────────────────
 const keepAliveAgent = new https.Agent({
   keepAlive: true,
   keepAliveMsecs: 10_000,
   maxSockets: 50,
   maxFreeSockets: 10,
 });
+
+// ─── PROXY POOL — parsea PROXIES_LIST=host:port:user:pass,... ─────────────────
+interface ProxyEntry { url: string; label: string; }
+let _proxyPool: ProxyEntry[] | null = null;
+
+function getProxyPool(): ProxyEntry[] {
+  if (_proxyPool) return _proxyPool;
+  const raw = process.env.PROXIES_LIST || process.env.PROXY_URL || "";
+  if (!raw.trim()) { _proxyPool = []; return []; }
+
+  _proxyPool = raw.split(",")
+    .map(s => s.trim())
+    .filter(Boolean)
+    .map(entry => {
+      // Formato soportado:
+      //   host:port:user:pass
+      //   http://user:pass@host:port
+      //   user:pass@host:port
+      if (entry.startsWith("http")) return { url: entry, label: new URL(entry).hostname };
+      const parts = entry.split(":");
+      if (parts.length === 4) {
+        const [host, port, user, pass] = parts;
+        return { url: `http://${user}:${pass}@${host}:${port}`, label: `${host}:${port}` };
+      }
+      if (parts.length === 2) return { url: `http://${entry}`, label: entry };
+      return null;
+    })
+    .filter(Boolean) as ProxyEntry[];
+
+  console.log(`[SNIPER] Proxy pool: ${_proxyPool.length} proxies cargados`);
+  return _proxyPool;
+}
+
+// Cache de agentes por proxy URL (keep-alive real entre requests)
+const _agentCache = new Map<string, HttpsProxyAgent<string>>();
+function getProxyAgent(proxyUrl: string): HttpsProxyAgent<string> {
+  if (!_agentCache.has(proxyUrl)) {
+    _agentCache.set(proxyUrl, new HttpsProxyAgent(proxyUrl, {
+      keepAlive: true,
+      keepAliveMsecs: 10_000,
+      maxSockets: 10,
+    } as any));
+  }
+  return _agentCache.get(proxyUrl)!;
+}
+
+function pickProxy(index: number): { agent: HttpsProxyAgent<string> | typeof keepAliveAgent; label: string } {
+  const pool = getProxyPool();
+  if (!pool.length) return { agent: keepAliveAgent, label: "sin-proxy" };
+  const entry = pool[index % pool.length];
+  return { agent: getProxyAgent(entry.url), label: entry.label };
+}
+
+// ─── WEBHOOK — Discord y/o Telegram ──────────────────────────────────────────
+async function sendWebhookAlert(message: string): Promise<void> {
+  const discordUrl  = process.env.DISCORD_WEBHOOK_URL;
+  const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
+  const telegramChat  = process.env.TELEGRAM_CHAT_ID;
+
+  const tasks: Promise<any>[] = [];
+
+  if (discordUrl) {
+    tasks.push(
+      axios.post(discordUrl, { content: message }, { timeout: 8_000 }).catch(e =>
+        console.error("[WEBHOOK] Discord error:", e.message)
+      )
+    );
+  }
+
+  if (telegramToken && telegramChat) {
+    tasks.push(
+      axios.post(
+        `https://api.telegram.org/bot${telegramToken}/sendMessage`,
+        { chat_id: telegramChat, text: message, parse_mode: "HTML" },
+        { timeout: 8_000 }
+      ).catch(e => console.error("[WEBHOOK] Telegram error:", e.message))
+    );
+  }
+
+  if (!tasks.length) {
+    console.warn("[WEBHOOK] No hay webhook configurado (DISCORD_WEBHOOK_URL o TELEGRAM_BOT_TOKEN+TELEGRAM_CHAT_ID)");
+    return;
+  }
+
+  await Promise.allSettled(tasks);
+}
+
+// ─── DETECCIÓN DE SESIÓN CADUCADA ─────────────────────────────────────────────
+let _sessionExpiredAlertSent = false; // evita spam de webhooks
+
+async function handleExpiredSession(domain: string): Promise<void> {
+  if (_sessionExpiredAlertSent) return;
+  _sessionExpiredAlertSent = true;
+
+  const msg =
+    `🚨 <b>SNIPER DETENIDO: Cookies caducadas</b>\n\n` +
+    `El Sniper-Bazooka no puede autenticarse en <b>vinted.${domain}</b>.\n` +
+    `El <code>access_token_web</code> ha expirado (TTL: 2h).\n\n` +
+    `→ Ve a tu app → panel lateral → <b>Vinted Session Cookie</b>\n` +
+    `→ Actualiza con una cookie fresca de DevTools\n\n` +
+    `⏱️ ${new Date().toISOString()}`;
+
+  console.error("[SNIPER] ⚠️  SESIÓN CADUCADA — enviando webhook");
+  await sendWebhookAlert(msg);
+
+  // Reset después de 5 min para permitir re-alerta si sigue caducada
+  setTimeout(() => { _sessionExpiredAlertSent = false; }, 5 * 60_000);
+}
 
 // ─── Pool de device IDs rotatorios ───────────────────────────────────────────
 const DEVICE_ID_POOL: string[] = Array.from({ length: 20 }, () => randomUUID());
@@ -412,33 +521,43 @@ function nextDeviceId(): string {
 
 // ─── MODULE 3: THE GHOST — headers dinámicos que imitan la App iOS de Vinted ──
 function buildSniperHeaders(cookiesStr: string, domain = "es", extra: Record<string, string> = {}): Record<string, string> {
-  // Extraer Bearer token de las cookies (access_token_web o JWT suelto)
+  // Extraer Bearer token
   let bearerToken = "";
   const jwtMatch = cookiesStr.match(/access_token_web=([A-Za-z0-9._-]+)/);
   if (jwtMatch) bearerToken = jwtMatch[1];
   else if (cookiesStr.trim().startsWith("eyJ")) bearerToken = cookiesStr.trim();
 
-  // Versión de app simulada (oscila entre builds reales conocidos)
   const appVersions = ["22.10.0", "23.1.0", "23.4.2", "23.6.0", "24.0.1"];
-  const appVersion = appVersions[Math.floor(Math.random() * appVersions.length)];
   const iosVersions = ["15.7", "16.0", "16.3", "16.6", "17.0", "17.2"];
-  const iosVersion = iosVersions[Math.floor(Math.random() * iosVersions.length)];
-  const scales = ["2.00", "3.00"];
-  const scale = scales[Math.floor(Math.random() * scales.length)];
+  const scales      = ["2.00", "3.00"];
+  const appVersion  = appVersions[Math.floor(Math.random() * appVersions.length)];
+  const iosVersion  = iosVersions[Math.floor(Math.random() * iosVersions.length)];
+  const scale       = scales[Math.floor(Math.random() * scales.length)];
+  const lang        = domain === "fr" ? "fr" : domain === "it" ? "it" : domain === "de" ? "de" : "es";
 
   const headers: Record<string, string> = {
-    "User-Agent":             `Vinted/${appVersion} (iPhone; iOS ${iosVersion}; Scale/${scale})`,
-    "X-App-Test-Group":       "control",
-    "X-Vinted-Language":      domain === "fr" ? "fr" : domain === "it" ? "it" : domain === "de" ? "de" : "es",
-    "X-Vinted-Device-Id":     nextDeviceId(),
-    "X-Vinted-Api-Client":    "ios",
-    "X-Vinted-Api-Version":   "2",
-    "Accept":                 "application/json",
-    "Accept-Language":        `${domain}-${domain.toUpperCase()};q=1.0, en;q=0.9`,
-    "Accept-Encoding":        "gzip, deflate, br",
-    "Content-Type":           "application/json",
-    "Connection":             "keep-alive",
+    "User-Agent":          `Vinted/${appVersion} (iPhone; iOS ${iosVersion}; Scale/${scale})`,
+    "X-App-Test-Group":    "control",
+    "X-Vinted-Language":   lang,
+    "X-Vinted-Device-Id":  nextDeviceId(),
+    "X-Vinted-Api-Client": "ios",
+    "X-Vinted-Api-Version":"2",
+    "Accept":              "application/json",
+    "Accept-Language":     `${lang}-${lang.toUpperCase()};q=1.0, en;q=0.9`,
+    "Accept-Encoding":     "gzip, deflate, br",
+    "Content-Type":        "application/json",
+    "Connection":          "keep-alive",
+    // ── IP Leak Prevention: eliminar headers que revelan la IP de Railway ──
+    // (Node.js/axios NO añade estos por defecto, pero los sobreescribimos
+    //  explícitamente a vacío para que ningún middleware intermedio los filtre)
+    "X-Forwarded-For":     "",
+    "X-Real-IP":           "",
+    "Via":                 "",
+    "Forwarded":           "",
   };
+
+  // Eliminar las claves vacías (no enviar el header en absoluto)
+  Object.keys(headers).forEach(k => { if (headers[k] === "") delete headers[k]; });
 
   if (bearerToken) headers["Authorization"] = `Bearer ${bearerToken}`;
   if (cookiesStr && cookiesStr.includes("=")) headers["Cookie"] = cookiesStr;
@@ -465,11 +584,14 @@ async function scoutItem(itemUrl: string, cookiesStr: string): Promise<ScoutResu
   const proxy = getProxyConfig();
   const base  = `https://www.vinted.${domain}`;
 
-  // Intento 1 — API mobile (más rápida y menos bloqueada que la web)
+  const { agent: scoutAgent, label: scoutProxy } = pickProxy(0);
+  console.log(`[SNIPER][scout] proxy=${scoutProxy}`);
+
+  // Intento 1 — API mobile
   try {
     const r = await axios.get(`${base}/api/v2/items/${itemId}`, {
       headers: buildSniperHeaders(cookiesStr, domain),
-      proxy, httpsAgent: keepAliveAgent,
+      httpsAgent: scoutAgent, proxy: false as const,
       validateStatus: () => true, timeout: 10_000,
     });
     if (r.status === 200 && r.data?.item?.user_id) {
@@ -480,15 +602,18 @@ async function scoutItem(itemUrl: string, cookiesStr: string): Promise<ScoutResu
     console.log(`[SNIPER][scout] API err: ${e.message}`);
   }
 
-  // Intento 2 — HTML page con proxy
+  // Intento 2 — HTML page
+  const { agent: htmlAgent } = pickProxy(1);
   try {
     const r = await axios.get(`${base}/items/${itemId}`, {
       headers: {
         "User-Agent":      "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/21A329",
         "Accept":          "text/html,application/xhtml+xml,*/*;q=0.9",
         "Accept-Language": "es-ES,es;q=0.9",
+        "X-Forwarded-For": "",
+        "Via":             "",
       },
-      proxy, httpsAgent: keepAliveAgent,
+      httpsAgent: htmlAgent, proxy: false as const,
       validateStatus: () => true, timeout: 15_000,
     });
     if (r.status === 200) {
@@ -513,14 +638,18 @@ async function scoutItem(itemUrl: string, cookiesStr: string): Promise<ScoutResu
   }
 }
 
-// ─── MODULE 2: THE GUN — ejecuta la compra rápida con keep-alive ──────────────
+// ─── MODULE 2: THE GUN — ejecuta la compra con proxy rotation + smart retry ───
 interface PurchaseResult {
   success: boolean;
   transactionId?: string;
   purchaseId?: string;
   error?: string;
   durationMs: number;
+  proxyUsed?: string;
+  sessionExpired?: boolean;
 }
+
+const RETRYABLE_STATUS = new Set([403, 407, 429, 500, 502, 503, 504]);
 
 async function executeFastPurchase(
   itemId: string,
@@ -528,50 +657,86 @@ async function executeFastPurchase(
   cookiesStr: string,
   domain: string,
   workerIndex: number,
+  attempt = 0,          // 0 = primer intento, 1 = retry con otro proxy
 ): Promise<PurchaseResult> {
   const t0 = Date.now();
   const base = `https://www.vinted.${domain}`;
-  const proxy = getProxyConfig();
+
+  // Cada worker usa un proxy distinto; en retry rota al siguiente
+  const { agent, label } = pickProxy(workerIndex + attempt);
   const headers = buildSniperHeaders(cookiesStr, domain, {
-    "Referer": `https://www.vinted.${domain}/items/${itemId}`,
+    "Referer":           `https://www.vinted.${domain}/items/${itemId}`,
     "X-Idempotency-Key": randomUUID(),
   });
 
+  const axCfg = {
+    headers,
+    httpsAgent:     agent,
+    proxy:          false as const,   // desactiva el proxy nativo de axios (usamos agent)
+    validateStatus: () => true,
+    timeout:        12_000,
+  };
+
+  console.log(`[SNIPER][W${workerIndex}${attempt ? `+retry` : ""}] proxy=${label}`);
+
   try {
-    // POST 1 — Abrir conversación (reserva el artículo)
+    // POST 1 — Conversación (reserva)
     const convResp = await axios.post(
       `${base}/api/v2/conversations`,
       { initiator: "buy", item_id: String(itemId), opposite_user_id: String(sellerId) },
-      { headers, proxy, httpsAgent: keepAliveAgent, validateStatus: () => true, timeout: 12_000 },
+      axCfg,
     );
 
-    console.log(`[SNIPER][worker${workerIndex}] conv=${convResp.status}`);
+    console.log(`[SNIPER][W${workerIndex}] conv=${convResp.status} (${Date.now() - t0}ms)`);
+
+    // Sesión caducada
+    if (convResp.status === 401) {
+      await handleExpiredSession(domain);
+      return { success: false, error: "session_expired_401", sessionExpired: true, durationMs: Date.now() - t0, proxyUsed: label };
+    }
+
+    // Smart retry en errores de red/rate-limit
+    if (RETRYABLE_STATUS.has(convResp.status) && attempt === 0) {
+      console.log(`[SNIPER][W${workerIndex}] status ${convResp.status} → retry con otro proxy`);
+      return executeFastPurchase(itemId, sellerId, cookiesStr, domain, workerIndex, 1);
+    }
 
     if (convResp.status !== 200 && convResp.status !== 201) {
-      return { success: false, error: `conv_${convResp.status}: ${JSON.stringify(convResp.data).slice(0, 150)}`, durationMs: Date.now() - t0 };
+      return { success: false, error: `conv_${convResp.status}: ${JSON.stringify(convResp.data).slice(0, 150)}`, durationMs: Date.now() - t0, proxyUsed: label };
     }
 
     const transactionId = convResp.data?.conversation?.transaction?.id;
     if (!transactionId) {
-      return { success: false, error: `no_transaction_id: ${JSON.stringify(convResp.data).slice(0, 150)}`, durationMs: Date.now() - t0 };
+      return { success: false, error: `no_transaction_id: ${JSON.stringify(convResp.data).slice(0, 150)}`, durationMs: Date.now() - t0, proxyUsed: label };
     }
 
-    // POST 2 — Build checkout (bloquea la reserva)
+    // POST 2 — Checkout (bloqueo definitivo)
     const checkoutResp = await axios.post(
       `${base}/api/v2/purchases/checkout/build`,
       { purchase_items: [{ id: transactionId, type: "transaction" }] },
-      { headers, proxy, httpsAgent: keepAliveAgent, validateStatus: () => true, timeout: 12_000 },
+      axCfg,
     );
 
-    console.log(`[SNIPER][worker${workerIndex}] checkout=${checkoutResp.status} dur=${Date.now() - t0}ms`);
+    console.log(`[SNIPER][W${workerIndex}] checkout=${checkoutResp.status} total=${Date.now() - t0}ms`);
+
+    if (checkoutResp.status === 401) {
+      await handleExpiredSession(domain);
+      return { success: false, error: "session_expired_checkout_401", sessionExpired: true, durationMs: Date.now() - t0, proxyUsed: label };
+    }
 
     const purchaseId = checkoutResp.data?.checkout?.purchase_id
       ?? checkoutResp.data?.purchase_id
       ?? String(transactionId);
 
-    return { success: true, transactionId: String(transactionId), purchaseId: String(purchaseId), durationMs: Date.now() - t0 };
+    return { success: true, transactionId: String(transactionId), purchaseId: String(purchaseId), durationMs: Date.now() - t0, proxyUsed: label };
+
   } catch (e: any) {
-    return { success: false, error: e.message, durationMs: Date.now() - t0 };
+    // Error de red (timeout, ECONNRESET, etc.) → retry si es primer intento
+    if (attempt === 0) {
+      console.log(`[SNIPER][W${workerIndex}] net error "${e.message}" → retry`);
+      return executeFastPurchase(itemId, sellerId, cookiesStr, domain, workerIndex, 1);
+    }
+    return { success: false, error: e.message, durationMs: Date.now() - t0, proxyUsed: label };
   }
 }
 
@@ -1411,7 +1576,9 @@ async function startServer() {
 
     const parsed = results.map((r, i) => ({
       worker: i,
-      ...(r.status === "fulfilled" ? r.value : { success: false, error: String((r as any).reason), durationMs: 0 }),
+      ...(r.status === "fulfilled"
+        ? r.value
+        : { success: false, error: String((r as any).reason), durationMs: 0, proxyUsed: "error" }),
     }));
 
     const winner = parsed.find(r => r.success);
