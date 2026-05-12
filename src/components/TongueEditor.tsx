@@ -8,6 +8,16 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { GoogleGenAI } from "@google/genai";
 
+const authFetch = (url: string, body: any) =>
+  fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${localStorage.getItem("fc_token") || ""}`,
+    },
+    body: JSON.stringify(body),
+  });
+
 interface DetectionResult {
   model: string;
   sku: string;
@@ -244,59 +254,28 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
     setError(null);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+      const customPrompt = activeBrand === 'ADIDAS' ? customPromptAdidas
+        : activeBrand === 'ASICS' ? customPromptAsics
+        : activeBrand === 'ONITSUKA' ? customPromptOnitsuka
+        : customPromptNB;
 
-      let brandPrompt = '';
-      if (activeBrand === 'ADIDAS') {
-        brandPrompt = `### CRITICAL IDENTITY RECONSTRUCTION - ADIDAS
-Precision printing engine task. Recreate the label with 100% adherence to fixed data.
-STRICTLY DO NOT CHANGE: SKU "${detections.sku}", DATE "${detections.date}", SIZES.
-ONLY UPDATE: Brand Serial "${detections.brandSerial}", Reference Serial "${detections.reference}"`;
-      } else if (activeBrand === 'NEW BALANCE') {
-        brandPrompt = `### NEW BALANCE INTERNAL LABEL SPECIFICATIONS
-You are recreating a NEW BALANCE tongue label.
-STRICTLY FOLLOW: STYLE "${detections.sku}", DATE "${detections.date}", SIZES.
-PRIMARY MODIFICATIONS: SERIAL1 "${detections.reference}", SERIAL2 "${detections.reference2}", BRAND CODE "${detections.brandSerial}"`;
-      } else if (activeBrand === 'ASICS') {
-        brandPrompt = `### ASICS INTERNAL LABEL SPECIFICATIONS
-You are recreating an ASICS tongue label with maximum fidelity.
-STRICTLY DO NOT CHANGE: SKU "${detections.sku}", DATE "${detections.date}", SIZES, brand typography.
-ONLY UPDATE: Tracking code "${detections.reference}", Unit Serial "${detections.brandSerial}"`;
-      } else if (activeBrand === 'ONITSUKA') {
-        brandPrompt = `### ONITSUKA TIGER INTERNAL LABEL SPECIFICATIONS
-You are recreating an ONITSUKA TIGER tongue label with maximum fidelity.
-STRICTLY DO NOT CHANGE: SKU "${detections.sku}", DATE "${detections.date}", SIZES, country of manufacture text.
-ONLY UPDATE: Batch Code "${detections.reference}", Unit Serial "${detections.brandSerial}"`;
-      }
-
-      const imagePart = originalImage ? {
-        inlineData: {
-          mimeType: "image/jpeg" as const,
-          data: originalImage.split(',')[1],
-        },
-      } : null;
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: {
-          parts: [
-            ...(imagePart ? [imagePart] : []),
-            { text: brandPrompt },
-          ],
-        },
-        config: { responseModalities: ['TEXT', 'IMAGE'] },
+      const res = await authFetch('/api/tongue/generate', {
+        imageBase64: originalImage || null,
+        brand: activeBrand,
+        detections,
+        customPrompt,
       });
 
-      let generated = false;
-      for (const part of response.candidates?.[0]?.content?.parts || []) {
-        if (part.inlineData) {
-          setGeneratedImage(`data:image/png;base64,${part.inlineData.data}`);
-          setStatus('¡Lengüeta generada con éxito!');
-          generated = true;
-          break;
-        }
+      const data = await res.json();
+
+      if (!res.ok) throw new Error(data.error || 'Error del servidor');
+
+      if (data.image) {
+        setGeneratedImage(data.image);
+        setStatus('¡Lengüeta generada con éxito!');
+      } else {
+        setError('El modelo no devolvió imagen. Inténtalo de nuevo.');
       }
-      if (!generated) setError('El modelo no devolvió imagen. Inténtalo de nuevo.');
     } catch (err: any) {
       const msg = err.message || String(err);
       if (msg.includes('429') || msg.toLowerCase().includes('quota')) {
