@@ -2025,35 +2025,47 @@ ${customPrompt || ""}`;
 
       const IMG_MODELS = [
         "gemini-2.0-flash-exp-image-generation",
+        "gemini-2.5-flash",
         "gemini-2.0-flash-preview-image-generation",
         "gemini-2.0-flash-exp",
       ];
-      let lastErr = "";
+      const modelErrors: string[] = [];
       for (const model of IMG_MODELS) {
-        const r = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              contents: [{ parts }],
-              generationConfig: {
-                responseModalities: ["TEXT", "IMAGE"],
-                imageConfig: { aspectRatio: "1:1" }
-              }
-            })
+        try {
+          const r = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                contents: [{ parts }],
+                generationConfig: { responseModalities: ["TEXT", "IMAGE"] }
+              })
+            }
+          );
+          const data = await r.json();
+          if (!r.ok) {
+            const errMsg = data?.error?.message || JSON.stringify(data);
+            console.error(`[TONGUE] ${model} HTTP${r.status}:`, errMsg);
+            modelErrors.push(`${model}: ${errMsg}`);
+            continue;
           }
-        );
-        const data = await r.json();
-        if (!r.ok) { lastErr = JSON.stringify(data); console.error(`ImgModel ${model} failed:`, JSON.stringify(data)); continue; }
-        for (const part of data.candidates?.[0]?.content?.parts || []) {
-          if (part.inlineData) {
-            return res.json({ image: `data:image/png;base64,${part.inlineData.data}` });
+          const responseParts = data.candidates?.[0]?.content?.parts || [];
+          console.log(`[TONGUE] ${model} parts:`, responseParts.map((p: any) => Object.keys(p)));
+          for (const part of responseParts) {
+            if (part.inlineData) {
+              console.log(`[TONGUE] ✅ Image from ${model}`);
+              return res.json({ image: `data:image/png;base64,${part.inlineData.data}` });
+            }
           }
+          modelErrors.push(`${model}: no inlineData in parts`);
+        } catch (modelErr: any) {
+          modelErrors.push(`${model}: ${modelErr.message}`);
         }
       }
 
-      res.status(422).json({ error: "El modelo no devolvió imagen. Intenta de nuevo." });
+      console.error("[TONGUE] All models failed:", modelErrors);
+      res.status(422).json({ error: modelErrors.join(" | ") });
     } catch (err: any) {
       console.error("Tongue generate error:", err.message);
       res.status(500).json({ error: err.message });
