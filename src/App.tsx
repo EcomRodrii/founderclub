@@ -176,7 +176,12 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
   // Helper to add auth to fetch calls
   const apiFetch = (url: string, options: RequestInit = {}) =>
     fetch(url, { ...options, headers: { ...options.headers as any, ...authHeader } });
-  const [cookie, setCookie] = useState<string>(() => localStorage.getItem('vinted_cookie') || 'eyJraWQiOiJFNTdZZHJ1SHBsQWp1MmNObzFEb3JIM2oyN0J1NS1zX09QNVB3UGlobjVNIiwiYWxnIjoiUFMyNTYifQ.eyJhY2NvdW50X2lkIjozMTU3MTYwMTc4LCJhcHBfaWQiOjQsImF1ZCI6ImZyLmNvcmUuYXBpIiwiY2xpZW50X2lkIjoid2ViIiwiZXhwIjoxNzc4MTczOTQyLCJpYXQiOjE3NzgxNjY3NDIsImlzcyI6InZpbnRlZC1pYW0tc2VydmljZSIsInB1cnBvc2UiOiJhY2Nlc3MiLCJyb2xlcyI6IiIsInNjb3BlIjoidXNlciIsInNpZCI6IjRmNDBkNWNlLTE3NzgxMDkyMDkiLCJzdWIiOiIzMTUyNzYzOTA4IiwiY2MiOiJFUyIsImFuaWQiOiJiM2MzZTg0Mi00M2UyLTQ4MTUtODE1Zi00OTI2MjU0MTg5NGMiLCJhY3QiOnsic3ViIjoiMzE1Mjc2MzkwOCJ9fQ.I-IhZ_6EEaQhahcLO91o0CrsSQUt9FKFrlJc6hs7C4-7prK0txXbc-q495VsLX11kjVOaBkJg1GfErbF60vLJl5F1wKfU6ga-icHJhJh2DKEhkXH_aYso_Ofm5a3yDx4x_xVyxRpwmkkLmlfGG3SyhtYg-_PFUTzXH4Y8aFt8qEhie7Wk792FvQXHMS8RexAhAOn9o9A2nGiHCVpSjDk2tKXsprQbp8um6OuWkatx4YrxcT2KayI_utEviw3_s9dP09HKeE3MMMsDPqb5EAPPzEn_H1YoZkCquIaowvTBfEkVa3mo-qCYa6CErxkjUYkC-1f_PDCVK3h8TpMF4mmUg');
+  const [cookie, setCookie] = useState<string>(() => localStorage.getItem('vinted_cookie') || '');
+  const [blackstockCookie, setBlackstockCookie] = useState<string>(() => localStorage.getItem('blackstock_cookie') || '');
+  const [bsEmail, setBsEmail] = useState('');
+  const [bsPassword, setBsPassword] = useState('');
+  const [bsLoginLoading, setBsLoginLoading] = useState(false);
+  const [bsLoginMsg, setBsLoginMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const [userId, setUserId] = useState<string>(() => localStorage.getItem('vinted_user_id') || '3152763908');
   const [domain, setDomain] = useState<string>(() => localStorage.getItem('vinted_domain') || 'es');
   const [profileUrl, setProfileUrl] = useState('https://www.vinted.es/member/3152763908');
@@ -199,6 +204,10 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   // Persistence
+  useEffect(() => {
+    localStorage.setItem('blackstock_cookie', blackstockCookie);
+  }, [blackstockCookie]);
+
   useEffect(() => {
     localStorage.setItem('vinted_cookie', cookie);
     localStorage.setItem('vinted_user_id', userId);
@@ -377,13 +386,62 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
     return () => clearInterval(iv);
   }, [activeTab, loadJobs]);
 
+  const loginBlackstock = async () => {
+    if (!bsEmail || !bsPassword) { setBsLoginMsg({ text: 'Introduce email y contraseña.', ok: false }); return; }
+    setBsLoginLoading(true);
+    setBsLoginMsg(null);
+    try {
+      const r = await apiFetch('/api/bazooka/blackstock-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: bsEmail, password: bsPassword }),
+      });
+      const d = await r.json();
+      if (r.ok && d.ok && d.blackstockCookie) {
+        setBlackstockCookie(d.blackstockCookie);
+        setBsPassword('');
+        setBsLoginMsg({ text: `✅ Sesión Blackstock iniciada como ${d.email}`, ok: true });
+      } else {
+        setBsLoginMsg({ text: `❌ ${d.error || 'Login fallido'}`, ok: false });
+      }
+    } catch {
+      setBsLoginMsg({ text: '❌ Error de red al conectar con Blackstock.', ok: false });
+    } finally {
+      setBsLoginLoading(false);
+    }
+  };
+
   const enqueueReserve = async () => {
-    let targetId = externalId;
     let targetUrl = externalUrl;
     let targetTitle = externalTitle;
 
-    if (!cookie) { setError('⚠️ Introduce tu Cookie en el panel lateral.'); return; }
+    if (!targetUrl) { setError('⚠️ Introduce la URL del producto a reservar.'); return; }
 
+    // ── Modo Blackstock: SIN autenticación, POST directo ──
+    setLoadingReserve(true);
+    setStatus('⚡ Enviando job a Blackstock...');
+    try {
+      const r = await apiFetch('/api/bazooka/blackstock-bridge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: targetUrl, title: targetTitle }),
+      });
+      const d = await r.json();
+      if (r.ok && d.ok) {
+        setStatus(`✅ Job enviado a Blackstock${d.accountName ? ` — vendedor: ${d.accountName}` : ''}. Sus workers harán la reserva.`);
+        loadJobs();
+        return;
+      } else {
+        setError(`❌ Blackstock error: ${d.error || JSON.stringify(d)}`);
+        setLoadingReserve(false);
+        return;
+      }
+    } catch { setError('Error de red al contactar con Blackstock.'); setLoadingReserve(false); return; }
+    // si llegamos aquí (no debería), fallback
+    // ── Modo fallback: reserva directa con cookies de Vinted ──
+    if (!cookie) { setError('⚠️ Introduce tu Cookie de Vinted en el panel lateral.'); return; }
+
+    let targetId = externalId;
     if (!targetId && targetUrl) {
       setStatus('Detectando ID...');
       try {
@@ -394,7 +452,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
       } catch { setError('Error al resolver la URL.'); return; }
     }
 
-    if (!targetId) { setError('⚠️ Introduce la URL del producto a reservar.'); return; }
+    if (!targetId) { setError('⚠️ No se pudo extraer el ID del producto.'); return; }
     if (!targetUrl) targetUrl = `https://www.vinted.es/items/${targetId}`;
 
     setLoadingReserve(true);
@@ -733,7 +791,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                 <label className="block text-[10px] uppercase tracking-wider text-white/30 mb-1.5 ml-1">Vinted Session Cookie</label>
                 <div className="relative">
                   <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/20" />
-                  <textarea 
+                  <textarea
                     value={cookie}
                     onChange={(e) => setCookie(e.target.value)}
                     placeholder="_vinted_fr_session=..."
@@ -741,13 +799,70 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                   />
                 </div>
                 {cookieWarning && (
-                  <motion.p 
+                  <motion.p
                     initial={{ opacity: 0, y: -5 }}
                     animate={{ opacity: 1, y: 0 }}
                     className="mt-2 text-[10px] text-red-400 leading-tight bg-red-400/5 p-2 rounded-lg border border-red-400/10"
                   >
                     {cookieWarning}
                   </motion.p>
+                )}
+              </div>
+
+              {/* ── Blackstock Login ── */}
+              <div className="relative border border-white/10 rounded-xl p-3 bg-white/[0.02]">
+                <label className="block text-[10px] uppercase tracking-wider text-white/30 mb-2 ml-1 flex items-center gap-1.5">
+                  <span>Blackstock Bazooka</span>
+                  {blackstockCookie
+                    ? <span className="text-emerald-400 font-semibold">● Sesión activa</span>
+                    : <span className="text-white/20">● Sin sesión</span>
+                  }
+                </label>
+
+                {blackstockCookie ? (
+                  <div className="space-y-2">
+                    {bsLoginMsg && (
+                      <p className={`text-[10px] ${bsLoginMsg.ok ? 'text-emerald-400' : 'text-red-400'} bg-white/5 rounded-lg px-2 py-1.5`}>
+                        {bsLoginMsg.text}
+                      </p>
+                    )}
+                    <button
+                      onClick={() => { setBlackstockCookie(''); setBsLoginMsg(null); }}
+                      className="w-full text-[11px] py-1.5 rounded-lg border border-red-500/20 text-red-400/70 hover:text-red-400 hover:border-red-500/40 transition-colors"
+                    >
+                      Cerrar sesión Blackstock
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <input
+                      type="email"
+                      placeholder="Email de Blackstock"
+                      value={bsEmail}
+                      onChange={e => setBsEmail(e.target.value)}
+                      className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500/50 transition-colors"
+                    />
+                    <input
+                      type="password"
+                      placeholder="Contraseña"
+                      value={bsPassword}
+                      onChange={e => setBsPassword(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && loginBlackstock()}
+                      className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500/50 transition-colors"
+                    />
+                    {bsLoginMsg && (
+                      <p className={`text-[10px] ${bsLoginMsg.ok ? 'text-emerald-400' : 'text-red-400'} bg-white/5 rounded-lg px-2 py-1.5`}>
+                        {bsLoginMsg.text}
+                      </p>
+                    )}
+                    <button
+                      onClick={loginBlackstock}
+                      disabled={bsLoginLoading}
+                      className="w-full py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-sm font-medium hover:bg-emerald-500/20 transition-colors disabled:opacity-50"
+                    >
+                      {bsLoginLoading ? 'Iniciando sesión...' : 'Iniciar sesión en Blackstock'}
+                    </button>
+                  </div>
                 )}
               </div>
 

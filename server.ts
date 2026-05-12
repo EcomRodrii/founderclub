@@ -217,6 +217,33 @@ function parseCookieStr(str: string): Record<string, string> {
   return out;
 }
 
+// ── SPY LOGGER ────────────────────────────────────────────────────────────────
+function spyLog(tag: string, method: string, url: string, reqBody: any, reqHeaders: Record<string,string>, res: { status: number; data: any } | null, err?: any) {
+  const safeHeaders = { ...reqHeaders };
+  // Truncate cookie for readability but keep enough to verify presence
+  if (safeHeaders["Cookie"]) safeHeaders["Cookie"] = safeHeaders["Cookie"].slice(0, 120) + "…";
+  if (safeHeaders["cookie"]) safeHeaders["cookie"] = safeHeaders["cookie"].slice(0, 120) + "…";
+
+  console.log(`\n${"═".repeat(60)}`);
+  console.log(`[SPY][${tag}] ${method} ${url}`);
+  console.log(`── HEADERS SENT ──`);
+  console.log(JSON.stringify(safeHeaders, null, 2));
+  if (reqBody !== undefined) {
+    console.log(`── BODY SENT ──`);
+    console.log(JSON.stringify(reqBody, null, 2));
+  }
+  if (res) {
+    console.log(`── RESPONSE ${res.status} ──`);
+    const body = typeof res.data === "string" ? res.data.slice(0, 500) : JSON.stringify(res.data).slice(0, 500);
+    console.log(body);
+  }
+  if (err) {
+    console.log(`── ERROR ──`);
+    console.log(err.message);
+  }
+  console.log(`${"═".repeat(60)}\n`);
+}
+
 async function reserveItemPuppeteer(itemId: string, cookiesStr: string, domain = "es"): Promise<{ transactionId: string; purchaseId: string }> {
   const { headers } = getVintedHeaders(cookiesStr, domain);
   const base = `https://www.vinted.${domain}`;
@@ -226,43 +253,61 @@ async function reserveItemPuppeteer(itemId: string, cookiesStr: string, domain =
   let sellerId: string | null = null;
   const diag: string[] = [`proxy:${proxy ? "si" : "no"}`, `item_id:${itemId}`, `domain:${domain}`];
 
+  console.log(`\n[SPY] === BAZOOKA START item=${itemId} domain=${domain} proxy=${proxy ? proxy.host : "none"} ===`);
+  console.log(`[SPY] Cookie snippet: ${cookiesStr.slice(0, 200)}…`);
+
   // Auth check via proxy
   try {
     const authR = await axios.get(`${base}/api/v2/users/current`, {
       headers, proxy, validateStatus: () => true, timeout: 15000,
     });
+    spyLog("AUTH", "GET", `${base}/api/v2/users/current`, undefined, headers as any, { status: authR.status, data: authR.data });
     diag.push(`auth:${authR.status}${authR.status === 200 ? `(user:${authR.data?.user?.id})` : ""}`);
-  } catch (e: any) { diag.push(`auth_err:${e.message?.slice(0, 60)}`); }
+  } catch (e: any) {
+    spyLog("AUTH", "GET", `${base}/api/v2/users/current`, undefined, headers as any, null, e);
+    diag.push(`auth_err:${e.message?.slice(0, 60)}`);
+  }
 
   // Attempt 1: item detail API via proxy
   try {
     const r = await axios.get(`${base}/api/v2/items/${itemId}`, {
       headers, proxy, validateStatus: () => true, timeout: 20000,
     });
+    spyLog("ITEM_API", "GET", `${base}/api/v2/items/${itemId}`, undefined, headers as any, { status: r.status, data: r.data });
     diag.push(`item:${r.status}`);
     if (r.status === 200 && r.data?.item?.user_id) sellerId = String(r.data.item.user_id);
     else diag.push(String(r.data).slice(0, 100));
-  } catch (e: any) { diag.push(`item_err:${e.message?.slice(0, 80)}`); }
+  } catch (e: any) {
+    spyLog("ITEM_API", "GET", `${base}/api/v2/items/${itemId}`, undefined, headers as any, null, e);
+    diag.push(`item_err:${e.message?.slice(0, 80)}`);
+  }
 
   // Attempt 2: offers/request_options via proxy
   if (!sellerId) {
+    const offUrl = `${base}/api/v2/offers/request_options?item_id=${itemId}`;
     try {
       const r = await axios.get(`${base}/api/v2/offers/request_options`, {
         params: { item_id: itemId }, headers, proxy, validateStatus: () => true, timeout: 20000,
       });
+      spyLog("OFFERS", "GET", offUrl, undefined, headers as any, { status: r.status, data: r.data });
       diag.push(`off:${r.status}`);
       if (r.status === 200 && r.data?.request_options?.seller_id) sellerId = String(r.data.request_options.seller_id);
       else diag.push(String(r.data).slice(0, 100));
-    } catch (e: any) { diag.push(`off_err:${e.message?.slice(0, 80)}`); }
+    } catch (e: any) {
+      spyLog("OFFERS", "GET", offUrl, undefined, headers as any, null, e);
+      diag.push(`off_err:${e.message?.slice(0, 80)}`);
+    }
   }
 
   // Attempt 3: HTML page via proxy — scan scripts + member links
   if (!sellerId) {
+    const htmlHeaders = { "User-Agent": headers["User-Agent"], "Accept": "text/html,*/*;q=0.8", "Accept-Language": headers["Accept-Language"], "Cookie": headers["Cookie"] };
     try {
       const r = await axios.get(`${base}/items/${itemId}`, {
-        headers: { "User-Agent": headers["User-Agent"], "Accept": "text/html,*/*;q=0.8", "Accept-Language": headers["Accept-Language"], "Cookie": headers["Cookie"] },
+        headers: htmlHeaders,
         proxy, validateStatus: () => true, timeout: 20000,
       });
+      spyLog("HTML_PAGE", "GET", `${base}/items/${itemId}`, undefined, htmlHeaders as any, { status: r.status, data: typeof r.data === "string" ? r.data.slice(0, 300) : r.data });
       diag.push(`html:${r.status}`);
       if (r.status === 200) {
         const $ = cheerio.load(r.data as string);
@@ -279,17 +324,24 @@ async function reserveItemPuppeteer(itemId: string, cookiesStr: string, domain =
         });
         if (!sellerId) diag.push(`html_preview:${String(r.data).slice(0, 120)}`);
       }
-    } catch (e: any) { diag.push(`html_err:${e.message?.slice(0, 80)}`); }
+    } catch (e: any) {
+      spyLog("HTML_PAGE", "GET", `${base}/items/${itemId}`, undefined, htmlHeaders as any, null, e);
+      diag.push(`html_err:${e.message?.slice(0, 80)}`);
+    }
   }
 
   if (!sellerId) throw new Error(`seller_id_not_found [${diag.join(" | ")}]`);
 
+  console.log(`[SPY] seller_id encontrado: ${sellerId}`);
+
   // Step 2: open conversation (reserves the item)
+  const convBody = { initiator: "buy", item_id: String(itemId), opposite_user_id: sellerId };
   const convResp = await axios.post(
     `${base}/api/v2/conversations`,
-    { initiator: "buy", item_id: String(itemId), opposite_user_id: sellerId },
+    convBody,
     { headers, proxy, validateStatus: () => true, timeout: 20000 }
   );
+  spyLog("CONVERSATIONS", "POST", `${base}/api/v2/conversations`, convBody, headers as any, { status: convResp.status, data: convResp.data });
   if (convResp.status !== 200 && convResp.status !== 201) {
     const preview = JSON.stringify(convResp.data).slice(0, 300);
     throw new Error(`conversations_${convResp.status}: ${preview}`);
@@ -298,11 +350,13 @@ async function reserveItemPuppeteer(itemId: string, cookiesStr: string, domain =
   if (!transactionId) throw new Error(`no_transaction_id: ${JSON.stringify(convResp.data).slice(0, 200)}`);
 
   // Step 3: build checkout (locks the reservation)
+  const buildBody = { purchase_items: [{ id: transactionId, type: "transaction" }] };
   const buildResp = await axios.post(
     `${base}/api/v2/purchases/checkout/build`,
-    { purchase_items: [{ id: transactionId, type: "transaction" }] },
+    buildBody,
     { headers, proxy, validateStatus: () => true, timeout: 20000 }
   );
+  spyLog("CHECKOUT_BUILD", "POST", `${base}/api/v2/purchases/checkout/build`, buildBody, headers as any, { status: buildResp.status, data: buildResp.data });
   const purchaseId = buildResp.data?.checkout?.purchase_id || buildResp.data?.purchase_id || String(transactionId);
 
   return { transactionId: String(transactionId), purchaseId: String(purchaseId) };
@@ -337,7 +391,10 @@ async function startBazookaWorker() {
 
 async function startServer() {
   await initDB();
-  startBazookaWorker().catch(e => console.error("Bazooka worker crash:", e.message));
+  // Worker desactivado — los jobs ahora los gestiona Blackstock vía /api/bazooka/blackstock-bridge
+  // startBazookaWorker().catch(e => console.error("Bazooka worker crash:", e.message));
+  // Limpiar jobs atascados de ejecuciones anteriores
+  await pool.query("UPDATE bazooka_jobs SET status='failed', error_message='worker_disabled' WHERE status IN ('pending','processing')").catch(() => {});
 
   const app = express();
 
@@ -847,6 +904,242 @@ async function startServer() {
   });
 
   // ── Bazooka / Reserve endpoints ─────────────────────────────────────────────
+
+  // ══════════════════════════════════════════════════════════════════
+  // BLACKSTOCK BRIDGE
+  // El endpoint POST /api/bazooka/client/jobs de Blackstock NO requiere
+  // autenticación (confirmado en server.js línea 994):
+  //   "Sin autenticación — cualquier extensión instalada puede enviar jobs."
+  // Solo necesitamos replicar los headers de la extensión Chrome.
+  // ══════════════════════════════════════════════════════════════════
+
+  const EXT_ID        = "mbjjaobpmbcpnmmlmobkllamilnmbfap";
+  const BLACKSTOCK_API = "https://api.blackstock.es";
+  const CLIENT_PREFIX  = "/api/bazooka/client";
+
+  const jitter = (min = 800, max = 2500) =>
+    new Promise(r => setTimeout(r, Math.floor(Math.random() * (max - min + 1)) + min));
+
+  function buildExtHeaders(extra: Record<string, string> = {}): Record<string, string> {
+    return {
+      "User-Agent":        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.207 Safari/537.36",
+      "sec-ch-ua":         '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+      "sec-ch-ua-mobile":  "?0",
+      "sec-ch-ua-platform":'"Windows"',
+      "Accept":            "application/json, text/plain, */*",
+      "Accept-Language":   "es-ES,es;q=0.9,en;q=0.8",
+      "Accept-Encoding":   "gzip, deflate, br",
+      "Content-Type":      "application/json",
+      "Origin":            `chrome-extension://${EXT_ID}`,
+      "Referer":           `chrome-extension://${EXT_ID}/dashboard.html`,
+      "Sec-Fetch-Dest":    "empty",
+      "Sec-Fetch-Mode":    "cors",
+      "Sec-Fetch-Site":    "cross-site",
+      "Connection":        "keep-alive",
+      ...extra,
+    };
+  }
+
+  // LOGIN endpoint — mantenido por si el usuario tiene cuenta Blackstock
+  app.post("/api/bazooka/blackstock-login", requireAuth as any, async (req: AuthRequest, res) => {
+    const { email, password } = req.body as { email: string; password: string };
+    if (!email || !password) return res.status(400).json({ error: "email y password requeridos" });
+
+    // 1. Obtener CSRF antes del login (sin cookie todavía)
+    let csrfToken = "";
+    try {
+      const csrfResp = await axios.get(`${BLACKSTOCK_API}${CLIENT_PREFIX}/csrf`, {
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.207 Safari/537.36",
+          "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": '"Windows"',
+          "Origin": `chrome-extension://${EXT_ID}`,
+          "Referer": `chrome-extension://${EXT_ID}/dashboard.html`,
+          "Sec-Fetch-Dest": "empty",
+          "Sec-Fetch-Mode": "cors",
+          "Sec-Fetch-Site": "cross-site",
+        },
+        validateStatus: () => true,
+        timeout: 15000,
+      });
+
+      console.log(`[BS-LOGIN] CSRF pre-login status=${csrfResp.status}`);
+      // Capturar Set-Cookie del CSRF (la sesión empieza aquí)
+      const setCookieHeader = csrfResp.headers["set-cookie"] as string | string[] | undefined;
+      const initialCookie = Array.isArray(setCookieHeader)
+        ? setCookieHeader.map((c: string) => c.split(";")[0]).join("; ")
+        : (String(setCookieHeader || "")).split(";")[0];
+
+      csrfToken = csrfResp.data?.csrfToken || "";
+      if (!csrfToken) return res.status(502).json({ error: "No se pudo obtener CSRF inicial", detail: csrfResp.data });
+
+      // 2. POST /login con esa cookie + CSRF
+      await jitter(800, 1800);
+      const loginResp = await axios.post(
+        `${BLACKSTOCK_API}${CLIENT_PREFIX}/login`,
+        { email, password },
+        {
+          headers: {
+            "Content-Type": "application/json",
+            "x-csrf-token": csrfToken,
+            "Cookie": initialCookie,
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.207 Safari/537.36",
+            "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+            "Origin": `chrome-extension://${EXT_ID}`,
+            "Referer": `chrome-extension://${EXT_ID}/dashboard.html`,
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "cross-site",
+          },
+          validateStatus: () => true,
+          timeout: 20000,
+        }
+      );
+
+      console.log(`[BS-LOGIN] login status=${loginResp.status} data=${JSON.stringify(loginResp.data).slice(0, 200)}`);
+
+      if (!loginResp.data?.ok && loginResp.status !== 200) {
+        return res.status(loginResp.status).json({ error: loginResp.data?.error || `login_failed_${loginResp.status}`, detail: loginResp.data });
+      }
+
+      // 3. Consolidar todas las cookies de login (la sesión autenticada)
+      const loginSetCookie = loginResp.headers["set-cookie"] as string | string[] | undefined;
+      const allCookieParts: string[] = [];
+
+      // Primero las del CSRF inicial (contienen el sid)
+      if (initialCookie) {
+        initialCookie.split(";").map((p: string) => p.trim()).filter(Boolean).forEach((p: string) => allCookieParts.push(p));
+      }
+      // Luego las del login (pueden sobreescribir/ampliar la sesión)
+      if (Array.isArray(loginSetCookie)) {
+        loginSetCookie.forEach((c: string) => {
+          const cookiePart = c.split(";")[0].trim();
+          if (cookiePart) allCookieParts.push(cookiePart);
+        });
+      } else if (loginSetCookie) {
+        allCookieParts.push(String(loginSetCookie).split(";")[0].trim());
+      }
+
+      // También incluir csrfToken renovado si viene en el body
+      if (loginResp.data?.csrfToken) csrfToken = String(loginResp.data.csrfToken);
+
+      // Deduplicar por nombre de cookie (la última gana)
+      const cookieMap = new Map<string, string>();
+      allCookieParts.forEach(part => {
+        const [name] = part.split("=");
+        if (name) cookieMap.set(name.trim(), part);
+      });
+      const finalCookie = Array.from(cookieMap.values()).join("; ");
+
+      console.log(`[BS-LOGIN] sesión obtenida: ${finalCookie.slice(0, 120)}…`);
+      return res.json({ ok: true, blackstockCookie: finalCookie, email: loginResp.data?.account?.email || email });
+
+    } catch (e: any) {
+      return res.status(502).json({ error: `Error en login Blackstock: ${e.message}` });
+    }
+  });
+
+  app.post("/api/bazooka/blackstock-bridge", requireLicense as any, async (req: AuthRequest, res) => {
+    const { url, title } = req.body as { url: string; title?: string };
+
+    if (!url) return res.status(400).json({ error: "url requerida" });
+
+    const proxy = getProxyConfig();
+
+    // ── 1. Jitter inicial ──
+    await jitter(800, 2500);
+
+    // ── 2. Extraer accountMeta del HTML de Vinted (mismo regex que background.js) ──
+    let accountMemberId = "";
+    let accountName = "";
+    let accountUrl = "";
+
+    try {
+      const pageResp = await axios.get(url, {
+        headers: {
+          "User-Agent":        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.207 Safari/537.36",
+          "Accept":            "text/html,application/xhtml+xml,*/*;q=0.9,*/*;q=0.8",
+          "Accept-Language":   "es-ES,es;q=0.9",
+          "sec-ch-ua":         '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+          "sec-ch-ua-mobile":  "?0",
+          "sec-ch-ua-platform":'"Windows"',
+          "Sec-Fetch-Dest":    "document",
+          "Sec-Fetch-Mode":    "navigate",
+          "Sec-Fetch-Site":    "none",
+        },
+        proxy,
+        validateStatus: () => true,
+        timeout: 20000,
+      });
+
+      if (pageResp.status === 200) {
+        const html = String(pageResp.data);
+        const regex = /href="([^"]*\/member\/(\d+)(?:-([^"/?#]+))?[^"]*)"[^>]*>([\s\S]{0,180}?)<\/a>/gi;
+        let match: RegExpExecArray | null;
+        const candidates: Array<{ accountMemberId: string; accountName: string; accountUrl: string }> = [];
+
+        while ((match = regex.exec(html)) !== null) {
+          const memberHref = match[1] || "";
+          const memberId   = String(match[2] || "").trim();
+          const slug       = String(match[3] || "").trim();
+          const anchorText = (match[4] || "").replace(/<[^>]+>/g, "").trim();
+          const name       = anchorText || slug.replace(/-/g, " ");
+          let resolvedUrl  = "";
+          try { const u = new URL(memberHref, url); u.hash = ""; u.search = ""; resolvedUrl = u.toString(); } catch {}
+          if (!memberId && !name) continue;
+          candidates.push({ accountMemberId: memberId, accountName: name, accountUrl: resolvedUrl });
+        }
+
+        if (candidates.length > 0) {
+          const best = [...candidates].reverse().find(c => c.accountName || c.accountMemberId) || candidates[candidates.length - 1];
+          accountMemberId = best.accountMemberId;
+          accountName     = best.accountName;
+          accountUrl      = best.accountUrl;
+        }
+        console.log(`[BS] accountMeta: id=${accountMemberId} name=${accountName}`);
+      } else {
+        console.log(`[BS] HTML status=${pageResp.status}`);
+      }
+    } catch (e: any) {
+      console.log(`[BS] HTML error: ${e.message}`);
+    }
+
+    // ── 3. Jitter antes del POST ──
+    await jitter(600, 1800);
+
+    // ── 4. POST directo a Blackstock — SIN autenticación (confirmado en source) ──
+    const jobPayload = { url, title: title || "", accountName, accountMemberId, accountUrl };
+    console.log(`[BS] POST /jobs → ${JSON.stringify(jobPayload)}`);
+
+    try {
+      const resp = await axios.post(
+        `${BLACKSTOCK_API}${CLIENT_PREFIX}/jobs`,
+        jobPayload,
+        { headers: buildExtHeaders(), validateStatus: () => true, timeout: 20000 }
+      );
+
+      console.log(`[BS] response ${resp.status} → ${JSON.stringify(resp.data).slice(0, 300)}`);
+
+      if (resp.status === 200 || resp.status === 201) {
+        const itemId = url.match(/\/items\/(\d+)/)?.[1] || url.match(/\/(\d+)-/)?.[1] || null;
+        if (itemId) {
+          await pool.query(
+            "INSERT INTO bazooka_jobs (user_id, url, title, item_id, vinted_cookies, status, note) VALUES ($1,$2,$3,$4,$5,'done',$6) ON CONFLICT DO NOTHING",
+            [req.user!.id, url, title || null, itemId, "blackstock", `bs_job_id=${resp.data?.job?.id ?? ""}`]
+          ).catch(() => {});
+        }
+        return res.json({ ok: true, job: resp.data?.job || null, dashboard: resp.data?.dashboard || null, accountMemberId, accountName });
+      } else {
+        return res.status(resp.status).json({ error: `Blackstock ${resp.status}`, detail: resp.data });
+      }
+    } catch (e: any) {
+      return res.status(502).json({ error: `Error POST job: ${e.message}` });
+    }
+  });
 
   app.post("/api/bazooka/enqueue", requireLicense as any, async (req: AuthRequest, res) => {
     const items = Array.isArray(req.body) ? req.body : [req.body];
