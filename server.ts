@@ -790,22 +790,29 @@ async function executeFastPurchase(
   const axCfg = {
     headers,
     httpsAgent:     agent,
-    proxy:          false as const,   // desactiva el proxy nativo de axios (usamos agent)
+    proxy:          false as const,
     validateStatus: () => true,
-    timeout:        12_000,
+    timeout:        25_000,   // IPRoyal tarda 8-15s — margen suficiente
   };
 
   console.log(`[SNIPER][W${workerIndex}${attempt ? `+retry` : ""}] proxy=${label}`);
 
   try {
     // POST 1 — Conversación (reserva)
+    // Probamos dos formatos de body: moderno y legacy
+    const convBody = {
+      conversation: {
+        item_id:    Number(itemId),
+        user_id:    Number(sellerId),
+      }
+    };
     const convResp = await axios.post(
       `${base}/api/v2/conversations`,
-      { initiator: "buy", item_id: String(itemId), opposite_user_id: String(sellerId) },
+      convBody,
       axCfg,
     );
 
-    console.log(`[SNIPER][W${workerIndex}] conv=${convResp.status} (${Date.now() - t0}ms)`);
+    console.log(`[SNIPER][W${workerIndex}] conv=${convResp.status} body=${JSON.stringify(convResp.data).slice(0, 200)} (${Date.now() - t0}ms)`);
 
     // Sesión caducada
     if (convResp.status === 401) {
