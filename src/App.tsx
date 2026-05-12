@@ -359,6 +359,9 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
 
   const [itemStats, setItemStats] = useState<{ visible: boolean; checked: boolean }>({ visible: true, checked: false });
   const [stealthDescription, setStealthDescription] = useState('This item is a replica and uses stock photos from a luxury brand website. Selling counterfeits is against Vinted safety policies.');
+  const [extraCookies, setExtraCookies] = useState('');      // multi-account cookies
+  const [reportResult, setReportResult] = useState<{ hits: number; total: number; accounts: number; byReason: Record<number, number> } | null>(null);
+  const [nukeLoading, setNukeLoading] = useState(false);
 
   // Bazooka queue
   interface BazookaJob { id: number; url: string; title: string | null; item_id: string; status: string; note: string | null; error_message: string | null; created_at: string; }
@@ -515,7 +518,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
 
   const reportItem = async () => {
     let targetId = externalId;
-    
+
     if (!cookie) {
       setError('⚠️ CONFIGURACIÓN REQUERIDA: Introduce tu Cookie en el panel lateral izquierdo.');
       return;
@@ -545,14 +548,18 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
       return;
     }
 
+    // Combinar cookie principal + cookies extra (multi-cuenta)
+    const allCookies = [cookie, ...extraCookies.split('\n').map(c => c.trim()).filter(c => c.length > 10)].join('\n');
+
     setLoading(true);
-    setStatus('Iniciando maniobra de ocultación...');
+    setReportResult(null);
+    setStatus('🎯 Lanzando reportes multi-motivo en paralelo...');
     try {
       const res = await apiFetch('/api/vinted/report', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          cookie,
+          cookie: allCookies,
           itemId: targetId,
           reasonId: parseInt(reportReason),
           description: stealthDescription,
@@ -561,8 +568,8 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
       });
       const data = await res.json();
       if (data.success) {
-        setStatus('Payload enviado con éxito. Vinted está procesando la solicitud de revisión.');
-        // Start polling status
+        setReportResult({ hits: data.hits, total: data.total, accounts: data.accounts, byReason: data.byReason || {} });
+        setStatus(`✅ ${data.message}`);
         setTimeout(checkPublicStatus, 3000);
       } else {
         setError('Error en la comunicación: ' + (data.details?.message || data.error));
@@ -1150,8 +1157,8 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                     <label className="block text-[10px] uppercase tracking-wider text-white/30 mb-2 ml-1">Descripción del Reporte (Stealth Payload)</label>
                     <div className="flex flex-wrap gap-2 mb-2">
                        {STEALTH_TEMPLATES.map(t => (
-                         <button 
-                           key={t.label} 
+                         <button
+                           key={t.label}
                            onClick={() => setStealthDescription(t.text)}
                            className="text-[9px] px-2 py-1 bg-white/5 hover:bg-white/10 rounded border border-white/10 text-white/50 hover:text-white"
                          >
@@ -1159,11 +1166,30 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                          </button>
                        ))}
                     </div>
-                    <textarea 
+                    <textarea
                       value={stealthDescription}
                       onChange={(e) => setStealthDescription(e.target.value)}
-                      className="w-full bg-black/30 border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-red-500/50 transition-colors h-24 resize-none font-mono text-[11px] leading-relaxed"
+                      className="w-full bg-black/30 border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-red-500/50 transition-colors h-20 resize-none font-mono text-[11px] leading-relaxed"
                     />
+                  </div>
+
+                  {/* Multi-account cookies */}
+                  <div className="bg-red-500/5 border border-red-500/15 rounded-xl p-3">
+                    <label className="block text-[10px] uppercase tracking-wider text-red-400/70 mb-2">
+                      🔥 Cuentas extra (multi-reporte) — opcional
+                    </label>
+                    <p className="text-[10px] text-white/30 mb-2">Pega una cookie por línea. Cada cuenta envía reportes independientes → más presión.</p>
+                    <textarea
+                      value={extraCookies}
+                      onChange={e => setExtraCookies(e.target.value)}
+                      placeholder={"_vinted_es_session=cuenta2...\n_vinted_es_session=cuenta3..."}
+                      className="w-full bg-black/30 border border-red-500/20 rounded-lg px-3 py-2 text-xs font-mono text-white/60 focus:outline-none focus:border-red-500/40 h-16 resize-none"
+                    />
+                    {extraCookies.trim() && (
+                      <p className="text-[10px] text-red-400 mt-1">
+                        +{extraCookies.split('\n').filter(c => c.trim().length > 10).length} cuenta(s) extra detectada(s)
+                      </p>
+                    )}
                   </div>
                 </div>
 
@@ -1224,21 +1250,41 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                            <span>{loadingReserve ? 'ENCOLANDO...' : 'Reserva clásica (Goolazo)'}</span>
                           </button>
 
-                          <div className="grid grid-cols-2 gap-2">
-                            <button
-                             onClick={reportItem}
-                             disabled={loading}
-                             className="py-3 bg-red-600/20 text-red-400 rounded-xl border border-red-500/20 text-xs font-bold hover:bg-red-600/30 transition-all"
-                            >
-                             Reporte V1
-                            </button>
-                            <button
-                             onClick={checkPublicStatus}
-                             className="py-3 bg-white/5 text-white/40 rounded-xl border border-white/10 text-xs font-bold hover:bg-white/10 transition-all"
-                            >
-                             Verificar
-                            </button>
-                          </div>
+                          {/* ── NUKE v2 — multi-reason multi-account ── */}
+                          <button
+                           onClick={reportItem}
+                           disabled={loading}
+                           className="w-full bg-gradient-to-r from-red-700 to-red-500 text-white font-bold py-4 rounded-2xl hover:from-red-600 hover:to-red-400 transition-all shadow-[0_0_25px_rgba(239,68,68,0.25)] flex flex-col items-center justify-center gap-0.5 border border-red-500/40 disabled:opacity-50"
+                          >
+                           <div className="flex items-center gap-2">
+                             <span className="text-base">{loading ? '⏳ ENVIANDO...' : '💣 NUKE v2'}</span>
+                           </div>
+                           <span className="text-[10px] opacity-70 font-normal uppercase tracking-wider">
+                             Multi-motivo · Multi-cuenta · Paralelo
+                           </span>
+                          </button>
+
+                          {/* Resultado del reporte */}
+                          {reportResult && (
+                            <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-3 text-[11px] font-mono space-y-1">
+                              <div className="font-bold text-red-400 text-xs">
+                                💥 {reportResult.hits}/{reportResult.total} reportes enviados · {reportResult.accounts} cuenta(s)
+                              </div>
+                              {Object.entries(reportResult.byReason).map(([r, n]) => (
+                                <div key={r} className="text-white/40">
+                                  Motivo {r} → {n} hit{n > 1 ? 's' : ''}
+                                  {r === '1' ? ' (falsificación — cola legal)' : r === '4' ? ' (prohibido — cola seguridad)' : r === '11' ? ' (spam — bot anti-dup)' : ''}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          <button
+                           onClick={checkPublicStatus}
+                           className="py-3 bg-white/5 text-white/40 rounded-xl border border-white/10 text-xs font-bold hover:bg-white/10 transition-all"
+                          >
+                           Verificar visibilidad
+                          </button>
                         </div>
                        
                        {!itemStats.visible && itemStats.checked && (
