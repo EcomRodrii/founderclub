@@ -442,6 +442,8 @@ function getProxyAgent(proxyUrl: string): HttpsProxyAgent<string> {
       keepAlive: true,
       keepAliveMsecs: 10_000,
       maxSockets: 10,
+      // IPRoyal Web Unblocker usa certificado propio (MITM) → desactivar verificación
+      rejectUnauthorized: false,
     } as any));
   }
   return _agentCache.get(proxyUrl)!;
@@ -1714,7 +1716,7 @@ async function startServer() {
         return (async () => {
           const t0 = Date.now();
           // Agente fresco por slot — NO usar caché para evitar reutilizar TCP
-          const freshAgent = new HttpsProxyAgent(entry.url, { keepAlive: false });
+          const freshAgent = new HttpsProxyAgent(entry.url, { keepAlive: false, rejectUnauthorized: false } as any);
           try {
             const r = await axios.get("https://api.ipify.org?format=json", {
               httpsAgent: freshAgent,
