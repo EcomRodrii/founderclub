@@ -74,6 +74,39 @@ export async function initDB() {
       created_at TIMESTAMP DEFAULT NOW(),
       updated_at TIMESTAMP DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS sniper_history (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      item_id VARCHAR(50) NOT NULL,
+      item_url TEXT NOT NULL,
+      item_title TEXT,
+      seller_id VARCHAR(50),
+      success BOOLEAN NOT NULL,
+      winner_worker INTEGER,
+      winner_proxy TEXT,
+      transaction_id TEXT,
+      purchase_id TEXT,
+      fastest_ms INTEGER,
+      workers_total INTEGER,
+      workers_ok INTEGER,
+      session_expired BOOLEAN DEFAULT FALSE,
+      captcha_detected BOOLEAN DEFAULT FALSE,
+      raw_results JSONB,
+      fired_at TIMESTAMP DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS proxy_health (
+      id SERIAL PRIMARY KEY,
+      proxy_label TEXT UNIQUE NOT NULL,
+      last_used TIMESTAMP,
+      last_status VARCHAR(20),
+      success_count INTEGER DEFAULT 0,
+      fail_count INTEGER DEFAULT 0,
+      captcha_count INTEGER DEFAULT 0,
+      banned BOOLEAN DEFAULT FALSE,
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
   `);
 
   // Create first admin from env if no admins exist

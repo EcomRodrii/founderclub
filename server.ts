@@ -488,13 +488,12 @@ async function sendWebhookAlert(message: string): Promise<void> {
   await Promise.allSettled(tasks);
 }
 
-// ─── DETECCIÓN DE SESIÓN CADUCADA ─────────────────────────────────────────────
-let _sessionExpiredAlertSent = false; // evita spam de webhooks
+// ─── DETECCIÓN DE SESIÓN CADUCADA ────────────────────────────────────────────
+let _sessionExpiredAlertSent = false;
 
 async function handleExpiredSession(domain: string): Promise<void> {
   if (_sessionExpiredAlertSent) return;
   _sessionExpiredAlertSent = true;
-
   const msg =
     `🚨 <b>SNIPER DETENIDO: Cookies caducadas</b>\n\n` +
     `El Sniper-Bazooka no puede autenticarse en <b>vinted.${domain}</b>.\n` +
@@ -502,12 +501,90 @@ async function handleExpiredSession(domain: string): Promise<void> {
     `→ Ve a tu app → panel lateral → <b>Vinted Session Cookie</b>\n` +
     `→ Actualiza con una cookie fresca de DevTools\n\n` +
     `⏱️ ${new Date().toISOString()}`;
-
-  console.error("[SNIPER] ⚠️  SESIÓN CADUCADA — enviando webhook");
+  console.error("[SNIPER] ⚠️  SESIÓN CADUCADA");
   await sendWebhookAlert(msg);
-
-  // Reset después de 5 min para permitir re-alerta si sigue caducada
   setTimeout(() => { _sessionExpiredAlertSent = false; }, 5 * 60_000);
+}
+
+// ─── DETECCIÓN DE CAPTCHA / DATADOME / CLOUDFLARE ────────────────────────────
+const CAPTCHA_SIGNATURES = [
+  "datadome", "cf-ray", "cloudflare", "captcha", "challenge",
+  "__ddg", "bot detected", "access denied",
+];
+
+function detectCaptcha(status: number, body: string): boolean {
+  if (status === 403 || status === 429) {
+    const lower = body.toLowerCase();
+    return CAPTCHA_SIGNATURES.some(sig => lower.includes(sig));
+  }
+  return false;
+}
+
+let _captchaAlertCooldown = new Map<string, number>(); // proxy → timestamp
+
+async function handleCaptchaDetected(proxyLabel: string, domain: string): Promise<void> {
+  const now = Date.now();
+  const last = _captchaAlertCooldown.get(proxyLabel) ?? 0;
+  if (now - last < 10 * 60_000) return; // cooldown 10 min por proxy
+  _captchaAlertCooldown.set(proxyLabel, now);
+
+  // Marcar proxy como banned en BD
+  await pool.query(
+    `INSERT INTO proxy_health (proxy_label, last_status, captcha_count, banned, updated_at)
+     VALUES ($1, 'captcha', 1, TRUE, NOW())
+     ON CONFLICT (proxy_label) DO UPDATE
+     SET captcha_count = proxy_health.captcha_count + 1,
+         banned = TRUE, last_status = 'captcha', updated_at = NOW()`,
+    [proxyLabel]
+  ).catch(() => {});
+
+  const msg =
+    `⚠️ <b>CAPTCHA DETECTADO</b>\n\n` +
+    `Proxy <code>${proxyLabel}</code> ha sido marcado por Vinted/${domain}.\n` +
+    `→ El proxy ha sido marcado como <b>banned</b> en proxy_health.\n` +
+    `→ Los próximos disparos usarán otro proxy del pool.\n\n` +
+    `⏱️ ${new Date().toISOString()}`;
+
+  console.warn(`[SNIPER] CAPTCHA en proxy=${proxyLabel}`);
+  await sendWebhookAlert(msg);
+}
+
+// ─── LOG DE GUERRA — persiste cada intento en sniper_history ─────────────────
+async function saveToWarLog(
+  userId: number,
+  scout: ScoutResult,
+  results: PurchaseResult[],
+  winner: PurchaseResult | undefined
+): Promise<void> {
+  const workersOk = results.filter(r => r.success).length;
+  const sessionExpired = results.some(r => r.sessionExpired);
+  const captchaDetected = results.some(r => r.error?.includes("captcha") || r.error?.includes("403"));
+  await pool.query(
+    `INSERT INTO sniper_history
+       (user_id, item_id, item_url, item_title, seller_id, success,
+        winner_worker, winner_proxy, transaction_id, purchase_id,
+        fastest_ms, workers_total, workers_ok,
+        session_expired, captcha_detected, raw_results)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+    [
+      userId,
+      scout.itemId,
+      `https://www.vinted.${scout.domain}/items/${scout.itemId}`,
+      scout.title || null,
+      scout.sellerId,
+      !!winner,
+      winner ? results.indexOf(winner) : null,
+      winner?.proxyUsed ?? null,
+      winner?.transactionId ?? null,
+      winner?.purchaseId ?? null,
+      winner?.durationMs ?? null,
+      results.length,
+      workersOk,
+      sessionExpired,
+      captchaDetected,
+      JSON.stringify(results),
+    ]
+  ).catch(e => console.error("[WAR LOG] Error guardando:", e.message));
 }
 
 // ─── Pool de device IDs rotatorios ───────────────────────────────────────────
@@ -693,6 +770,11 @@ async function executeFastPurchase(
     if (convResp.status === 401) {
       await handleExpiredSession(domain);
       return { success: false, error: "session_expired_401", sessionExpired: true, durationMs: Date.now() - t0, proxyUsed: label };
+    }
+
+    // Captcha / DataDome detectado
+    if (detectCaptcha(convResp.status, JSON.stringify(convResp.data))) {
+      await handleCaptchaDetected(label, domain);
     }
 
     // Smart retry en errores de red/rate-limit
@@ -1586,24 +1668,112 @@ async function startServer() {
 
     console.log(`[SNIPER] results: ${parsed.map(r => `w${r.worker}:${r.success ? "OK" : "FAIL"}`).join(" | ")}`);
 
-    // ── 3. Guardar en BD ──
-    if (winner?.transactionId) {
-      await pool.query(
-        "INSERT INTO bazooka_jobs (user_id, url, title, item_id, vinted_cookies, status, note) VALUES ($1,$2,$3,$4,$5,'done',$6) ON CONFLICT DO NOTHING",
-        [req.user!.id, url, scout.title || null, scout.itemId, "sniper", `tx=${winner.transactionId} purchase=${winner.purchaseId} dur=${winner.durationMs}ms`]
-      ).catch(() => {});
-    }
+    // ── 3. Log de guerra ──
+    await saveToWarLog(req.user!.id, scout, parsed, winner);
 
     return res.json({
-      ok: !allErrors,
-      itemId:       scout.itemId,
-      sellerId:     scout.sellerId,
-      title:        scout.title,
-      workers:      N,
-      winner:       winner || null,
-      results:      parsed,
-      fastestMs:    Math.min(...parsed.map(r => r.durationMs ?? 9999)),
+      ok:        !allErrors,
+      itemId:    scout.itemId,
+      sellerId:  scout.sellerId,
+      title:     scout.title,
+      workers:   N,
+      winner:    winner || null,
+      results:   parsed,
+      fastestMs: Math.min(...parsed.map(r => r.durationMs ?? 9999)),
     });
+  });
+
+  // ── TEST DE PROXIES — verifica IPs y detecta leaks ──────────────────────────
+  app.get("/api/sniper/test-proxies", requireAuth as any, async (_req: AuthRequest, res) => {
+    const pool2 = getProxyPool();
+
+    if (!pool2.length) {
+      // Sin proxies: devuelve la IP de Railway (útil para comparar)
+      try {
+        const r = await axios.get("https://api.ipify.org?format=json", { timeout: 8_000 });
+        return res.json({ ok: true, mode: "no-proxy", railwayIp: r.data?.ip, proxies: [] });
+      } catch {
+        return res.json({ ok: false, mode: "no-proxy", error: "ipify timeout" });
+      }
+    }
+
+    // Testear cada proxy llamando al echo de ipify a través de él
+    const tests = await Promise.allSettled(
+      pool2.map(async (entry, i) => {
+        const t0 = Date.now();
+        try {
+          const r = await axios.get("https://api.ipify.org?format=json", {
+            httpsAgent: getProxyAgent(entry.url),
+            proxy:      false as const,
+            timeout:    10_000,
+          });
+          const ip = r.data?.ip ?? "unknown";
+
+          // Actualizar proxy_health en BD
+          await pool.query(
+            `INSERT INTO proxy_health (proxy_label, last_status, success_count, last_used, updated_at)
+             VALUES ($1,'ok',1,NOW(),NOW())
+             ON CONFLICT (proxy_label) DO UPDATE
+             SET success_count = proxy_health.success_count + 1,
+                 last_status = 'ok', last_used = NOW(), updated_at = NOW(), banned = FALSE`,
+            [entry.label]
+          ).catch(() => {});
+
+          return { index: i, proxy: entry.label, ip, latencyMs: Date.now() - t0, ok: true };
+        } catch (e: any) {
+          await pool.query(
+            `INSERT INTO proxy_health (proxy_label, last_status, fail_count, last_used, updated_at)
+             VALUES ($1,'fail',1,NOW(),NOW())
+             ON CONFLICT (proxy_label) DO UPDATE
+             SET fail_count = proxy_health.fail_count + 1,
+                 last_status = 'fail', last_used = NOW(), updated_at = NOW()`,
+            [entry.label]
+          ).catch(() => {});
+          return { index: i, proxy: entry.label, ip: null, latencyMs: Date.now() - t0, ok: false, error: e.message };
+        }
+      })
+    );
+
+    const results = tests.map(t => t.status === "fulfilled" ? t.value : { ok: false, error: String((t as any).reason) });
+    const ips     = results.filter(r => r.ok).map(r => r.ip);
+    const unique  = new Set(ips).size;
+    const leak    = unique < ips.length; // si hay IPs repetidas, posible leak
+
+    return res.json({ ok: true, proxies: results, uniqueIps: unique, totalOk: ips.length, ipLeakWarning: leak });
+  });
+
+  // ── WAR LOG — historial de disparos ─────────────────────────────────────────
+  app.get("/api/sniper/history", requireAuth as any, async (req: AuthRequest, res) => {
+    const limit = Math.min(Number(req.query.limit) || 50, 200);
+    const rows = await pool.query(
+      `SELECT id, item_id, item_url, item_title, seller_id, success,
+              winner_worker, winner_proxy, transaction_id, fastest_ms,
+              workers_total, workers_ok, session_expired, captcha_detected, fired_at
+       FROM sniper_history
+       WHERE user_id = $1
+       ORDER BY fired_at DESC LIMIT $2`,
+      [req.user!.id, limit]
+    );
+    const stats = await pool.query(
+      `SELECT
+         COUNT(*) as total,
+         COUNT(*) FILTER (WHERE success) as wins,
+         COUNT(*) FILTER (WHERE session_expired) as session_errors,
+         COUNT(*) FILTER (WHERE captcha_detected) as captchas,
+         ROUND(AVG(fastest_ms)) as avg_ms,
+         MIN(fastest_ms) as best_ms
+       FROM sniper_history WHERE user_id = $1`,
+      [req.user!.id]
+    );
+    return res.json({ history: rows.rows, stats: stats.rows[0] });
+  });
+
+  // ── PROXY HEALTH — estado del pool ──────────────────────────────────────────
+  app.get("/api/sniper/proxy-health", requireAuth as any, async (_req: AuthRequest, res) => {
+    const rows = await pool.query(
+      "SELECT * FROM proxy_health ORDER BY updated_at DESC"
+    );
+    return res.json({ pool: getProxyPool().map(p => p.label), health: rows.rows });
   });
 
   // ── Tongue / Gemini endpoints ───────────────────────────────────────────────
