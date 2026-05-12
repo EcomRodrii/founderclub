@@ -187,7 +187,8 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
   const [userId, setUserId] = useState<string>(() => localStorage.getItem('vinted_user_id') || '3152763908');
   const [domain, setDomain] = useState<string>(() => localStorage.getItem('vinted_domain') || 'es');
   const [profileUrl, setProfileUrl] = useState('https://www.vinted.es/member/3152763908');
-  const [activeTab, setActiveTab] = useState<'mine' | 'external' | 'tongues' | 'profits' | 'photos'>('mine');
+  const [activeTab, setActiveTab] = useState<'mine' | 'external' | 'tongues' | 'profits'>('mine');
+  const [tongueSubTab, setTongueSubTab] = useState<'editor' | 'photos'>('editor');
   
   // External Report State
   const [externalUrl, setExternalUrl] = useState('');
@@ -751,7 +752,6 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
             { id: 'external', icon: <ShieldCheck className="w-5 h-5" />, label: 'Ocultar', action: () => { setActiveTab('external'); setMobileSidebarOpen(false); } },
             { id: 'tongues', icon: <Scissors className="w-5 h-5" />, label: 'Lengüeta', action: () => { setActiveTab('tongues'); setMobileSidebarOpen(false); } },
             { id: 'profits', icon: <TrendingUp className="w-5 h-5" />, label: 'Beneficios', action: () => { setActiveTab('profits'); setMobileSidebarOpen(false); } },
-            { id: 'photos', icon: <ImageIcon className="w-5 h-5" />, label: 'Fotos', action: () => { setActiveTab('photos'); setMobileSidebarOpen(false); } },
           ].map(item => {
             const isActive = item.id === 'config' ? mobileSidebarOpen : (item.id !== 'config' && activeTab === item.id);
             return (
@@ -987,12 +987,6 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                   className={`text-xs uppercase tracking-widest font-bold pb-1 border-b-2 transition-all ${activeTab === 'profits' ? 'border-emerald-500 text-white' : 'border-transparent text-white/30 hover:text-white/60'}`}
                 >
                   Beneficios
-                </button>
-                <button
-                  onClick={() => setActiveTab('photos')}
-                  className={`text-xs uppercase tracking-widest font-bold pb-1 border-b-2 transition-all ${activeTab === 'photos' ? 'border-emerald-500 text-white' : 'border-transparent text-white/30 hover:text-white/60'}`}
-                >
-                  Fotos Únicas
                 </button>
               </div>
             </div>
@@ -1326,40 +1320,95 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
           </motion.div>
         )}
 
-        {activeTab === 'photos' && (
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
-            <div className="space-y-2">
-              <h2 className="text-3xl md:text-4xl font-black tracking-tighter text-white">
-                FOTOS <span className="text-emerald-500 italic">ÚNICAS</span>
-              </h2>
-              <p className="text-sm text-white/40 font-medium uppercase tracking-[0.3em]">Anti-Detección · Hash Único · Sin EXIF</p>
-            </div>
-            <ImageUniquifier />
-          </motion.div>
-        )}
-
         {activeTab === 'tongues' && (
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             className="space-y-6"
           >
-            <div className="bg-[#0f0f0f] border border-white/5 rounded-[2.5rem] p-8 md:p-12 shadow-2xl relative overflow-hidden group">
-              <div className="absolute top-0 right-0 p-8 opacity-5">
-                <Scissors className="w-32 h-32 text-emerald-500" />
-              </div>
-              
-              <div className="relative z-10 space-y-8">
-                <div className="space-y-2">
-                  <h2 className="text-3xl md:text-5xl font-black tracking-tighter text-white">
-                    EDITOR DE <span className="text-emerald-500 italic underline decoration-white/10 underline-offset-8">LENGÜETAS</span>
-                  </h2>
-                  <p className="text-sm text-white/40 font-medium uppercase tracking-[0.3em]">IA Vision • Reconstrucción Forense</p>
-                </div>
-
-                <TongueEditor />
-              </div>
+            {/* Sub-tab selector */}
+            <div className="flex gap-2">
+              <button
+                onClick={() => setTongueSubTab('editor')}
+                className={`flex items-center gap-2 px-5 py-2.5 rounded-2xl text-sm font-bold transition-all ${
+                  tongueSubTab === 'editor'
+                    ? 'bg-emerald-500 text-black shadow-[0_0_20px_rgba(16,185,129,0.3)]'
+                    : 'bg-white/5 text-white/40 hover:text-white hover:bg-white/10 border border-white/5'
+                }`}
+              >
+                <Scissors className="w-4 h-4" />
+                Editor de Lengüetas
+              </button>
+              <button
+                onClick={() => setTongueSubTab('photos')}
+                className={`flex items-center gap-2 px-5 py-2.5 rounded-2xl text-sm font-bold transition-all ${
+                  tongueSubTab === 'photos'
+                    ? 'bg-emerald-500 text-black shadow-[0_0_20px_rgba(16,185,129,0.3)]'
+                    : 'bg-white/5 text-white/40 hover:text-white hover:bg-white/10 border border-white/5'
+                }`}
+              >
+                <ImageIcon className="w-4 h-4" />
+                Fotos Únicas
+              </button>
             </div>
+
+            {/* Editor de Lengüetas */}
+            {tongueSubTab === 'editor' && (
+              <div className="bg-[#0f0f0f] border border-white/5 rounded-[2.5rem] p-8 md:p-12 shadow-2xl relative overflow-hidden group">
+                <div className="absolute top-0 right-0 p-8 opacity-5">
+                  <Scissors className="w-32 h-32 text-emerald-500" />
+                </div>
+                <div className="relative z-10 space-y-8">
+                  <div className="space-y-2">
+                    <h2 className="text-3xl md:text-5xl font-black tracking-tighter text-white">
+                      EDITOR DE <span className="text-emerald-500 italic underline decoration-white/10 underline-offset-8">LENGÜETAS</span>
+                    </h2>
+                    <p className="text-sm text-white/40 font-medium uppercase tracking-[0.3em]">IA Vision • Reconstrucción Forense</p>
+                  </div>
+                  <TongueEditor />
+                </div>
+              </div>
+            )}
+
+            {/* Fotos Únicas */}
+            {tongueSubTab === 'photos' && (
+              <div className="bg-[#0f0f0f] border border-white/5 rounded-[2.5rem] p-8 md:p-12 shadow-2xl relative overflow-hidden">
+                <div className="absolute top-0 right-0 p-8 opacity-5">
+                  <ImageIcon className="w-32 h-32 text-emerald-500" />
+                </div>
+                <div className="relative z-10 space-y-8">
+                  <div className="space-y-2">
+                    <h2 className="text-3xl md:text-5xl font-black tracking-tighter text-white">
+                      FOTOS <span className="text-emerald-500 italic underline decoration-white/10 underline-offset-8">ÚNICAS</span>
+                    </h2>
+                    <p className="text-sm text-white/40 font-medium uppercase tracking-[0.3em]">Anti-Detección · Hash Único · Sin EXIF</p>
+                  </div>
+
+                  {/* Explicación */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    {[
+                      { icon: '🗑️', title: 'Elimina metadatos', desc: 'Borra completamente los datos EXIF de la imagen: GPS, cámara, fecha, configuración. La foto queda limpia.' },
+                      { icon: '🎲', title: 'Ruido invisible', desc: 'Modifica aleatoriamente ±1-3 píxeles por canal RGB. Imperceptible al ojo humano pero cambia el hash por completo.' },
+                      { icon: '📐', title: 'Dimensiones únicas', desc: 'Reduce 1-4 píxeles al azar en anchura y altura. Rompe la detección por hash perceptual (pHash).' },
+                      { icon: '🔒', title: 'Hash 100% nuevo', desc: 'El resultado tiene MD5/SHA completamente diferente. Vinted, Wallapop y similares no detectarán la imagen como duplicada.' },
+                    ].map(item => (
+                      <div key={item.title} className="bg-white/[0.03] border border-white/5 rounded-2xl p-5">
+                        <div className="text-2xl mb-3">{item.icon}</div>
+                        <p className="text-sm font-bold text-white mb-1">{item.title}</p>
+                        <p className="text-xs text-white/40 leading-relaxed">{item.desc}</p>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-2xl px-5 py-4 text-sm text-emerald-300/80 flex items-start gap-3">
+                    <span className="text-lg mt-0.5">💡</span>
+                    <span>Todo el proceso ocurre en tu navegador. Las imágenes <strong className="text-emerald-300">nunca se suben al servidor</strong>. Puedes procesar múltiples fotos a la vez y descargarlas todas de un clic.</span>
+                  </div>
+
+                  <ImageUniquifier />
+                </div>
+              </div>
+            )}
           </motion.div>
         )}
       </main>
