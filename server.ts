@@ -1,5 +1,7 @@
 import express, { Request, Response, NextFunction } from "express";
 import axios from "axios";
+import https from "https";
+import { randomUUID } from "crypto";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import * as cheerio from "cheerio";
@@ -384,6 +386,192 @@ async function startBazookaWorker() {
       }
     } catch (err: any) { console.error("Bazooka worker loop error:", err.message); }
     await new Promise(r => setTimeout(r, 3000));
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SNIPER-BAZOOKA v1
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─── Keep-Alive HTTPS agent (reutiliza conexiones TCP/TLS) ────────────────────
+const keepAliveAgent = new https.Agent({
+  keepAlive: true,
+  keepAliveMsecs: 10_000,
+  maxSockets: 50,
+  maxFreeSockets: 10,
+});
+
+// ─── Pool de device IDs rotatorios ───────────────────────────────────────────
+const DEVICE_ID_POOL: string[] = Array.from({ length: 20 }, () => randomUUID());
+let deviceIdCursor = 0;
+function nextDeviceId(): string {
+  const id = DEVICE_ID_POOL[deviceIdCursor % DEVICE_ID_POOL.length];
+  deviceIdCursor++;
+  return id;
+}
+
+// ─── MODULE 3: THE GHOST — headers dinámicos que imitan la App iOS de Vinted ──
+function buildSniperHeaders(cookiesStr: string, domain = "es", extra: Record<string, string> = {}): Record<string, string> {
+  // Extraer Bearer token de las cookies (access_token_web o JWT suelto)
+  let bearerToken = "";
+  const jwtMatch = cookiesStr.match(/access_token_web=([A-Za-z0-9._-]+)/);
+  if (jwtMatch) bearerToken = jwtMatch[1];
+  else if (cookiesStr.trim().startsWith("eyJ")) bearerToken = cookiesStr.trim();
+
+  // Versión de app simulada (oscila entre builds reales conocidos)
+  const appVersions = ["22.10.0", "23.1.0", "23.4.2", "23.6.0", "24.0.1"];
+  const appVersion = appVersions[Math.floor(Math.random() * appVersions.length)];
+  const iosVersions = ["15.7", "16.0", "16.3", "16.6", "17.0", "17.2"];
+  const iosVersion = iosVersions[Math.floor(Math.random() * iosVersions.length)];
+  const scales = ["2.00", "3.00"];
+  const scale = scales[Math.floor(Math.random() * scales.length)];
+
+  const headers: Record<string, string> = {
+    "User-Agent":             `Vinted/${appVersion} (iPhone; iOS ${iosVersion}; Scale/${scale})`,
+    "X-App-Test-Group":       "control",
+    "X-Vinted-Language":      domain === "fr" ? "fr" : domain === "it" ? "it" : domain === "de" ? "de" : "es",
+    "X-Vinted-Device-Id":     nextDeviceId(),
+    "X-Vinted-Api-Client":    "ios",
+    "X-Vinted-Api-Version":   "2",
+    "Accept":                 "application/json",
+    "Accept-Language":        `${domain}-${domain.toUpperCase()};q=1.0, en;q=0.9`,
+    "Accept-Encoding":        "gzip, deflate, br",
+    "Content-Type":           "application/json",
+    "Connection":             "keep-alive",
+  };
+
+  if (bearerToken) headers["Authorization"] = `Bearer ${bearerToken}`;
+  if (cookiesStr && cookiesStr.includes("=")) headers["Cookie"] = cookiesStr;
+
+  return { ...headers, ...extra };
+}
+
+// ─── MODULE 1: THE SCOUT — extrae item_id y seller_id ─────────────────────────
+interface ScoutResult {
+  itemId: string;
+  sellerId: string;
+  title: string;
+  domain: string;
+}
+
+async function scoutItem(itemUrl: string, cookiesStr: string): Promise<ScoutResult> {
+  const domainMatch = itemUrl.match(/vinted\.([a-z.]+)\//);
+  const domain = domainMatch?.[1] ?? "es";
+  const itemIdMatch = itemUrl.match(/\/items\/(\d+)/) ?? itemUrl.match(/\/(\d+)-/);
+  const itemId = itemIdMatch?.[1] ?? "";
+
+  if (!itemId) throw new Error(`scout_no_item_id: ${itemUrl}`);
+
+  const proxy = getProxyConfig();
+  const base  = `https://www.vinted.${domain}`;
+
+  // Intento 1 — API mobile (más rápida y menos bloqueada que la web)
+  try {
+    const r = await axios.get(`${base}/api/v2/items/${itemId}`, {
+      headers: buildSniperHeaders(cookiesStr, domain),
+      proxy, httpsAgent: keepAliveAgent,
+      validateStatus: () => true, timeout: 10_000,
+    });
+    if (r.status === 200 && r.data?.item?.user_id) {
+      return { itemId, sellerId: String(r.data.item.user_id), title: r.data.item.title ?? "", domain };
+    }
+    console.log(`[SNIPER][scout] API ${r.status} — intentando HTML`);
+  } catch (e: any) {
+    console.log(`[SNIPER][scout] API err: ${e.message}`);
+  }
+
+  // Intento 2 — HTML page con proxy
+  try {
+    const r = await axios.get(`${base}/items/${itemId}`, {
+      headers: {
+        "User-Agent":      "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/21A329",
+        "Accept":          "text/html,application/xhtml+xml,*/*;q=0.9",
+        "Accept-Language": "es-ES,es;q=0.9",
+      },
+      proxy, httpsAgent: keepAliveAgent,
+      validateStatus: () => true, timeout: 15_000,
+    });
+    if (r.status === 200) {
+      const html = String(r.data);
+      // Buscar seller_id en JSON embebido
+      const patterns = [
+        /"user_id"\s*:\s*(\d+)/,
+        /"seller_id"\s*:\s*(\d+)/,
+        /"userId"\s*:\s*(\d+)/,
+        /\/member\/(\d+)/,
+      ];
+      for (const p of patterns) {
+        const m = html.match(p);
+        if (m?.[1]) {
+          return { itemId, sellerId: m[1], title: "", domain };
+        }
+      }
+    }
+    throw new Error(`scout_html_${r.status}_no_seller`);
+  } catch (e: any) {
+    throw new Error(`scout_failed: ${e.message}`);
+  }
+}
+
+// ─── MODULE 2: THE GUN — ejecuta la compra rápida con keep-alive ──────────────
+interface PurchaseResult {
+  success: boolean;
+  transactionId?: string;
+  purchaseId?: string;
+  error?: string;
+  durationMs: number;
+}
+
+async function executeFastPurchase(
+  itemId: string,
+  sellerId: string,
+  cookiesStr: string,
+  domain: string,
+  workerIndex: number,
+): Promise<PurchaseResult> {
+  const t0 = Date.now();
+  const base = `https://www.vinted.${domain}`;
+  const proxy = getProxyConfig();
+  const headers = buildSniperHeaders(cookiesStr, domain, {
+    "Referer": `https://www.vinted.${domain}/items/${itemId}`,
+    "X-Idempotency-Key": randomUUID(),
+  });
+
+  try {
+    // POST 1 — Abrir conversación (reserva el artículo)
+    const convResp = await axios.post(
+      `${base}/api/v2/conversations`,
+      { initiator: "buy", item_id: String(itemId), opposite_user_id: String(sellerId) },
+      { headers, proxy, httpsAgent: keepAliveAgent, validateStatus: () => true, timeout: 12_000 },
+    );
+
+    console.log(`[SNIPER][worker${workerIndex}] conv=${convResp.status}`);
+
+    if (convResp.status !== 200 && convResp.status !== 201) {
+      return { success: false, error: `conv_${convResp.status}: ${JSON.stringify(convResp.data).slice(0, 150)}`, durationMs: Date.now() - t0 };
+    }
+
+    const transactionId = convResp.data?.conversation?.transaction?.id;
+    if (!transactionId) {
+      return { success: false, error: `no_transaction_id: ${JSON.stringify(convResp.data).slice(0, 150)}`, durationMs: Date.now() - t0 };
+    }
+
+    // POST 2 — Build checkout (bloquea la reserva)
+    const checkoutResp = await axios.post(
+      `${base}/api/v2/purchases/checkout/build`,
+      { purchase_items: [{ id: transactionId, type: "transaction" }] },
+      { headers, proxy, httpsAgent: keepAliveAgent, validateStatus: () => true, timeout: 12_000 },
+    );
+
+    console.log(`[SNIPER][worker${workerIndex}] checkout=${checkoutResp.status} dur=${Date.now() - t0}ms`);
+
+    const purchaseId = checkoutResp.data?.checkout?.purchase_id
+      ?? checkoutResp.data?.purchase_id
+      ?? String(transactionId);
+
+    return { success: true, transactionId: String(transactionId), purchaseId: String(purchaseId), durationMs: Date.now() - t0 };
+  } catch (e: any) {
+    return { success: false, error: e.message, durationMs: Date.now() - t0 };
   }
 }
 
@@ -1182,6 +1370,73 @@ async function startServer() {
   app.delete("/api/bazooka/jobs/clear", requireLicense as any, async (req: AuthRequest, res) => {
     await pool.query("DELETE FROM bazooka_jobs WHERE user_id=$1", [req.user!.id]);
     res.json({ ok: true });
+  });
+
+  // ── MODULE 4: THE BRIDGE — Sniper endpoint ────────────────────────────────────
+  app.post("/api/sniper/fire", requireLicense as any, async (req: AuthRequest, res) => {
+    const { url, cookies: cookiesStr, workers: workersCount = 3 } = req.body as {
+      url: string;
+      cookies: string;
+      workers?: number;
+    };
+
+    if (!url)        return res.status(400).json({ error: "url requerida" });
+    if (!cookiesStr) return res.status(400).json({ error: "cookies requeridas (access_token_web + _vinted_fr_session)" });
+
+    const N = Math.min(Math.max(Number(workersCount) || 3, 1), 5); // 1-5 workers
+
+    console.log(`[SNIPER] FIRE url=${url} workers=${N}`);
+
+    // ── 1. Scout: extraer item_id + seller_id ──
+    let scout: ScoutResult;
+    try {
+      scout = await scoutItem(url, cookiesStr);
+      console.log(`[SNIPER] scout OK item=${scout.itemId} seller=${scout.sellerId}`);
+    } catch (e: any) {
+      return res.status(422).json({ error: `scout_failed: ${e.message}` });
+    }
+
+    // ── 2. Gun: disparar N workers en paralelo con offset de 10ms entre cada uno ──
+    //    Esto maximiza la probabilidad de ser el primero en entrar en el túnel de BD de Vinted
+    const workerPromises = Array.from({ length: N }, (_, i) =>
+      new Promise<PurchaseResult>(resolve => {
+        setTimeout(
+          () => executeFastPurchase(scout.itemId, scout.sellerId, cookiesStr, scout.domain, i).then(resolve),
+          i * 10, // 0ms, 10ms, 20ms, 30ms, 40ms
+        );
+      })
+    );
+
+    const results = await Promise.allSettled(workerPromises);
+
+    const parsed = results.map((r, i) => ({
+      worker: i,
+      ...(r.status === "fulfilled" ? r.value : { success: false, error: String((r as any).reason), durationMs: 0 }),
+    }));
+
+    const winner = parsed.find(r => r.success);
+    const allErrors = parsed.every(r => !r.success);
+
+    console.log(`[SNIPER] results: ${parsed.map(r => `w${r.worker}:${r.success ? "OK" : "FAIL"}`).join(" | ")}`);
+
+    // ── 3. Guardar en BD ──
+    if (winner?.transactionId) {
+      await pool.query(
+        "INSERT INTO bazooka_jobs (user_id, url, title, item_id, vinted_cookies, status, note) VALUES ($1,$2,$3,$4,$5,'done',$6) ON CONFLICT DO NOTHING",
+        [req.user!.id, url, scout.title || null, scout.itemId, "sniper", `tx=${winner.transactionId} purchase=${winner.purchaseId} dur=${winner.durationMs}ms`]
+      ).catch(() => {});
+    }
+
+    return res.json({
+      ok: !allErrors,
+      itemId:       scout.itemId,
+      sellerId:     scout.sellerId,
+      title:        scout.title,
+      workers:      N,
+      winner:       winner || null,
+      results:      parsed,
+      fastestMs:    Math.min(...parsed.map(r => r.durationMs ?? 9999)),
+    });
   });
 
   // ── Tongue / Gemini endpoints ───────────────────────────────────────────────

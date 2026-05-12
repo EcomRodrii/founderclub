@@ -369,8 +369,11 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
 
   // Bazooka queue
   interface BazookaJob { id: number; url: string; title: string | null; item_id: string; status: string; note: string | null; error_message: string | null; created_at: string; }
+  interface SniperResult { worker: number; success: boolean; transactionId?: string; purchaseId?: string; error?: string; durationMs: number; }
   const [bazookaJobs, setBazookaJobs] = useState<BazookaJob[]>([]);
   const [loadingReserve, setLoadingReserve] = useState(false);
+  const [sniperLoading, setSniperLoading] = useState(false);
+  const [sniperResult, setSniperResult] = useState<{ ok: boolean; itemId: string; sellerId: string; title: string; workers: number; winner: SniperResult | null; results: SniperResult[]; fastestMs: number } | null>(null);
 
   const loadJobs = useCallback(async () => {
     try {
@@ -477,6 +480,32 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
   const clearJobs = async () => {
     await apiFetch('/api/bazooka/jobs/clear', { method: 'DELETE' });
     setBazookaJobs([]);
+  };
+
+  const fireSniperBazooka = async () => {
+    const targetUrl = externalUrl;
+    if (!targetUrl) { setError('⚠️ Introduce la URL del producto.'); return; }
+    if (!cookie) { setError('⚠️ Se requieren cookies de Vinted (access_token_web).'); return; }
+    setSniperLoading(true);
+    setSniperResult(null);
+    setError(null);
+    setStatus('🎯 Sniper cargando...');
+    try {
+      const r = await apiFetch('/api/sniper/fire', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: targetUrl, cookies: cookie, workers: 3 }),
+      });
+      const d = await r.json();
+      if (!r.ok) { setError(`❌ ${d.error || 'Error desconocido'}`); return; }
+      setSniperResult(d);
+      if (d.ok && d.winner) {
+        setStatus(`✅ RESERVADO en ${d.winner.durationMs}ms — tx:${d.winner.transactionId}`);
+      } else {
+        setError(`❌ Todos los workers fallaron. Ver detalles abajo.`);
+      }
+    } catch { setError('Error de red al disparar Sniper.'); }
+    finally { setSniperLoading(false); }
   };
 
   const checkPublicStatus = async () => {
@@ -1165,16 +1194,41 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                        </div>
 
                         <div className="grid grid-cols-1 gap-3 mt-4">
+
+                          {/* ── SNIPER BAZOOKA v1 — botón principal ── */}
                           <button
-                           onClick={enqueueReserve}
-                           disabled={loadingReserve}
-                           className="w-full bg-emerald-500 text-black font-bold py-5 rounded-2xl hover:bg-emerald-400 transition-all shadow-[0_0_30px_rgba(16,185,129,0.3)] flex flex-col items-center justify-center gap-1 border-2 border-emerald-400/50 disabled:opacity-50"
+                           onClick={fireSniperBazooka}
+                           disabled={sniperLoading}
+                           className="w-full bg-gradient-to-r from-red-600 to-orange-500 text-white font-bold py-5 rounded-2xl hover:from-red-500 hover:to-orange-400 transition-all shadow-[0_0_30px_rgba(239,68,68,0.35)] flex flex-col items-center justify-center gap-1 border-2 border-red-500/50 disabled:opacity-50"
                           >
                            <div className="flex items-center gap-2">
                              <Zap className="w-6 h-6" />
-                             <span className="text-lg">{loadingReserve ? 'ENCOLANDO...' : 'RESERVAR (PUPPETEER)'}</span>
+                             <span className="text-lg">{sniperLoading ? 'DISPARANDO...' : '🎯 SNIPER BAZOOKA v1'}</span>
                            </div>
-                           <span className="text-[11px] opacity-70 font-normal uppercase tracking-wider">Inicia checkout real · Bypassa DataDome</span>
+                           <span className="text-[11px] opacity-80 font-normal uppercase tracking-wider">3 workers · App headers · Keep-Alive</span>
+                          </button>
+
+                          {/* ── Resultados del Sniper ── */}
+                          {sniperResult && (
+                            <div className={`rounded-xl border p-3 text-[11px] font-mono space-y-1 ${sniperResult.ok ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-300' : 'border-red-500/30 bg-red-500/5 text-red-300'}`}>
+                              <div className="font-bold text-xs mb-2">
+                                {sniperResult.ok ? `✅ RESERVADO en ${sniperResult.fastestMs}ms` : '❌ Todos los workers fallaron'}
+                              </div>
+                              <div className="text-white/40">item: {sniperResult.itemId} · seller: {sniperResult.sellerId}</div>
+                              {sniperResult.results.map(r => (
+                                <div key={r.worker} className={r.success ? 'text-emerald-400' : 'text-white/30'}>
+                                  W{r.worker}: {r.success ? `OK tx=${r.transactionId} (${r.durationMs}ms)` : `FAIL — ${r.error?.slice(0, 60)}`}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          <button
+                           onClick={enqueueReserve}
+                           disabled={loadingReserve}
+                           className="w-full bg-white/5 text-white/50 font-bold py-3 rounded-xl hover:bg-white/10 transition-all flex items-center justify-center gap-2 border border-white/10 disabled:opacity-50 text-sm"
+                          >
+                           <span>{loadingReserve ? 'ENCOLANDO...' : 'Reserva clásica (Blackstock)'}</span>
                           </button>
 
                           <div className="grid grid-cols-2 gap-2">
