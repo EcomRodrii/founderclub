@@ -1307,20 +1307,20 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
             )}
             </>
           )}
-        </div>
-        {activeTab === 'profits' && (
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
-            <div className="space-y-2">
-              <h2 className="text-3xl md:text-4xl font-black tracking-tighter text-white">
-                CONTROL DE <span className="text-emerald-500 italic">BENEFICIOS</span>
-              </h2>
-              <p className="text-sm text-white/40 font-medium uppercase tracking-[0.3em]">Facturación · Gastos · Net Profit</p>
-            </div>
-            <ProfitControl token={token} />
-          </motion.div>
-        )}
 
-        {activeTab === 'tongues' && (
+          {activeTab === 'profits' && (
+            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
+              <div className="space-y-2">
+                <h2 className="text-3xl md:text-4xl font-black tracking-tighter text-white">
+                  CONTROL DE <span className="text-emerald-500 italic">BENEFICIOS</span>
+                </h2>
+                <p className="text-sm text-white/40 font-medium uppercase tracking-[0.3em]">Facturación · Gastos · Net Profit</p>
+              </div>
+              <ProfitControl token={token} />
+            </motion.div>
+          )}
+
+          {activeTab === 'tongues' && (
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -1410,7 +1410,8 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
               </div>
             )}
           </motion.div>
-        )}
+          )}
+        </div>
       </main>
 
       {/* API Reference Modal-like section at bottom */}
