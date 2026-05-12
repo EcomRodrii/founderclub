@@ -1327,28 +1327,28 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
             className="space-y-6"
           >
             {/* Sub-tab selector */}
-            <div className="flex gap-2">
+            <div className="grid grid-cols-2 gap-2">
               <button
                 onClick={() => setTongueSubTab('editor')}
-                className={`flex items-center gap-2 px-5 py-2.5 rounded-2xl text-sm font-bold transition-all ${
+                className={`flex items-center justify-center gap-2 px-4 py-3 rounded-2xl text-sm font-bold transition-all ${
                   tongueSubTab === 'editor'
                     ? 'bg-emerald-500 text-black shadow-[0_0_20px_rgba(16,185,129,0.3)]'
                     : 'bg-white/5 text-white/40 hover:text-white hover:bg-white/10 border border-white/5'
                 }`}
               >
-                <Scissors className="w-4 h-4" />
-                Editor de Lengüetas
+                <Scissors className="w-4 h-4 shrink-0" />
+                <span>Editor Lengüeta</span>
               </button>
               <button
                 onClick={() => setTongueSubTab('photos')}
-                className={`flex items-center gap-2 px-5 py-2.5 rounded-2xl text-sm font-bold transition-all ${
+                className={`flex items-center justify-center gap-2 px-4 py-3 rounded-2xl text-sm font-bold transition-all ${
                   tongueSubTab === 'photos'
                     ? 'bg-emerald-500 text-black shadow-[0_0_20px_rgba(16,185,129,0.3)]'
                     : 'bg-white/5 text-white/40 hover:text-white hover:bg-white/10 border border-white/5'
                 }`}
               >
-                <ImageIcon className="w-4 h-4" />
-                Fotos Únicas
+                <ImageIcon className="w-4 h-4 shrink-0" />
+                <span>Fotos Únicas</span>
               </button>
             </div>
 
