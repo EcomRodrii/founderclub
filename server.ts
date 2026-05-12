@@ -2024,9 +2024,9 @@ ${customPrompt || ""}`;
       }
 
       const IMG_MODELS = [
-        "gemini-2.5-flash-image",
         "gemini-2.0-flash-exp-image-generation",
-        "gemini-2.0-flash-preview-image-generation"
+        "gemini-2.0-flash-preview-image-generation",
+        "gemini-2.0-flash-exp",
       ];
       let lastErr = "";
       for (const model of IMG_MODELS) {
