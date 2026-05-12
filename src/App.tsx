@@ -215,8 +215,11 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
 
     const hasVintedSession = cookie.toLowerCase().includes('_vinted_');
     const hasToken = cookie.toLowerCase().includes('token') || cookie.trim().startsWith('eyJ');
+    const hasVudt = cookie.toLowerCase().includes('v_udt=');   // Vinted.es moderno
+    const hasVuid = cookie.toLowerCase().includes('v_uid=');
+    const hasVsid = cookie.toLowerCase().includes('v_sid=');
 
-    if (cookie && !hasVintedSession && !hasToken) {
+    if (cookie && !hasVintedSession && !hasToken && !hasVudt && !hasVuid && !hasVsid) {
       setCookieWarning('⚠️ Formato desconocido: Asegúrate de copiar la cookie completa o un token JWT válido.');
     } else {
       setCookieWarning(null);
