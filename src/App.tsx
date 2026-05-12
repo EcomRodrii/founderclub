@@ -213,21 +213,43 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
     localStorage.setItem('vinted_user_id', userId);
     localStorage.setItem('vinted_domain', domain);
 
-    const hasVintedSession = cookie.toLowerCase().includes('_vinted_');
-    const hasToken = cookie.toLowerCase().includes('token') || cookie.trim().startsWith('eyJ');
-    const hasVudt = cookie.toLowerCase().includes('v_udt=');   // Vinted.es moderno
-    const hasVuid = cookie.toLowerCase().includes('v_uid=');
-    const hasVsid = cookie.toLowerCase().includes('v_sid=');
+    if (!cookie) return;
 
-    if (cookie && !hasVintedSession && !hasToken && !hasVudt && !hasVuid && !hasVsid) {
-      setCookieWarning('⚠️ Formato desconocido: Asegúrate de copiar la cookie completa o un token JWT válido.');
-    } else {
-      setCookieWarning(null);
-      // Auto-detect domain if not explicitly set
-      if (cookie?.includes('_vinted_fr_') || cookie?.includes('vinted.fr')) setDomain('fr');
-      else if (cookie?.includes('_vinted_it_') || cookie?.includes('vinted.it')) setDomain('it');
-      else if (cookie?.includes('_vinted_es_') || cookie?.includes('vinted.es')) setDomain('es');
+    const isJwt = cookie.trim().startsWith('eyJ');
+    const hasVintedSession = cookie.toLowerCase().includes('_vinted_');
+    const hasToken = cookie.toLowerCase().includes('token') || isJwt;
+    const hasVudt = cookie.toLowerCase().includes('v_udt=');
+
+    if (!hasVintedSession && !hasToken && !hasVudt) {
+      setCookieWarning('⚠️ Formato desconocido: pega el JWT de Vinted (empieza por eyJ...) o la cookie completa.');
+      return;
     }
+
+    setCookieWarning(null);
+
+    // Auto-detectar dominio desde el payload del JWT (campo "cc")
+    if (isJwt) {
+      try {
+        const payload = JSON.parse(atob(cookie.trim().split('.')[1]));
+        const cc = (payload.cc || '').toLowerCase();
+        if (cc === 'fr') setDomain('fr');
+        else if (cc === 'it') setDomain('it');
+        else if (cc === 'de') setDomain('de');
+        else if (cc === 'nl') setDomain('nl');
+        else if (cc === 'pl') setDomain('pl');
+        else if (cc === 'be') setDomain('be');
+        else if (cc === 'pt') setDomain('pt');
+        else setDomain('es'); // ES por defecto
+        // Auto-rellenar userId desde el JWT si está vacío
+        if (!userId && payload.sub) setUserId(payload.sub);
+        return;
+      } catch { /* JWT mal formado, seguir con detección por string */ }
+    }
+
+    // Detección por contenido de cookie clásica
+    if (cookie.includes('_vinted_fr_') || cookie.includes('vinted.fr')) setDomain('fr');
+    else if (cookie.includes('_vinted_it_') || cookie.includes('vinted.it')) setDomain('it');
+    else if (cookie.includes('_vinted_es_') || cookie.includes('vinted.es')) setDomain('es');
   }, [cookie, userId]);
 
   const validateSession = async () => {
