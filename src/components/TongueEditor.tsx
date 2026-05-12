@@ -38,7 +38,7 @@ interface DetectionResult {
 }
 
 export default function TongueEditor() {
-  const [activeBrand, setActiveBrand] = useState<'ADIDAS' | 'NEW BALANCE' | 'ASICS'>('ADIDAS');
+  const [activeBrand, setActiveBrand] = useState<'ADIDAS' | 'NEW BALANCE' | 'ASICS' | 'ONITSUKA'>('ADIDAS');
   const [originalImage, setOriginalImage] = useState<string | null>(null);
   const [generatedImage, setGeneratedImage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -76,6 +76,19 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
    - Código F960925: Cambia la letra inicial y los 6 dígitos por otros aleatorios.
    - Número de Serie (N4VDCSSVG6CSMGH): Cámbialo por una combinación aleatoria de 15 caracteres (letras mayúsculas y números).
 3. Mantén la estructura: Respeta las líneas verticales divisorias (|) en la tabla de tallas y la tipografía comprimida y limpia característica de Asics.`);
+
+  const [customPromptOnitsuka, setCustomPromptOnitsuka] = useState<string>(`PROMPT ONITSUKA TIGER - PROTOCOLO DE PRECISION:
+1. Integridad del SKU: PROHIBIDO alterar el codigo de modelo. Debe aparecer en la parte superior, centrado.
+2. Bloque de Tallas: Mantener exactamente la cuadricula de celdas separadas por lineas verticales finas (|). No redondear ni cambiar formatos.
+3. Reglas de Variacion Inferior:
+   - Codigo de Lote: Debe empezar por F seguido de exactamente 6 digitos aleatorios (ej. F602841).
+   - Identificador de Region: Mantener las siglas PI a la derecha del codigo de lote.
+   - Serial de Unidad: Generar un codigo alfanumerico de 15 caracteres en mayusculas.
+4. Especificaciones Tecnicas:
+   - Tipografia: Sans-Serif ultra-condensada (Helvetica Compressed). Transferencia termica.
+   - Sin logo del tigre ni palabra "Onitsuka". Etiqueta estrictamente informativa.
+   - Fondo blanco mate con textura sintetica, bordes termosellados.
+   - "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -130,6 +143,9 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
       let res = '';
       for (let i = 0; i < 12; i++) res += Math.floor(Math.random() * 10);
       setDetections({ ...detections, reference: res });
+    } else if (activeBrand === 'ONITSUKA') {
+      const batchCode = 'F' + Math.floor(Math.random() * 1000000).toString().padStart(6, '0');
+      setDetections({ ...detections, reference: batchCode });
     } else {
       const randomNum = Math.floor(100000000 + Math.random() * 900000000);
       setDetections({ ...detections, reference: `#${randomNum}` });
@@ -152,16 +168,17 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
       let p2 = ''; for(let i=0; i<4; i++) p2 += nums.charAt(Math.floor(Math.random()*nums.length));
       let p3 = ''; for(let i=0; i<3; i++) p3 += chars.charAt(Math.floor(Math.random()*chars.length));
       setDetections({ ...detections, brandSerial: `${p1}${p2} ${p3}` });
+    } else if (activeBrand === 'ONITSUKA' || activeBrand === 'ASICS') {
+      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+      let result = '';
+      for (let i = 0; i < 15; i++) result += chars.charAt(Math.floor(Math.random() * chars.length));
+      setDetections({ ...detections, brandSerial: result });
     } else {
       const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
       let result = '';
-      for (let i = 0; i < 7; i++) {
-        result += chars.charAt(Math.floor(Math.random() * chars.length));
-      }
+      for (let i = 0; i < 7; i++) result += chars.charAt(Math.floor(Math.random() * chars.length));
       result += '<';
-      for (let i = 0; i < 5; i++) {
-        result += Math.floor(Math.random() * 10);
-      }
+      for (let i = 0; i < 5; i++) result += Math.floor(Math.random() * 10);
       setDetections({ ...detections, brandSerial: result });
     }
   };
@@ -216,7 +233,7 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
         imageBase64: originalImage,
         brand: activeBrand,
         detections,
-        customPrompt: activeBrand === 'ADIDAS' ? customPromptAdidas : activeBrand === 'ASICS' ? customPromptAsics : customPromptNB,
+        customPrompt: activeBrand === 'ADIDAS' ? customPromptAdidas : activeBrand === 'ASICS' ? customPromptAsics : activeBrand === 'ONITSUKA' ? customPromptOnitsuka : customPromptNB,
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Error en el servidor');
@@ -245,7 +262,8 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
           { key: 'ADIDAS', label: 'ADIDAS' },
           { key: 'NEW BALANCE', label: 'NEW BALANCE' },
           { key: 'ASICS', label: 'ASICS' },
-        ] as { key: 'ADIDAS' | 'NEW BALANCE' | 'ASICS'; label: string }[]).map(({ key, label }) => (
+          { key: 'ONITSUKA', label: 'ONITSUKA' },
+        ] as { key: 'ADIDAS' | 'NEW BALANCE' | 'ASICS' | 'ONITSUKA'; label: string }[]).map(({ key, label }) => (
           <button
             key={key}
             onClick={() => setActiveBrand(key)}
@@ -373,7 +391,7 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
                 <div className="space-y-1">
                   <div className="flex justify-between items-center">
                     <label className="text-[9px] uppercase text-white/30">
-                      {activeBrand === 'ADIDAS' ? 'Referencia #' : 'Referencia 1 (12d)'}
+                      {activeBrand === 'ADIDAS' ? 'Referencia #' : activeBrand === 'ONITSUKA' ? 'Código de Lote' : 'Referencia 1 (12d)'}
                     </label>
                     <button 
                       onClick={generateRandomReference}
@@ -389,7 +407,7 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
                   />
                 </div>
 
-                <div className={`space-y-1 ${activeBrand === 'ADIDAS' ? 'opacity-30 pointer-events-none' : ''}`}>
+                <div className={`space-y-1 ${(activeBrand === 'ADIDAS' || activeBrand === 'ONITSUKA' || activeBrand === 'ASICS') ? 'opacity-30 pointer-events-none' : ''}`}>
                   <div className="flex justify-between items-center">
                     <label className="text-[9px] uppercase text-white/30">Referencia 2 (7d)</label>
                     <button 
@@ -505,8 +523,8 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
                   </label>
                   <textarea 
                     placeholder={`Pega aquí el prompt personalizado de ${activeBrand}...`}
-                    value={activeBrand === 'ADIDAS' ? customPromptAdidas : activeBrand === 'ASICS' ? customPromptAsics : customPromptNB}
-                    onChange={e => activeBrand === 'ADIDAS' ? setCustomPromptAdidas(e.target.value) : activeBrand === 'ASICS' ? setCustomPromptAsics(e.target.value) : setCustomPromptNB(e.target.value)}
+                    value={activeBrand === 'ADIDAS' ? customPromptAdidas : activeBrand === 'ASICS' ? customPromptAsics : activeBrand === 'ONITSUKA' ? customPromptOnitsuka : customPromptNB}
+                    onChange={e => activeBrand === 'ADIDAS' ? setCustomPromptAdidas(e.target.value) : activeBrand === 'ASICS' ? setCustomPromptAsics(e.target.value) : activeBrand === 'ONITSUKA' ? setCustomPromptOnitsuka(e.target.value) : setCustomPromptNB(e.target.value)}
                     className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-emerald-500/50 outline-none h-20 resize-none"
                   />
                 </div>

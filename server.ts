@@ -752,6 +752,12 @@ STRICTLY DO NOT CHANGE: SKU "${detections.sku}", DATE "${detections.date}", ALL 
 ONLY UPDATE: Tracking code "${detections.reference}" (change first letter + 6 digits to random), Serial number "${detections.brandSerial}" (replace with 15 random uppercase alphanumeric chars).
 LOOK: Keep vertical dividers (|) in size table, compressed clean ASICS typography, macro photo style.
 ${customPrompt || ""}`;
+    } else if (brand === "ONITSUKA") {
+      brandPrompt = `CRITICAL IDENTITY RECONSTRUCTION - ONITSUKA TIGER tongue label.
+STRICTLY DO NOT CHANGE: SKU "${detections.sku}", DATE "${detections.date}", ALL SIZES (US ${detections.sizes?.us}, UK ${detections.sizes?.uk}, FR ${detections.sizes?.fr}, CM ${detections.sizes?.jp}), country text "MADE IN INDONESIA / FABRIQUE EN INDONESIE".
+ONLY UPDATE: Batch Code "${detections.reference}" (F + 6 random digits), Unit Serial "${detections.brandSerial}" (15 random uppercase alphanumeric chars).
+LOOK: Sans-serif ultra-condensed font, white matte background, thermal transfer print style, no tiger logo, strictly informative label.
+${customPrompt || ""}`;
     } else {
       brandPrompt = `NEW BALANCE internal tongue label reconstruction.
 STYLE/MODEL: "${detections.sku}". DATE: "${detections.date}". FACTORY: "${detections.lvl}".
