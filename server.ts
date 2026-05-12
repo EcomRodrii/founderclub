@@ -1956,19 +1956,30 @@ async function startServer() {
         const jsonMatch = text.match(/\{[\s\S]*\}/);
         if (!jsonMatch) return res.status(422).json({ error: "No se pudo extraer JSON", raw: text });
         try {
-          const raw = jsonMatch[0];
+          let raw = jsonMatch[0];
           console.log("[TONGUE] raw Gemini JSON:", raw.slice(0, 300));
 
-          const clean = raw
-            // 1. Trailing commas antes de } o ]
-            .replace(/,\s*([}\]])/g, '$1')
-            // 2. Control chars literales dentro de strings
-            .replace(/("(?:[^"\\]|\\.)*")|[\x00-\x1F]/g, (m, str) =>
-              str ? str : ({ '\n':'\\n','\r':'\\r','\t':'\\t' } as Record<string,string>)[m] ?? '')
-            // 3. Single quotes → double quotes (si Gemini usa comillas simples)
-            .replace(/'/g, '"');
+          // 1. Trailing commas antes de } o ]
+          raw = raw.replace(/,\s*([}\]])/g, '$1');
+          // 2. Control chars literales
+          raw = raw.replace(/("(?:[^"\\]|\\.)*")|[\x00-\x1F]/g, (m: string, str: string) =>
+            str ? str : ({ '\n':'\\n','\r':'\\r','\t':'\\t' } as Record<string,string>)[m] ?? '');
 
-          return res.json(JSON.parse(clean));
+          // 3. Reparar strings sin terminar (número impar de comillas)
+          const quoteCount = (raw.match(/(?<!\\)"/g) || []).length;
+          if (quoteCount % 2 !== 0) raw += '"';
+
+          // 4. Cerrar arrays/objetos abiertos
+          let opens = 0, closes = 0, aOpens = 0, aCloses = 0;
+          for (const c of raw) {
+            if (c === '{') opens++; if (c === '}') closes++;
+            if (c === '[') aOpens++; if (c === ']') aCloses++;
+          }
+          raw = raw.replace(/,\s*$/, '');
+          while (aCloses < aOpens) { raw += ']'; aCloses++; }
+          while (closes < opens) { raw += '}'; closes++; }
+
+          return res.json(JSON.parse(raw));
         } catch (parseErr: any) {
           console.error("[TONGUE] JSON parse failed:", parseErr.message, "raw:", jsonMatch[0].slice(0, 300));
           return res.status(422).json({ error: "JSON malformado de Gemini", raw: jsonMatch[0].slice(0, 500) });
