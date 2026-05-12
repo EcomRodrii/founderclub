@@ -1,122 +1,181 @@
 import React, { useState, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
-  Upload, Download, Image as ImageIcon,
-  CheckCircle2, RefreshCcw, Trash2, Shuffle,
-  ZapOff, Package
+  Upload, Download, RefreshCcw, Trash2,
+  Shuffle, Package, ZapOff, Eye, EyeOff
 } from 'lucide-react';
+
+// ─── Tipos ───────────────────────────────────────────────────────────────────
+
+type Intensity = 'suave' | 'normal' | 'fuerte' | 'extremo';
+
+interface Techniques {
+  crop: string;
+  rotation: string;
+  noise: string;
+  brightness: string;
+  contrast: string;
+  quality: string;
+}
 
 interface ProcessedImage {
   id: string;
-  originalName: string;
+  file: File;
   originalUrl: string;
   processedUrl: string | null;
   originalSize: number;
   processedSize: number;
-  status: 'processing' | 'done' | 'error';
-  noiseLevel: number;
-  dimChange: string;
+  status: 'pending' | 'processing' | 'done' | 'error';
+  techniques: Techniques | null;
+  showOriginal: boolean;
 }
 
-async function uniquifyImage(file: File): Promise<{ dataUrl: string; noiseLevel: number; dimChange: string; size: number }> {
+// ─── Configuración por intensidad ────────────────────────────────────────────
+
+const INTENSITY_CONFIG = {
+  suave:   { crop: [1,3],  rotation: 0.3,  noise: 1, brightness: [-2,2],   contrast: [0.99,1.01], quality: [0.93,0.96], label: 'Suave',   color: 'text-blue-400',   bg: 'bg-blue-500/10 border-blue-500/20',   desc: 'Cambios mínimos. Foto visualmente idéntica.' },
+  normal:  { crop: [2,6],  rotation: 0.7,  noise: 2, brightness: [-4,4],   contrast: [0.97,1.03], quality: [0.88,0.94], label: 'Normal',  color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20', desc: 'Equilibrio perfecto. Recomendado para uso diario.' },
+  fuerte:  { crop: [4,10], rotation: 1.2,  noise: 3, brightness: [-6,6],   contrast: [0.95,1.05], quality: [0.84,0.91], label: 'Fuerte',  color: 'text-amber-400',   bg: 'bg-amber-500/10 border-amber-500/20',   desc: 'Cambios agresivos. Rompe hasta detección por IA.' },
+  extremo: { crop: [6,14], rotation: 1.8,  noise: 5, brightness: [-8,8],   contrast: [0.93,1.07], quality: [0.80,0.88], label: 'Extremo', color: 'text-red-400',     bg: 'bg-red-500/10 border-red-500/20',       desc: 'Máxima evasión. Undetectable por cualquier sistema.' },
+};
+
+// ─── Motor de uniquificación ──────────────────────────────────────────────────
+
+function rnd(min: number, max: number) { return Math.random() * (max - min) + min; }
+function rndInt(min: number, max: number) { return Math.floor(rnd(min, max + 1)); }
+function clamp(v: number) { return Math.min(255, Math.max(0, Math.round(v))); }
+
+async function uniquifyImage(file: File, intensity: Intensity): Promise<{ dataUrl: string; size: number; techniques: Techniques }> {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const img = new Image();
-      img.onload = () => {
-        // 1. Random dimension shrink 1–4px (changes hash + defeats perceptual hash)
-        const shrinkW = Math.floor(Math.random() * 4) + 1;
-        const shrinkH = Math.floor(Math.random() * 4) + 1;
-        const w = Math.max(img.width - shrinkW, 1);
-        const h = Math.max(img.height - shrinkH, 1);
+    const cfg = INTENSITY_CONFIG[intensity];
+    const img = new Image();
 
-        const canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext('2d')!;
+    img.onload = () => {
+      const W = img.width;
+      const H = img.height;
 
-        // 2. Draw image (this strips ALL EXIF metadata automatically)
-        ctx.drawImage(img, 0, 0, w, h);
+      // ── Parámetros aleatorios ──────────────────────────────────────────────
 
-        // 3. Add invisible ±2 pixel noise per channel
-        const imageData = ctx.getImageData(0, 0, w, h);
-        const data = imageData.data;
-        const noiseLevel = Math.round(Math.random() * 2) + 1; // 1-3
-        for (let i = 0; i < data.length; i += 4) {
-          data[i]   = Math.min(255, Math.max(0, data[i]   + Math.round(Math.random() * noiseLevel * 2 - noiseLevel)));
-          data[i+1] = Math.min(255, Math.max(0, data[i+1] + Math.round(Math.random() * noiseLevel * 2 - noiseLevel)));
-          data[i+2] = Math.min(255, Math.max(0, data[i+2] + Math.round(Math.random() * noiseLevel * 2 - noiseLevel)));
-          // Alpha channel unchanged
-        }
-        ctx.putImageData(imageData, 0, 0);
+      // 1. Recorte: elimina N píxeles de cada borde y redimensiona de vuelta
+      const cropT = rndInt(cfg.crop[0], cfg.crop[1]);
+      const cropB = rndInt(cfg.crop[0], cfg.crop[1]);
+      const cropL = rndInt(cfg.crop[0], cfg.crop[1]);
+      const cropR = rndInt(cfg.crop[0], cfg.crop[1]);
 
-        // 4. Random JPEG quality 0.88–0.95 (further changes the binary hash)
-        const quality = 0.88 + Math.random() * 0.07;
-        const dataUrl = canvas.toDataURL('image/jpeg', quality);
+      // 2. Micro-rotación (compensa escala para evitar bordes negros)
+      const rotDeg = rnd(-cfg.rotation, cfg.rotation);
+      const rotRad = rotDeg * Math.PI / 180;
+      const scaleFactor = 1 / (Math.cos(Math.abs(rotRad)) - Math.sin(Math.abs(rotRad)) * (H / W)) + 0.015;
 
-        // Calculate approximate size
-        const base64 = dataUrl.split(',')[1];
-        const size = Math.round((base64.length * 3) / 4);
+      // 3. Brillo y contraste
+      const brightness = rnd(cfg.brightness[0], cfg.brightness[1]);
+      const contrast   = rnd(cfg.contrast[0], cfg.contrast[1]);
 
-        resolve({
-          dataUrl,
-          noiseLevel,
-          dimChange: `${img.width}×${img.height} → ${w}×${h}`,
-          size,
-        });
+      // 4. Calidad JPEG
+      const quality = rnd(cfg.quality[0], cfg.quality[1]);
+
+      // ── Canvas principal ──────────────────────────────────────────────────
+
+      const canvas = document.createElement('canvas');
+      canvas.width  = W - cropL - cropR;
+      canvas.height = H - cropT - cropB;
+      const ctx = canvas.getContext('2d')!;
+
+      // Aplica rotación + escala centrada (sin bordes negros)
+      ctx.save();
+      ctx.translate(canvas.width / 2, canvas.height / 2);
+      ctx.rotate(rotRad);
+      ctx.scale(scaleFactor, scaleFactor);
+      ctx.drawImage(img, -(W / 2), -(H / 2), W, H);
+      ctx.restore();
+
+      // ── Ruido píxel a píxel + brillo + contraste ─────────────────────────
+
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const d = imgData.data;
+
+      for (let i = 0; i < d.length; i += 4) {
+        const nr = rndInt(-cfg.noise, cfg.noise);
+        const ng = rndInt(-cfg.noise, cfg.noise);
+        const nb = rndInt(-cfg.noise, cfg.noise);
+
+        d[i]   = clamp((d[i]   - 128) * contrast + 128 + brightness + nr);
+        d[i+1] = clamp((d[i+1] - 128) * contrast + 128 + brightness + ng);
+        d[i+2] = clamp((d[i+2] - 128) * contrast + 128 + brightness + nb);
+        // Alpha sin tocar
+      }
+      ctx.putImageData(imgData, 0, 0);
+
+      // ── Exportar ──────────────────────────────────────────────────────────
+
+      const dataUrl = canvas.toDataURL('image/jpeg', quality);
+      const size    = Math.round((dataUrl.split(',')[1].length * 3) / 4);
+
+      const techniques: Techniques = {
+        crop:       `Recorte ${cropT}px↑ ${cropB}px↓ ${cropL}px← ${cropR}px→`,
+        rotation:   `Rotación ${rotDeg > 0 ? '+' : ''}${rotDeg.toFixed(2)}°`,
+        noise:      `Ruido pixel ±${cfg.noise}`,
+        brightness: `Brillo ${brightness > 0 ? '+' : ''}${brightness.toFixed(1)}`,
+        contrast:   `Contraste ×${contrast.toFixed(3)}`,
+        quality:    `JPEG ${Math.round(quality * 100)}% calidad`,
       };
-      img.onerror = reject;
-      img.src = e.target!.result as string;
+
+      resolve({ dataUrl, size, techniques });
     };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
+
+    img.onerror = reject;
+    img.src = URL.createObjectURL(file);
   });
 }
 
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+// ─── Utilidades ──────────────────────────────────────────────────────────────
+
+function formatSize(b: number) {
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
+  return `${(b / (1024 * 1024)).toFixed(2)} MB`;
 }
 
-function downloadDataUrl(dataUrl: string, filename: string) {
+function dl(dataUrl: string, name: string) {
   const a = document.createElement('a');
-  a.href = dataUrl;
-  a.download = filename;
-  a.click();
+  a.href = dataUrl; a.download = name; a.click();
 }
+
+// ─── Componente ──────────────────────────────────────────────────────────────
 
 export default function ImageUniquifier() {
-  const [images, setImages] = useState<ProcessedImage[]>([]);
-  const [dragging, setDragging] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [intensity, setIntensity]   = useState<Intensity>('normal');
+  const [images, setImages]         = useState<ProcessedImage[]>([]);
+  const [dragging, setDragging]     = useState(false);
+  const [processing, setProcessing] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
 
-  const processFiles = useCallback(async (files: FileList | File[]) => {
-    const fileArray = Array.from(files).filter(f => f.type.startsWith('image/'));
-    if (!fileArray.length) return;
+  // Crea entradas y procesa
+  const processFiles = useCallback(async (files: File[]) => {
+    const valid = files.filter(f => f.type.startsWith('image/'));
+    if (!valid.length) return;
+    setProcessing(true);
 
-    const newEntries: ProcessedImage[] = fileArray.map(f => ({
+    const entries: ProcessedImage[] = valid.map(f => ({
       id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      originalName: f.name,
+      file: f,
       originalUrl: URL.createObjectURL(f),
       processedUrl: null,
       originalSize: f.size,
       processedSize: 0,
       status: 'processing',
-      noiseLevel: 0,
-      dimChange: '',
+      techniques: null,
+      showOriginal: false,
     }));
 
-    setImages(prev => [...newEntries, ...prev]);
+    setImages(prev => [...entries, ...prev]);
 
-    // Process each image async
-    for (let i = 0; i < fileArray.length; i++) {
-      const entry = newEntries[i];
+    for (const entry of entries) {
       try {
-        const { dataUrl, noiseLevel, dimChange, size } = await uniquifyImage(fileArray[i]);
+        const { dataUrl, size, techniques } = await uniquifyImage(entry.file, intensity);
         setImages(prev => prev.map(img =>
           img.id === entry.id
-            ? { ...img, processedUrl: dataUrl, processedSize: size, status: 'done', noiseLevel, dimChange }
+            ? { ...img, processedUrl: dataUrl, processedSize: size, status: 'done', techniques }
             : img
         ));
       } catch {
@@ -125,103 +184,114 @@ export default function ImageUniquifier() {
         ));
       }
     }
-  }, []);
+    setProcessing(false);
+  }, [intensity]);
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setDragging(false);
-    processFiles(e.dataTransfer.files);
-  }, [processFiles]);
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault(); setDragging(false);
+    processFiles(Array.from(e.dataTransfer.files));
+  };
 
-  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) processFiles(e.target.files);
+  const onInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) processFiles(Array.from(e.target.files));
     e.target.value = '';
   };
 
-  const reprocess = async (id: string) => {
-    const entry = images.find(img => img.id === id);
-    if (!entry || !entry.originalUrl) return;
-
-    setImages(prev => prev.map(img => img.id === id ? { ...img, status: 'processing', processedUrl: null } : img));
-
+  const regenerate = async (id: string) => {
+    const img = images.find(i => i.id === id);
+    if (!img) return;
+    setImages(prev => prev.map(i => i.id === id ? { ...i, status: 'processing', processedUrl: null } : i));
     try {
-      const blob = await fetch(entry.originalUrl).then(r => r.blob());
-      const file = new File([blob], entry.originalName, { type: 'image/jpeg' });
-      const { dataUrl, noiseLevel, dimChange, size } = await uniquifyImage(file);
-      setImages(prev => prev.map(img =>
-        img.id === id
-          ? { ...img, processedUrl: dataUrl, processedSize: size, status: 'done', noiseLevel, dimChange }
-          : img
+      const { dataUrl, size, techniques } = await uniquifyImage(img.file, intensity);
+      setImages(prev => prev.map(i =>
+        i.id === id ? { ...i, processedUrl: dataUrl, processedSize: size, status: 'done', techniques } : i
       ));
     } catch {
-      setImages(prev => prev.map(img => img.id === id ? { ...img, status: 'error' } : img));
+      setImages(prev => prev.map(i => i.id === id ? { ...i, status: 'error' } : i));
     }
   };
 
+  const togglePreview = (id: string) =>
+    setImages(prev => prev.map(i => i.id === id ? { ...i, showOriginal: !i.showOriginal } : i));
+
+  const remove = (id: string) => setImages(prev => prev.filter(i => i.id !== id));
+
   const downloadAll = () => {
-    const done = images.filter(img => img.status === 'done' && img.processedUrl);
-    done.forEach((img, i) => {
-      const ext = img.originalName.replace(/\.[^.]+$/, '');
-      setTimeout(() => downloadDataUrl(img.processedUrl!, `${ext}_unique_${i + 1}.jpg`), i * 100);
+    images.filter(i => i.status === 'done' && i.processedUrl).forEach((img, idx) => {
+      const name = img.file.name.replace(/\.[^.]+$/, `_unique_${idx + 1}.jpg`);
+      setTimeout(() => dl(img.processedUrl!, name), idx * 150);
     });
   };
 
-  const remove = (id: string) => {
-    setImages(prev => prev.filter(img => img.id !== id));
-  };
-
-  const clearAll = () => setImages([]);
-
   const doneCount = images.filter(i => i.status === 'done').length;
+  const cfg = INTENSITY_CONFIG[intensity];
 
   return (
     <div className="space-y-6">
-      {/* Drop Zone */}
-      <div
-        onDragOver={e => { e.preventDefault(); setDragging(true); }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={handleDrop}
-        onClick={() => fileInputRef.current?.click()}
-        className={`relative border-2 border-dashed rounded-3xl p-10 text-center cursor-pointer transition-all ${
-          dragging
-            ? 'border-emerald-500 bg-emerald-500/5 scale-[1.01]'
-            : 'border-white/10 hover:border-white/20 hover:bg-white/[0.02]'
-        }`}
-      >
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/*"
-          multiple
-          className="hidden"
-          onChange={handleFileInput}
-        />
-        <div className="flex flex-col items-center gap-3">
-          <div className={`w-16 h-16 rounded-2xl flex items-center justify-center border transition-all ${
-            dragging ? 'bg-emerald-500/20 border-emerald-500/40' : 'bg-white/5 border-white/10'
-          }`}>
-            <Upload className={`w-7 h-7 ${dragging ? 'text-emerald-400' : 'text-white/40'}`} />
-          </div>
-          <div>
-            <p className="text-white font-semibold">Arrastra imágenes aquí</p>
-            <p className="text-white/40 text-sm mt-1">o haz clic para seleccionar · Múltiples archivos permitidos</p>
-          </div>
-          <div className="flex flex-wrap justify-center gap-3 mt-2">
-            {['Elimina metadatos EXIF', 'Ruido invisible ±2px', 'Cambia dimensiones', 'Hash 100% único'].map(tag => (
-              <span key={tag} className="text-[10px] uppercase tracking-wider font-bold text-emerald-400/70 bg-emerald-500/5 border border-emerald-500/20 px-3 py-1 rounded-full">
-                {tag}
-              </span>
-            ))}
-          </div>
+
+      {/* ── Selector de intensidad ─────────────────────────────────────────── */}
+      <div className="space-y-3">
+        <p className="text-xs uppercase tracking-widest text-white/30 font-bold">Nivel de evasión</p>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          {(Object.keys(INTENSITY_CONFIG) as Intensity[]).map(lvl => {
+            const c = INTENSITY_CONFIG[lvl];
+            const active = intensity === lvl;
+            return (
+              <button
+                key={lvl}
+                onClick={() => setIntensity(lvl)}
+                className={`relative flex flex-col items-center gap-1 px-3 py-4 rounded-2xl border text-center transition-all ${
+                  active ? `${c.bg} border-opacity-100` : 'bg-white/[0.02] border-white/5 hover:bg-white/5'
+                }`}
+              >
+                <span className={`text-sm font-black uppercase tracking-wider ${active ? c.color : 'text-white/40'}`}>{c.label}</span>
+                <span className="text-[10px] text-white/30 leading-tight">{c.desc}</span>
+                {active && <div className={`absolute top-2 right-2 w-1.5 h-1.5 rounded-full ${c.color.replace('text-', 'bg-')}`} />}
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      {/* Actions bar */}
+      {/* ── Qué hace cada nivel ───────────────────────────────────────────── */}
+      <div className="bg-white/[0.02] border border-white/5 rounded-2xl p-4 space-y-2">
+        <p className="text-xs font-bold text-white/50 uppercase tracking-widest mb-3">Técnicas aplicadas — nivel {cfg.label}</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-white/40">
+          <div className="flex items-start gap-2"><span className={`font-bold shrink-0 ${cfg.color}`}>✓</span><span><strong className="text-white/60">Recorte + resize</strong> — elimina {cfg.crop[0]}-{cfg.crop[1]}px por borde y reescala. Rompe pHash completamente.</span></div>
+          <div className="flex items-start gap-2"><span className={`font-bold shrink-0 ${cfg.color}`}>✓</span><span><strong className="text-white/60">Micro-rotación</strong> — gira ±{cfg.rotation}° con compensación de escala. Sin bordes negros. Rompe hash espacial.</span></div>
+          <div className="flex items-start gap-2"><span className={`font-bold shrink-0 ${cfg.color}`}>✓</span><span><strong className="text-white/60">Ruido por píxel</strong> — ±{cfg.noise} por canal RGB. Cambia MD5/SHA al 100%.</span></div>
+          <div className="flex items-start gap-2"><span className={`font-bold shrink-0 ${cfg.color}`}>✓</span><span><strong className="text-white/60">Brillo + contraste</strong> — variación aleatoria. Cambia histograma de color.</span></div>
+          <div className="flex items-start gap-2"><span className={`font-bold shrink-0 ${cfg.color}`}>✓</span><span><strong className="text-white/60">JPEG variable</strong> — calidad {Math.round(cfg.quality[0]*100)}-{Math.round(cfg.quality[1]*100)}%. Cambia artefactos de compresión.</span></div>
+          <div className="flex items-start gap-2"><span className={`font-bold shrink-0 ${cfg.color}`}>✓</span><span><strong className="text-white/60">Sin EXIF</strong> — GPS, fecha, cámara, software. Todo eliminado automáticamente.</span></div>
+        </div>
+      </div>
+
+      {/* ── Zona de subida ────────────────────────────────────────────────── */}
+      <div
+        onDragOver={e => { e.preventDefault(); setDragging(true); }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={onDrop}
+        onClick={() => fileRef.current?.click()}
+        className={`border-2 border-dashed rounded-3xl p-10 text-center cursor-pointer transition-all ${
+          dragging ? 'border-emerald-500 bg-emerald-500/5 scale-[1.01]' : 'border-white/10 hover:border-white/20 hover:bg-white/[0.02]'
+        }`}
+      >
+        <input ref={fileRef} type="file" accept="image/*" multiple className="hidden" onChange={onInput} />
+        <Upload className={`w-8 h-8 mx-auto mb-3 ${dragging ? 'text-emerald-400' : 'text-white/20'}`} />
+        <p className="text-white font-semibold">Arrastra tus fotos aquí</p>
+        <p className="text-white/30 text-sm mt-1">Múltiples imágenes · JPG, PNG, WEBP</p>
+        <p className="text-white/20 text-xs mt-3">Todo el proceso ocurre en tu navegador — las imágenes nunca se suben a ningún servidor</p>
+      </div>
+
+      {/* ── Barra de acciones ─────────────────────────────────────────────── */}
       {images.length > 0 && (
-        <div className="flex items-center justify-between">
-          <p className="text-sm text-white/50">
-            <span className="text-white font-bold">{doneCount}</span>/{images.length} procesadas
-          </p>
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div className="flex items-center gap-3">
+            <div className={`w-2 h-2 rounded-full ${processing ? 'bg-amber-400 animate-pulse' : 'bg-emerald-500'}`} />
+            <span className="text-sm text-white/50">
+              {processing ? 'Procesando...' : <><span className="text-white font-bold">{doneCount}</span>/{images.length} procesadas</>}
+            </span>
+          </div>
           <div className="flex gap-2">
             {doneCount > 0 && (
               <button
@@ -233,7 +303,7 @@ export default function ImageUniquifier() {
               </button>
             )}
             <button
-              onClick={clearAll}
+              onClick={() => setImages([])}
               className="flex items-center gap-2 bg-white/5 hover:bg-red-500/10 text-white/40 hover:text-red-400 border border-white/10 hover:border-red-500/20 px-4 py-2 rounded-xl text-sm transition"
             >
               <Trash2 className="w-4 h-4" />
@@ -243,7 +313,7 @@ export default function ImageUniquifier() {
         </div>
       )}
 
-      {/* Image Grid */}
+      {/* ── Grid de imágenes ──────────────────────────────────────────────── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         <AnimatePresence>
           {images.map(img => (
@@ -255,65 +325,80 @@ export default function ImageUniquifier() {
               className="bg-[#141414] border border-white/5 rounded-2xl overflow-hidden"
             >
               {/* Preview */}
-              <div className="relative aspect-square bg-black/40 flex items-center justify-center overflow-hidden">
-                {img.processedUrl ? (
-                  <img src={img.processedUrl} alt={img.originalName} className="w-full h-full object-cover" />
-                ) : img.status === 'processing' ? (
-                  <div className="flex flex-col items-center gap-3 text-white/30">
+              <div className="relative aspect-square bg-black/60 flex items-center justify-center overflow-hidden">
+                {img.status === 'processing' && (
+                  <div className="flex flex-col items-center gap-2 text-white/30">
                     <RefreshCcw className="w-8 h-8 animate-spin text-emerald-400" />
                     <span className="text-xs">Procesando…</span>
                   </div>
-                ) : img.status === 'error' ? (
+                )}
+                {img.status === 'error' && (
                   <div className="flex flex-col items-center gap-2 text-red-400/60">
                     <ZapOff className="w-8 h-8" />
-                    <span className="text-xs">Error</span>
+                    <span className="text-xs">Error al procesar</span>
                   </div>
-                ) : (
-                  <ImageIcon className="w-12 h-12 text-white/10" />
                 )}
-
                 {img.status === 'done' && (
-                  <div className="absolute top-2 right-2 bg-emerald-500 rounded-full p-1 shadow-lg">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-black" />
-                  </div>
+                  <>
+                    <img
+                      src={img.showOriginal ? img.originalUrl : img.processedUrl!}
+                      alt={img.file.name}
+                      className="w-full h-full object-cover"
+                    />
+                    {/* Badge original/único */}
+                    <div className={`absolute top-2 left-2 text-[10px] font-black uppercase px-2 py-0.5 rounded-full ${
+                      img.showOriginal ? 'bg-white/20 text-white' : 'bg-emerald-500 text-black'
+                    }`}>
+                      {img.showOriginal ? 'Original' : 'Único ✓'}
+                    </div>
+                  </>
                 )}
               </div>
 
               {/* Info */}
               <div className="p-4 space-y-3">
-                <p className="text-xs text-white/70 truncate font-medium">{img.originalName}</p>
+                <p className="text-xs text-white/60 truncate font-medium">{img.file.name}</p>
 
-                {img.status === 'done' && (
+                {/* Técnicas aplicadas */}
+                {img.status === 'done' && img.techniques && (
                   <div className="space-y-1">
-                    <div className="flex justify-between text-[10px] text-white/30">
-                      <span>Original</span>
-                      <span className="font-mono">{formatSize(img.originalSize)}</span>
-                    </div>
-                    <div className="flex justify-between text-[10px] text-emerald-400/80">
-                      <span>Único</span>
-                      <span className="font-mono">{formatSize(img.processedSize)}</span>
-                    </div>
-                    <div className="mt-2 space-y-1">
-                      <div className="text-[10px] text-white/20 font-mono">{img.dimChange}</div>
-                      <div className="text-[10px] text-white/20 font-mono">Ruido: ±{img.noiseLevel}px · EXIF: eliminado</div>
+                    {Object.values(img.techniques).map((t, i) => (
+                      <div key={i} className="flex items-center gap-1.5 text-[10px] text-white/30">
+                        <span className={`w-1 h-1 rounded-full shrink-0 ${cfg.color.replace('text-', 'bg-')}`} />
+                        {t}
+                      </div>
+                    ))}
+                    <div className="flex justify-between text-[10px] pt-1 border-t border-white/5 mt-2">
+                      <span className="text-white/20">Original: {formatSize(img.originalSize)}</span>
+                      <span className="text-white/20">Único: {formatSize(img.processedSize)}</span>
                     </div>
                   </div>
                 )}
 
+                {/* Botones */}
                 <div className="flex gap-2">
                   {img.status === 'done' && img.processedUrl && (
-                    <button
-                      onClick={() => downloadDataUrl(img.processedUrl!, img.originalName.replace(/\.[^.]+$/, '_unique.jpg'))}
-                      className="flex-1 flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-black font-bold py-2 rounded-xl text-xs transition"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      Descargar
-                    </button>
+                    <>
+                      <button
+                        onClick={() => dl(img.processedUrl!, img.file.name.replace(/\.[^.]+$/, '_unique.jpg'))}
+                        className="flex-1 flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-black font-bold py-2 rounded-xl text-xs transition"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        Descargar
+                      </button>
+                      <button
+                        onClick={() => togglePreview(img.id)}
+                        title={img.showOriginal ? 'Ver versión única' : 'Ver original'}
+                        className="p-2 bg-white/5 hover:bg-white/10 text-white/40 hover:text-white rounded-xl border border-white/5 transition"
+                      >
+                        {img.showOriginal ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+                      </button>
+                    </>
                   )}
                   {(img.status === 'done' || img.status === 'error') && (
                     <button
-                      onClick={() => reprocess(img.id)}
-                      title="Regenerar con nuevo ruido"
+                      onClick={() => regenerate(img.id)}
+                      title="Regenerar con nuevos valores aleatorios"
                       className="p-2 bg-white/5 hover:bg-white/10 text-white/40 hover:text-emerald-400 rounded-xl border border-white/5 transition"
                     >
                       <Shuffle className="w-3.5 h-3.5" />
@@ -321,7 +406,6 @@ export default function ImageUniquifier() {
                   )}
                   <button
                     onClick={() => remove(img.id)}
-                    title="Eliminar"
                     className="p-2 bg-white/5 hover:bg-red-500/10 text-white/20 hover:text-red-400 rounded-xl border border-white/5 transition"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
@@ -334,9 +418,9 @@ export default function ImageUniquifier() {
       </div>
 
       {images.length === 0 && (
-        <div className="text-center py-6 text-white/20 text-sm">
-          Sube imágenes para que cada una tenga un hash único e indetectable
-        </div>
+        <p className="text-center text-white/15 text-sm py-4">
+          Sube las mismas fotos una y otra vez — cada vez saldrán completamente diferentes para cualquier sistema de detección
+        </p>
       )}
     </div>
   );
