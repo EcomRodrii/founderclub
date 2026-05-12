@@ -780,8 +780,13 @@ async function executeFastPurchase(
   const t0 = Date.now();
   const base = `https://www.vinted.${domain}`;
 
-  // Cada worker usa un proxy distinto; en retry rota al siguiente
-  const { agent, label } = pickProxy(workerIndex + attempt);
+  // attempt=0 → directo (Railway IP, más rápido y fiable para API POST)
+  // attempt=1 → con proxy rotado (fallback si Railway IP está bloqueada)
+  const useProxy = attempt > 0;
+  const { agent: proxyAgent, label: proxyLabel } = pickProxy(workerIndex + attempt);
+  const agent = useProxy ? proxyAgent : keepAliveAgent;
+  const label = useProxy ? proxyLabel : "directo";
+
   const headers = buildSniperHeaders(cookiesStr, domain, {
     "Referer":           `https://www.vinted.${domain}/items/${itemId}`,
     "X-Idempotency-Key": randomUUID(),
@@ -792,10 +797,10 @@ async function executeFastPurchase(
     httpsAgent:     agent,
     proxy:          false as const,
     validateStatus: () => true,
-    timeout:        25_000,   // IPRoyal tarda 8-15s — margen suficiente
+    timeout:        15_000,
   };
 
-  console.log(`[SNIPER][W${workerIndex}${attempt ? `+retry` : ""}] proxy=${label}`);
+  console.log(`[SNIPER][W${workerIndex}${attempt ? `+retry(proxy)` : "(directo)"}] agent=${label}`);
 
   try {
     // POST 1 — Conversación (reserva)
