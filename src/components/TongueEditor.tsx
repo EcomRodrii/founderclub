@@ -1,9 +1,9 @@
 import React, { useState, useRef } from 'react';
 import {
   Upload, Scissors, Info, RefreshCcw,
-  ScanText,
+  CheckCircle2, AlertCircle, ScanText,
   Image as ImageIcon, Download, Copy,
-  Camera
+  ArrowRight, Camera
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -38,14 +38,13 @@ interface DetectionResult {
 }
 
 export default function TongueEditor() {
-  const [activeBrand, setActiveBrand] = useState<'ADIDAS' | 'NEW BALANCE' | 'ASICS' | 'ONITSUKA'>('ADIDAS');
+  const [activeBrand, setActiveBrand] = useState<'ADIDAS' | 'NEW BALANCE' | 'ASICS'>('ADIDAS');
   const [originalImage, setOriginalImage] = useState<string | null>(null);
   const [generatedImage, setGeneratedImage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [detections, setDetections] = useState<DetectionResult | null>(null);
-
   const [customPromptAdidas, setCustomPromptAdidas] = useState<string>(`PROMPT ADIDAS - REGLAS DE ORO:
 1. NUNCA cambies el SKU / MODELO (el código que aparece después de "ART NO" o "A:"). Debe ser EXACTAMENTE igual al original.
 2. Modifica únicamente los dos últimos códigos de la parte inferior:
@@ -77,57 +76,48 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
    - Código F960925: Cambia la letra inicial y los 6 dígitos por otros aleatorios.
    - Número de Serie (N4VDCSSVG6CSMGH): Cámbialo por una combinación aleatoria de 15 caracteres (letras mayúsculas y números).
 3. Mantén la estructura: Respeta las líneas verticales divisorias (|) en la tabla de tallas y la tipografía comprimida y limpia característica de Asics.`);
-
-  const [customPromptOnitsuka, setCustomPromptOnitsuka] = useState<string>(`PROMPT ONITSUKA TIGER - PROTOCOLO DE PRECISIÓN:
-1. Integridad del SKU (Modelo):
-   - PROHIBIDO alterar el código THL7C2. Debe aparecer en la parte superior, centrado y con un ligero espaciado entre caracteres.
-2. Bloque de Tallas (Matriz de Datos):
-   - Mantener exactamente la cuadrícula de 2x3 celdas separadas por líneas verticales finas (|).
-   - Valores Obligatorios: CM 24.0, EURO 38, US 5½, UK 4.5, BR 36, CN 240(2.5). No redondear ni cambiar formatos.
-3. Reglas de Variación Inferior (Identidad Única):
-   - Código de Lote: Debe empezar por F seguido de exactamente 6 dígitos aleatorios (ej. F602841).
-   - Identificador de Región: Mantener las siglas PI a la derecha del código de lote.
-   - Serial de Unidad: Generar un código alfanumérico de 15 caracteres en mayúsculas. Regla estricta: Diferente para izquierda y derecha.
-4. Especificaciones Técnicas de Diseño:
-   - Tipografía: Sans-Serif ultra-condensada (Helvetica Compressed). Transferencia térmica.
-   - Ausencia de Branding: Sin logo del tigre ni palabra "Onitsuka". Etiqueta estrictamente informativa.
-   - Soporte: Fondo blanco mate con textura sintética, bordes termosellados, costura perimetral.
-   - Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
-
+  
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const compressImage = (dataUrl: string, maxPx = 1280, quality = 0.85): Promise<string> =>
+    new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const scale = Math.min(1, maxPx / Math.max(img.width, img.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.src = dataUrl;
+    });
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onloadend = () => {
-      setOriginalImage(reader.result as string);
-      runOCR(reader.result as string);
+    reader.onloadend = async () => {
+      const compressed = await compressImage(reader.result as string);
+      setOriginalImage(compressed);
+      runOCR(compressed);
     };
     reader.readAsDataURL(file);
   };
 
   const runOCR = async (base64Image: string) => {
     setLoading(true);
-    setStatus('Analizando lengüeta con OCR...');
+    setStatus('Analizando lengueta con OCR...');
     setError(null);
-
     try {
-      const res = await authFetch('/api/tongue/analyze', {
-        imageBase64: base64Image,
-        brand: activeBrand,
-      });
-
+      const res = await authFetch('/api/tongue/analyze', { imageBase64: base64Image, brand: activeBrand });
       const data = await res.json();
-
-      if (!res.ok) throw new Error(data.error || 'Error del servidor');
-
+      if (!res.ok) throw new Error(data.error || 'Error en el servidor');
       setDetections(data);
       setStatus('Datos extraídos correctamente.');
     } catch (err: any) {
-      console.error('OCR Error:', err);
       setError('Error en el análisis OCR: ' + err.message);
     } finally {
       setLoading(false);
@@ -140,9 +130,6 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
       let res = '';
       for (let i = 0; i < 12; i++) res += Math.floor(Math.random() * 10);
       setDetections({ ...detections, reference: res });
-    } else if (activeBrand === 'ONITSUKA') {
-      const batchCode = 'F' + Math.floor(Math.random() * 1000000).toString().padStart(6, '0');
-      setDetections({ ...detections, reference: batchCode });
     } else {
       const randomNum = Math.floor(100000000 + Math.random() * 900000000);
       setDetections({ ...detections, reference: `#${randomNum}` });
@@ -161,43 +148,49 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
     if (activeBrand === 'NEW BALANCE') {
       const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
       const nums = '0123456789';
-      let p1 = ''; for (let i = 0; i < 4; i++) p1 += chars.charAt(Math.floor(Math.random() * chars.length));
-      let p2 = ''; for (let i = 0; i < 4; i++) p2 += nums.charAt(Math.floor(Math.random() * nums.length));
-      let p3 = ''; for (let i = 0; i < 3; i++) p3 += chars.charAt(Math.floor(Math.random() * chars.length));
+      let p1 = ''; for(let i=0; i<4; i++) p1 += chars.charAt(Math.floor(Math.random()*chars.length));
+      let p2 = ''; for(let i=0; i<4; i++) p2 += nums.charAt(Math.floor(Math.random()*nums.length));
+      let p3 = ''; for(let i=0; i<3; i++) p3 += chars.charAt(Math.floor(Math.random()*chars.length));
       setDetections({ ...detections, brandSerial: `${p1}${p2} ${p3}` });
-    } else if (activeBrand === 'ONITSUKA' || activeBrand === 'ASICS') {
-      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-      let result = '';
-      for (let i = 0; i < 15; i++) result += chars.charAt(Math.floor(Math.random() * chars.length));
-      setDetections({ ...detections, brandSerial: result });
     } else {
       const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
       let result = '';
-      for (let i = 0; i < 7; i++) result += chars.charAt(Math.floor(Math.random() * chars.length));
+      for (let i = 0; i < 7; i++) {
+        result += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
       result += '<';
-      for (let i = 0; i < 5; i++) result += Math.floor(Math.random() * 10);
+      for (let i = 0; i < 5; i++) {
+        result += Math.floor(Math.random() * 10);
+      }
       setDetections({ ...detections, brandSerial: result });
     }
   };
 
   const handleDownload = async () => {
     if (!generatedImage) return;
+
     try {
       setStatus("Preparando descarga...");
       const img = new Image();
       img.crossOrigin = "anonymous";
+      
       await new Promise((resolve, reject) => {
         img.onload = resolve;
         img.onerror = () => reject(new Error("Error al cargar la imagen."));
         img.src = generatedImage;
       });
+
       const canvas = document.createElement('canvas');
       canvas.width = img.width;
       canvas.height = img.height;
       const ctx = canvas.getContext('2d');
       if (!ctx) throw new Error("No se pudo obtener el contexto del canvas.");
+
       ctx.drawImage(img, 0, 0);
+      
+      // We convert to a high-quality JPEG to strip all AI metadata and ensure a clean, raw-looking file
       const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
+      
       const link = document.createElement('a');
       const ts = Math.floor(Date.now() / 1000);
       link.href = dataUrl;
@@ -205,6 +198,7 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
+      
       setStatus("Imagen descargada con éxito.");
     } catch (err) {
       console.error("Download fail:", err);
@@ -215,38 +209,29 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
   const generateModifiedTongue = async () => {
     if (!detections) return;
     setLoading(true);
-    setStatus('Generando nueva imagen de lengüeta...');
+    setStatus('Generando nueva imagen de lengueta...');
     setError(null);
-
     try {
-      const customPrompt = activeBrand === 'ADIDAS' ? customPromptAdidas
-        : activeBrand === 'ASICS' ? customPromptAsics
-        : activeBrand === 'ONITSUKA' ? customPromptOnitsuka
-        : customPromptNB;
-
       const res = await authFetch('/api/tongue/generate', {
-        imageBase64: originalImage || null,
+        imageBase64: originalImage,
         brand: activeBrand,
         detections,
-        customPrompt,
+        customPrompt: activeBrand === 'ADIDAS' ? customPromptAdidas : activeBrand === 'ASICS' ? customPromptAsics : customPromptNB,
       });
-
       const data = await res.json();
-
-      if (!res.ok) throw new Error(data.error || 'Error del servidor');
-
+      if (!res.ok) throw new Error(data.error || 'Error en el servidor');
       if (data.image) {
         setGeneratedImage(data.image);
         setStatus('¡Lengüeta generada con éxito!');
       } else {
-        setError('El modelo no devolvió imagen. Inténtalo de nuevo.');
+        setError('El modelo no devolvió imagen. Intenta de nuevo.');
       }
     } catch (err: any) {
       const msg = err.message || String(err);
-      if (msg.includes('429') || msg.toLowerCase().includes('quota')) {
-        setError('Límite de uso alcanzado. Espera unos minutos.');
+      if (msg.toLowerCase().includes('quota') || msg.includes('429')) {
+        setError('Límite de uso alcanzado. Espera unos minutos e inténtalo de nuevo.');
       } else {
-        setError('Error al generar: ' + msg);
+        setError('Error al generar la imagen: ' + msg);
       }
     } finally {
       setLoading(false);
@@ -260,8 +245,7 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
           { key: 'ADIDAS', label: 'ADIDAS' },
           { key: 'NEW BALANCE', label: 'NEW BALANCE' },
           { key: 'ASICS', label: 'ASICS' },
-          { key: 'ONITSUKA', label: 'ONITSUKA' },
-        ] as { key: 'ADIDAS' | 'NEW BALANCE' | 'ASICS' | 'ONITSUKA'; label: string }[]).map(({ key, label }) => (
+        ] as { key: 'ADIDAS' | 'NEW BALANCE' | 'ASICS'; label: string }[]).map(({ key, label }) => (
           <button
             key={key}
             onClick={() => setActiveBrand(key)}
@@ -275,14 +259,6 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
           </button>
         ))}
       </div>
-
-      {error && (
-        <div className="px-5 py-3 bg-red-500/15 border border-red-500/40 rounded-2xl flex items-start gap-3">
-          <span className="text-red-400 font-bold text-sm mt-0.5">✕</span>
-          <p className="text-sm text-red-300 font-medium">{error}</p>
-          <button onClick={() => setError(null)} className="ml-auto text-red-400/60 hover:text-red-300 text-xs">✕</button>
-        </div>
-      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         {/* Left Side: Upload & OCR */}
@@ -325,8 +301,23 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
                 <RefreshCcw className="w-3.5 h-3.5" />
               </button>
             )}
-            <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileUpload} />
-            <input type="file" ref={cameraInputRef} className="hidden" accept="image/*" capture="environment" onChange={handleFileUpload} />
+            {/* Galería */}
+            <input
+              type="file"
+              ref={fileInputRef}
+              className="hidden"
+              accept="image/*"
+              onChange={handleFileUpload}
+            />
+            {/* Cámara directa */}
+            <input
+              type="file"
+              ref={cameraInputRef}
+              className="hidden"
+              accept="image/*"
+              capture="environment"
+              onChange={handleFileUpload}
+            />
           </div>
 
           <div className="bg-[#141414] border border-white/5 rounded-3xl p-6 space-y-4">
@@ -344,6 +335,12 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
               </div>
             )}
 
+            {error && !loading && (
+              <div className="py-4 px-4 bg-red-500/10 border border-red-500/30 rounded-2xl">
+                <p className="text-[11px] text-red-400 font-medium">{error}</p>
+              </div>
+            )}
+
             {!loading && !detections && !error && (
               <div className="py-8 text-center border border-dashed border-white/5 rounded-2xl">
                 <ScanText className="w-8 h-8 text-white/5 mx-auto mb-2" />
@@ -352,49 +349,59 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
             )}
 
             {detections && (
-              <motion.div
-                initial={{ opacity: 0 }}
+              <motion.div 
+                initial={{ opacity: 0 }} 
                 animate={{ opacity: 1 }}
                 className="grid grid-cols-2 gap-4"
               >
                 <div className="space-y-1">
                   <label className="text-[9px] uppercase text-white/30">Modelo</label>
-                  <input
-                    value={detections.model}
-                    onChange={e => setDetections({ ...detections, model: e.target.value })}
+                  <input 
+                    value={detections.model} 
+                    onChange={e => setDetections({...detections, model: e.target.value})}
                     className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-emerald-500/50 outline-none"
                   />
                 </div>
                 <div className="space-y-1">
                   <label className="text-[9px] uppercase text-white/30">SKU / Art No</label>
-                  <input
-                    value={detections.sku}
-                    onChange={e => setDetections({ ...detections, sku: e.target.value })}
+                  <input 
+                    value={detections.sku} 
+                    onChange={e => setDetections({...detections, sku: e.target.value})}
                     className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-emerald-500/50 outline-none"
                   />
                 </div>
                 <div className="space-y-1">
                   <div className="flex justify-between items-center">
                     <label className="text-[9px] uppercase text-white/30">
-                      {activeBrand === 'ADIDAS' ? 'Referencia #' : activeBrand === 'ONITSUKA' ? 'Código de Lote' : 'Referencia 1 (12d)'}
+                      {activeBrand === 'ADIDAS' ? 'Referencia #' : 'Referencia 1 (12d)'}
                     </label>
-                    <button onClick={generateRandomReference} className="text-[8px] text-emerald-400 hover:text-emerald-300 uppercase tracking-tighter">[Random]</button>
+                    <button 
+                      onClick={generateRandomReference}
+                      className="text-[8px] text-emerald-400 hover:text-emerald-300 uppercase tracking-tighter"
+                    >
+                      [Random]
+                    </button>
                   </div>
-                  <input
-                    value={detections.reference}
-                    onChange={e => setDetections({ ...detections, reference: e.target.value })}
+                  <input 
+                    value={detections.reference} 
+                    onChange={e => setDetections({...detections, reference: e.target.value})}
                     className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-emerald-500/50 outline-none font-mono"
                   />
                 </div>
 
-                <div className={`space-y-1 ${(activeBrand === 'ADIDAS' || activeBrand === 'ONITSUKA' || activeBrand === 'ASICS') ? 'opacity-30 pointer-events-none' : ''}`}>
+                <div className={`space-y-1 ${activeBrand === 'ADIDAS' ? 'opacity-30 pointer-events-none' : ''}`}>
                   <div className="flex justify-between items-center">
                     <label className="text-[9px] uppercase text-white/30">Referencia 2 (7d)</label>
-                    <button onClick={generateRandomReference2} className="text-[8px] text-emerald-400 hover:text-emerald-300 uppercase tracking-tighter">[Random]</button>
+                    <button 
+                      onClick={generateRandomReference2}
+                      className="text-[8px] text-emerald-400 hover:text-emerald-300 uppercase tracking-tighter"
+                    >
+                      [Random]
+                    </button>
                   </div>
-                  <input
-                    value={detections.reference2 || ''}
-                    onChange={e => setDetections({ ...detections, reference2: e.target.value })}
+                  <input 
+                    value={detections.reference2 || ''} 
+                    onChange={e => setDetections({...detections, reference2: e.target.value})}
                     placeholder="Solo NB..."
                     className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-emerald-500/50 outline-none font-mono"
                   />
@@ -402,28 +409,35 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
 
                 <div className="space-y-1">
                   <div className="flex justify-between items-center">
-                    <label className="text-[9px] uppercase text-white/30">Cód. Marca / Alfanumérico</label>
-                    <button onClick={generateRandomBrandSerial} className="text-[8px] text-emerald-400 hover:text-emerald-300 uppercase tracking-tighter">[Random]</button>
+                    <label className="text-[9px] uppercase text-white/30">
+                      Cód. Marca / Alfanumérico
+                    </label>
+                    <button 
+                      onClick={generateRandomBrandSerial}
+                      className="text-[8px] text-emerald-400 hover:text-emerald-300 uppercase tracking-tighter"
+                    >
+                      [Random]
+                    </button>
                   </div>
-                  <input
-                    value={detections.brandSerial}
-                    onChange={e => setDetections({ ...detections, brandSerial: e.target.value })}
+                  <input 
+                    value={detections.brandSerial} 
+                    onChange={e => setDetections({...detections, brandSerial: e.target.value})}
                     className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-emerald-500/50 outline-none font-mono"
                   />
                 </div>
                 <div className="space-y-1">
                   <label className="text-[9px] uppercase text-white/30">Fecha</label>
-                  <input
-                    value={detections.date}
-                    onChange={e => setDetections({ ...detections, date: e.target.value })}
+                  <input 
+                    value={detections.date} 
+                    onChange={e => setDetections({...detections, date: e.target.value})}
                     className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-emerald-500/50 outline-none"
                   />
                 </div>
                 <div className="space-y-1">
                   <label className="text-[9px] uppercase text-white/30">LVL / Factory</label>
-                  <input
-                    value={detections.lvl}
-                    onChange={e => setDetections({ ...detections, lvl: e.target.value })}
+                  <input 
+                    value={detections.lvl} 
+                    onChange={e => setDetections({...detections, lvl: e.target.value})}
                     className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-emerald-500/50 outline-none"
                   />
                 </div>
@@ -431,9 +445,9 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
                   {(['us', 'uk', 'fr', 'jp'] as const).map(size => (
                     <div key={size} className="space-y-1">
                       <label className="text-[9px] uppercase text-white/30">{size}</label>
-                      <input
-                        value={detections.sizes[size]}
-                        onChange={e => setDetections({ ...detections, sizes: { ...detections.sizes, [size]: e.target.value } })}
+                      <input 
+                        value={detections.sizes[size]} 
+                        onChange={e => setDetections({...detections, sizes: {...detections.sizes, [size]: e.target.value}})}
                         className="w-full bg-black/40 border border-white/10 rounded-lg px-2 py-2 text-center text-xs text-white focus:border-emerald-500/50 outline-none uppercase"
                       />
                     </div>
@@ -444,52 +458,55 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
                   <div className="space-y-1">
                     <div className="flex justify-between items-center">
                       <label className="text-[9px] uppercase text-emerald-400 font-bold">Título del Anuncio (Vinted)</label>
-                      <button
-                        onClick={() => { if (detections?.listingTitle) { navigator.clipboard.writeText(detections.listingTitle); setStatus("Título copiado"); } }}
+                      <button 
+                        onClick={() => {
+                          if (detections?.listingTitle) {
+                            navigator.clipboard.writeText(detections.listingTitle);
+                            setStatus("Título copiado al portapapeles");
+                          }
+                        }}
                         className="flex items-center gap-1 text-[8px] text-white/40 hover:text-white uppercase tracking-tighter"
                       >
                         <Copy className="w-2 h-2" /> Copiar
                       </button>
                     </div>
-                    <input
-                      value={detections.listingTitle || ''}
-                      onChange={e => setDetections({ ...detections, listingTitle: e.target.value })}
+                    <input 
+                      value={detections.listingTitle || ''} 
+                      onChange={e => setDetections({...detections, listingTitle: e.target.value})}
                       className="w-full bg-emerald-500/5 border border-emerald-500/20 rounded-lg px-3 py-2 text-xs text-white focus:border-emerald-500/50 outline-none"
                     />
                   </div>
                   <div className="space-y-1">
                     <div className="flex justify-between items-center">
                       <label className="text-[9px] uppercase text-emerald-400 font-bold">Descripción del Anuncio</label>
-                      <button
-                        onClick={() => { if (detections?.listingDescription) { navigator.clipboard.writeText(detections.listingDescription); setStatus("Descripción copiada"); } }}
+                      <button 
+                        onClick={() => {
+                          if (detections?.listingDescription) {
+                            navigator.clipboard.writeText(detections.listingDescription);
+                            setStatus("Descripción copiada al portapapeles");
+                          }
+                        }}
                         className="flex items-center gap-1 text-[8px] text-white/40 hover:text-white uppercase tracking-tighter"
                       >
                         <Copy className="w-2 h-2" /> Copiar
                       </button>
                     </div>
-                    <textarea
-                      value={detections.listingDescription || ''}
-                      onChange={e => setDetections({ ...detections, listingDescription: e.target.value })}
+                    <textarea 
+                      value={detections.listingDescription || ''} 
+                      onChange={e => setDetections({...detections, listingDescription: e.target.value})}
                       className="w-full bg-emerald-500/5 border border-emerald-500/20 rounded-lg px-3 py-2 text-xs text-white focus:border-emerald-500/50 outline-none h-24 resize-none"
                     />
                   </div>
                 </div>
 
                 <div className="col-span-2 space-y-1">
-                  <label className="text-[9px] uppercase text-white/30">Prompt de Generación ({activeBrand})</label>
-                  <textarea
-                    value={
-                      activeBrand === 'ADIDAS' ? customPromptAdidas
-                      : activeBrand === 'ASICS' ? customPromptAsics
-                      : activeBrand === 'ONITSUKA' ? customPromptOnitsuka
-                      : customPromptNB
-                    }
-                    onChange={e =>
-                      activeBrand === 'ADIDAS' ? setCustomPromptAdidas(e.target.value)
-                      : activeBrand === 'ASICS' ? setCustomPromptAsics(e.target.value)
-                      : activeBrand === 'ONITSUKA' ? setCustomPromptOnitsuka(e.target.value)
-                      : setCustomPromptNB(e.target.value)
-                    }
+                  <label className="text-[9px] uppercase text-white/30">
+                    Prompt de Generación ({activeBrand})
+                  </label>
+                  <textarea 
+                    placeholder={`Pega aquí el prompt personalizado de ${activeBrand}...`}
+                    value={activeBrand === 'ADIDAS' ? customPromptAdidas : activeBrand === 'ASICS' ? customPromptAsics : customPromptNB}
+                    onChange={e => activeBrand === 'ADIDAS' ? setCustomPromptAdidas(e.target.value) : activeBrand === 'ASICS' ? setCustomPromptAsics(e.target.value) : setCustomPromptNB(e.target.value)}
                     className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-emerald-500/50 outline-none h-20 resize-none"
                   />
                 </div>
@@ -497,7 +514,7 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
             )}
 
             {detections && (
-              <button
+              <button 
                 onClick={generateModifiedTongue}
                 disabled={loading}
                 className="w-full py-4 bg-emerald-500 text-black font-bold rounded-2xl hover:bg-emerald-400 transition-all shadow-[0_0_30px_rgba(16,185,129,0.2)] flex items-center justify-center gap-2 mt-4"
@@ -513,45 +530,47 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
         <div className="space-y-6">
           <div className="bg-[#141414] border border-white/5 rounded-3xl p-8 h-full flex flex-col items-center justify-center relative overflow-hidden group min-h-[500px]">
             <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-emerald-500/0 via-emerald-500/50 to-emerald-500/0" />
-
+            
             <AnimatePresence mode="wait">
               {generatedImage ? (
-                <motion.div
+                <motion.div 
                   initial={{ opacity: 0, scale: 0.9 }}
                   animate={{ opacity: 1, scale: 1 }}
                   className="space-y-6 w-full text-center"
                 >
                   <div className="relative inline-block mx-auto">
-                    <img
-                      src={generatedImage}
-                      className="max-w-full rounded-2xl shadow-[0_30px_60px_rgba(0,0,0,0.5)] border border-white/10"
+                    <img 
+                      src={generatedImage} 
+                      className="max-w-full rounded-2xl shadow-[0_30px_60px_rgba(0,0,0,0.5)] border border-white/10" 
                       alt="Generated"
                     />
                     <div className="absolute inset-0 bg-emerald-500/10 opacity-0 group-hover:opacity-100 transition-opacity rounded-2xl pointer-events-none" />
                   </div>
-
+                  
                   <div className="flex flex-col items-center gap-4">
                     <div className="flex gap-3">
-                      <button
+                       <button 
                         onClick={handleDownload}
                         className="px-6 py-3 bg-white text-black font-bold rounded-xl hover:bg-emerald-400 transition-colors flex items-center gap-2"
-                      >
-                        <Download className="w-4 h-4" /> Bajar Imagen
-                      </button>
-                      <button
+                       >
+                         <Download className="w-4 h-4" /> Bajar Imagen
+                       </button>
+                       <button 
                         onClick={() => {
                           if (generatedImage) {
-                            fetch(generatedImage).then(r => r.blob()).then(blob => {
-                              const item = new ClipboardItem({ "image/png": blob });
-                              navigator.clipboard.write([item]);
-                              setStatus("Imagen copiada al portapapeles");
-                            });
+                            fetch(generatedImage)
+                              .then(res => res.blob())
+                              .then(blob => {
+                                const item = new ClipboardItem({ "image/png": blob });
+                                navigator.clipboard.write([item]);
+                                setStatus("Imagen copiada al portapapeles");
+                              });
                           }
                         }}
                         className="px-6 py-3 bg-white/10 text-white font-bold rounded-xl hover:bg-white/20 transition-colors flex items-center gap-2"
-                      >
-                        <Copy className="w-4 h-4" /> Copiar
-                      </button>
+                       >
+                         <Copy className="w-4 h-4" /> Copiar
+                       </button>
                     </div>
                     <p className="text-[10px] text-white/20 uppercase tracking-widest font-mono">Archivo Reconstruido - Alta Fidelidad</p>
                   </div>
@@ -569,11 +588,10 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
               )}
             </AnimatePresence>
 
-            {loading && (
-              <div className="absolute inset-0 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center gap-4 z-10 rounded-3xl">
+            {loading && generatedImage && (
+              <div className="absolute inset-0 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center gap-4 z-10">
                 <RefreshCcw className="w-10 h-10 text-emerald-500 animate-spin" />
                 <p className="text-xs font-bold text-white uppercase tracking-widest">{status}</p>
-                <p className="text-[10px] text-white/40">Puede tardar 20-40 segundos...</p>
               </div>
             )}
           </div>
@@ -583,8 +601,8 @@ No cambies nada más (tipografía, texturas, iluminación y resto de datos deben
       <div className="bg-emerald-500/5 border border-emerald-500/10 rounded-2xl p-4 flex gap-4 text-emerald-200/60 text-[11px] leading-relaxed">
         <Info className="w-5 h-5 flex-shrink-0 text-emerald-500" />
         <p>
-          Este módulo utiliza Vision-AI para detectar y reconstruir etiquetas de calzado. Al regenerar,
-          Gemini crea una versión sintética limpia basada en los datos extraídos para asegurar neutralidad
+          Este módulo utiliza Vision-AI para detectar y reconstruir etiquetas de calzado. Al regenerar, 
+          Gemini crea una versión sintética limpia basada en los datos extraídos para asegurar neutralidad 
           en auditorías visuales.
         </p>
       </div>
