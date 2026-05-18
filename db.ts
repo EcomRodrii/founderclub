@@ -228,6 +228,7 @@ export async function initDB() {
     `ALTER TABLE vinted_accounts ADD COLUMN IF NOT EXISTS items_count INTEGER DEFAULT 0`,
     `ALTER TABLE vinted_accounts ADD COLUMN IF NOT EXISTS sold_count INTEGER DEFAULT 0`,
     `ALTER TABLE vinted_accounts ADD COLUMN IF NOT EXISTS last_synced_at TIMESTAMP`,
+    `ALTER TABLE vinted_accounts ADD COLUMN IF NOT EXISTS label TEXT`,
     `ALTER TABLE sales ADD COLUMN IF NOT EXISTS account_id INTEGER REFERENCES vinted_accounts(id) ON DELETE SET NULL`,
     `ALTER TABLE sales ADD COLUMN IF NOT EXISTS notes TEXT`,
     `ALTER TABLE sales ADD COLUMN IF NOT EXISTS platform VARCHAR(30) DEFAULT 'vinted'`,
