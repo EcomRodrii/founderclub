@@ -819,6 +819,17 @@ interface ProcessedImage {
   processedUrl: string | null; originalSize: number; processedSize: number;
   status: 'processing' | 'done' | 'error'; noiseLevel: number; dimChange: string; mode: Mode;
   cosineDist?: number; advAttempts?: number;
+  hashShort?: string;          // SHA-1 corto de la procesada (prueba visual de unicidad)
+  originalHashShort?: string;  // SHA-1 corto de la original
+}
+
+async function sha1Short(input: string | ArrayBuffer): Promise<string> {
+  const buf = typeof input === 'string'
+    ? new TextEncoder().encode(input)
+    : new Uint8Array(input);
+  const hash = await crypto.subtle.digest('SHA-1', buf);
+  const hex = Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
+  return hex.slice(0, 10);
 }
 
 // ─── Sub-componente: campo numérico para el editor ───────────────────────────
@@ -851,6 +862,8 @@ function NumField({
 // ─── Componente ───────────────────────────────────────────────────────────────
 
 export default function ImageUniquifier() {
+  const [advancedMode, setAdvancedMode] = useState(false);
+  const [activeMode, setActiveMode]     = useState<Mode>('normal');
   const [configs, setConfigs]       = useState<RepostConfig[]>(DEFAULT_CONFIGS);
   const [expandedRid, setExpandedRid] = useState<string | null>(null);
   const [images, setImages]         = useState<ProcessedImage[]>([]);
@@ -925,6 +938,9 @@ export default function ImageUniquifier() {
       const entry = entries[i];
       const mc = cfgs[i % cfgs.length];
       try {
+        const origBuf = await arr[i].arrayBuffer();
+        const origHash = await sha1Short(origBuf);
+        setImages(prev => prev.map(img => img.id === entry.id ? { ...img, originalHashShort: origHash } : img));
         if (useNuclear && clipHelpers) {
           const origDataUrl = await new Promise<string>((resolve, reject) => {
             const r = new FileReader();
@@ -935,16 +951,18 @@ export default function ImageUniquifier() {
           const origEmb = await clipHelpers.embedDataUrl(origDataUrl);
           let attempts = 0;
           const res = await uniquifyImageAdversarial(arr[i], mc, origEmb, (n) => { attempts = n; });
+          const procHash = await sha1Short(res.dataUrl);
           setImages(prev => prev.map(img =>
             img.id === entry.id
-              ? { ...img, processedUrl: res.dataUrl, processedSize: res.size, status: 'done', noiseLevel: res.noiseLevel, dimChange: res.dimChange, cosineDist: res.cosineDist, advAttempts: attempts }
+              ? { ...img, processedUrl: res.dataUrl, processedSize: res.size, status: 'done', noiseLevel: res.noiseLevel, dimChange: res.dimChange, cosineDist: res.cosineDist, advAttempts: attempts, hashShort: procHash }
               : img
           ));
         } else {
           const res = await uniquifyImage(arr[i], mc);
+          const procHash = await sha1Short(res.dataUrl);
           setImages(prev => prev.map(img =>
             img.id === entry.id
-              ? { ...img, processedUrl: res.dataUrl, processedSize: res.size, status: 'done', noiseLevel: res.noiseLevel, dimChange: res.dimChange }
+              ? { ...img, processedUrl: res.dataUrl, processedSize: res.size, status: 'done', noiseLevel: res.noiseLevel, dimChange: res.dimChange, hashShort: procHash }
               : img
           ));
         }
@@ -955,12 +973,16 @@ export default function ImageUniquifier() {
     }
   }, [nuclearMode, clipReady]);
 
+  const activeConfigs: RepostConfig[] = advancedMode
+    ? configs
+    : [{ ...MODES.find(m => m.id === activeMode)!, rid: 'simple', editTitle: 'auto', editDescription: 'auto' }];
+
   const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault(); setDragging(false); processFiles(e.dataTransfer.files, configs);
-  }, [processFiles, configs]);
+    e.preventDefault(); setDragging(false); processFiles(e.dataTransfer.files, activeConfigs);
+  }, [processFiles, activeConfigs]);
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) processFiles(e.target.files, configs);
+    if (e.target.files) processFiles(e.target.files, activeConfigs);
     e.target.value = '';
   };
 
@@ -1010,7 +1032,46 @@ export default function ImageUniquifier() {
   return (
     <div className="space-y-6">
 
-      {/* Configuración de repost — tabla cíclica */}
+      {/* Modo simple: 4 presets en píldora */}
+      {!advancedMode && (
+        <div className="bg-[#0f0f0f] border border-white/[0.08] rounded-2xl p-5">
+          <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+            <p className="text-xs font-black uppercase tracking-widest text-white/50">Intensidad</p>
+            <button
+              onClick={() => setAdvancedMode(true)}
+              className="text-[11px] text-acid hover:underline font-medium"
+            >
+              Ajustes avanzados →
+            </button>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {MODES.map(m => {
+              const active = activeMode === m.id;
+              const isExtremo = m.id === 'extremo';
+              return (
+                <button key={m.id} onClick={() => setActiveMode(m.id)}
+                  className={`px-3 py-3 rounded-xl border-2 text-center transition ${
+                    active && isExtremo ? 'border-red-700 bg-red-950/60 text-red-300'
+                    : active            ? 'border-acid bg-acid-soft text-acid'
+                    : 'border-white/10 bg-white/[0.02] text-white/50 hover:border-white/20 hover:text-white/80'
+                  }`}>
+                  <p className="text-xs font-black uppercase tracking-wider">{m.label}</p>
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-[11px] text-white/40 mt-3 leading-snug">
+            {MODES.find(m => m.id === activeMode)!.desc}
+          </p>
+          <p className="text-[10px] text-white/30 mt-2 leading-snug">
+            ℹ La foto procesada parecerá idéntica a la vista — el cambio es invisible al ojo, pero hash, EXIF y firma CNN son únicos.
+          </p>
+        </div>
+      )}
+
+      {/* Configuración de repost — tabla cíclica (solo en avanzado) */}
+      {advancedMode && (
+      <>
       <div className="bg-[#0f0f0f] border border-white/[0.08] rounded-2xl overflow-hidden">
         <div className="p-5 pb-3 border-b border-white/5">
           <p className="text-xs font-black uppercase tracking-widest text-white/50">Configuración de repost</p>
@@ -1125,14 +1186,13 @@ export default function ImageUniquifier() {
         </div>
       </div>
 
-      {/* Acciones formulario */}
+      {/* Acciones formulario (avanzado) */}
       <div className="flex gap-2 flex-wrap">
         <button
-          onClick={() => fileInputRef.current?.click()}
-          className="flex items-center gap-2 bg-acid hover:bg-acid/90 text-black font-bold px-5 py-2.5 rounded-xl text-sm transition"
+          onClick={() => setAdvancedMode(false)}
+          className="flex items-center gap-2 bg-white/5 hover:bg-white/10 border border-white/10 text-white/60 hover:text-white font-bold px-5 py-2.5 rounded-xl text-sm transition"
         >
-          <Zap className="w-4 h-4" />
-          Iniciar Restocker
+          ← Modo simple
         </button>
         <button
           onClick={resetConfigs}
@@ -1142,6 +1202,8 @@ export default function ImageUniquifier() {
           Resetear formulario
         </button>
       </div>
+      </>
+      )}
 
       {/* Modo NUCLEAR: CLIP adversarial verifier */}
       <div className={`rounded-2xl border-2 p-4 transition-all ${
@@ -1274,6 +1336,12 @@ export default function ImageUniquifier() {
                       <div className="flex justify-between text-[10px] text-acid"><span>Procesada</span><span className="font-mono">{formatSize(img.processedSize)}</span></div>
                       <div className="text-[10px] text-white/20 font-mono mt-1">{img.dimChange}</div>
                       <div className="text-[10px] text-white/20 font-mono">Bloques ±{img.noiseLevel} · Sin EXIF</div>
+                      {img.originalHashShort && img.hashShort && (
+                        <div className="mt-2 pt-2 border-t border-white/5 space-y-0.5">
+                          <div className="flex justify-between text-[10px] text-white/30 font-mono"><span>Hash original</span><span>{img.originalHashShort}</span></div>
+                          <div className="flex justify-between text-[10px] text-acid font-mono"><span>Hash nuevo ✓</span><span>{img.hashShort}</span></div>
+                        </div>
+                      )}
                       {typeof img.cosineDist === 'number' && (
                         <div className={`flex justify-between text-[10px] font-mono mt-1 ${
                           img.cosineDist >= ADV_TARGET_DIST ? 'text-fuchsia-400' : 'text-amber-400/80'
