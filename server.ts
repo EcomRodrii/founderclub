@@ -1123,9 +1123,10 @@ ${customPrompt ? `\nADDITIONAL RULES:\n${customPrompt}` : ""}`;
   // ── Lamine Anty Downloads ────────────────────────────────────────────────────
   // Equivalent to: https://blackstock.es/downloads/blackstock-anty/Blackstock-Anty-0.3.0.dmg
   // Usage:         https://founderclub-production.up.railway.app/downloads/lamine-anty/Lamine-Anty-0.3.0-arm64.dmg
+  const GH = "https://github.com/EcomRodrii/lamine-anty-releases/releases/download/v0.3.0";
   const ANTY_FILES: Record<string, string> = {
-    "Lamine-Anty-0.3.0-arm64.dmg": "https://ak47-worker-backend-production.up.railway.app/downloads/lamine-anty/Lamine-Anty-0.3.0-arm64.dmg",
-    "Lamine-Anty-0.3.0.dmg":       "https://ak47-worker-backend-production.up.railway.app/downloads/lamine-anty/Lamine-Anty-0.3.0.dmg",
+    "Lamine-Anty-0.3.0-arm64.dmg": `${GH}/Lamine.Anty-0.3.0-arm64.dmg`,
+    "Lamine-Anty-0.3.0.dmg":       `${GH}/Lamine-Anty-0.3.0.zip`,
   };
 
   app.get("/downloads/lamine-anty/:filename", (req: Request, res: Response) => {
