@@ -1322,7 +1322,7 @@ export default function ImageUniquifier() {
                 className="bg-[#141414] border border-white/5 rounded-2xl overflow-hidden">
                 <div className="relative aspect-square bg-black/40 flex items-center justify-center overflow-hidden">
                   {img.processedUrl
-                    ? <img src={img.processedUrl} alt={img.originalName} className="w-full h-full object-cover" />
+                    ? <img src={img.processedUrl} alt={img.originalName} className="w-full h-full object-contain bg-black/60" />
                     : img.status === 'processing'
                     ? <div className="flex flex-col items-center gap-3"><RefreshCcw className="w-8 h-8 animate-spin text-acid" /><span className="text-xs text-white/30">Procesando…</span></div>
                     : img.status === 'error'
