@@ -1,11 +1,11 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Eye, EyeOff, Search, Settings,
   Lock, User, ExternalLink, RefreshCcw,
   CheckCircle2, AlertCircle, ShieldCheck,
   ChevronRight, LayoutGrid, List as ListIcon,
   HelpCircle, Copy, Check, Scissors, Key, LogOut, TrendingUp, Zap, Trash2,
-  Image as ImageIcon
+  Image as ImageIcon, Terminal as TerminalIcon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import TongueEditor from './components/TongueEditor';
@@ -55,40 +55,40 @@ function LicenseActivation({ token, onActivated }: { token: string; onActivated:
     <div className="min-h-screen flex items-center justify-center p-4">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-[20px] bg-amber-500/20 border border-amber-500/30 mb-4">
-            <Key className="w-8 h-8 text-amber-400" />
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-[20px] bg-[#4d9fff]/10 border border-[#4d9fff]/25 mb-4">
+            <Key className="w-8 h-8 text-acid" />
           </div>
           <h1 className="text-2xl font-bold text-[#f4f4ef]">Activar licencia</h1>
-          <p className="text-[#a4a79f] text-sm mt-1">Introduce tu clave para acceder</p>
+          <p className="text-muted text-sm mt-1">Introduce tu clave para acceder</p>
         </div>
-        <div className="bg-[#0d1012] border border-white/8 rounded-[20px] p-6">
+        <div className="bg-panel border border-white/8 rounded-[28px] p-6">
           {success ? (
             <div className="flex flex-col items-center gap-3 py-4">
-              <CheckCircle2 className="w-12 h-12 text-[#4d9fff]" />
+              <CheckCircle2 className="w-12 h-12 text-acid" />
               <p className="text-[#f4f4ef] font-medium">¡Licencia activada!</p>
             </div>
           ) : (
             <form onSubmit={activate} className="space-y-4">
               <div>
-                <label className="block text-xs font-medium text-[#a4a79f] mb-1.5">Clave de licencia</label>
+                <label className="block text-xs font-medium text-muted mb-1.5">Clave de licencia</label>
                 <input
                   type="text"
                   value={key}
                   onChange={e => setKey(e.target.value.toUpperCase())}
                   placeholder="FC-XXXX-XXXX-XXXX-XXXX"
                   required
-                  className="w-full bg-[#111416] border border-white/8 rounded-[14px] px-4 py-2.5 text-sm font-mono text-[#f4f4ef] placeholder-[#a4a79f] focus:outline-none focus:border-amber-500 transition"
+                  className="w-full bg-panel-soft border border-white/8 rounded-[14px] px-4 py-2.5 text-sm font-mono text-[#f4f4ef] placeholder-[#a4a79f] focus:outline-none focus:border-[#4d9fff]/35 transition"
                 />
               </div>
               {error && (
-                <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/20 rounded-[14px] px-3 py-2.5 text-sm text-red-400">
+                <div className="flex items-center gap-2 bg-[#ff9797]/8 border border-[#ff9797]/20 rounded-[14px] px-3 py-2.5 text-sm text-[#ff9797]">
                   <AlertCircle className="w-4 h-4 shrink-0" />{error}
                 </div>
               )}
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-semibold rounded-[14px] py-2.5 text-sm transition"
+                className="w-full bg-acid hover:bg-acid-2 disabled:opacity-50 text-[#050607] font-semibold rounded-[14px] py-2.5 text-sm transition shadow-acid"
               >
                 {loading ? 'Activando…' : 'Activar'}
               </button>
@@ -139,7 +139,7 @@ export default function App() {
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="w-8 h-8 border-2 border-[#4d9fff] border-t-transparent rounded-full animate-spin" />
+        <div className="w-8 h-8 border-2 border-acid border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
@@ -175,6 +175,14 @@ const DOMAINS = ['es', 'fr', 'it', 'nl', 'de', 'pl', 'uk', 'com'];
 function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; user: any; license: any; onLogout: () => void; onAdmin?: () => void }) {
   const authHeader = { Authorization: `Bearer ${token}` };
 
+  // Compartir token con la extensión Chrome (si está instalada) para que no
+  // haga falta hacer login dos veces. La extensión escucha el evento
+  // 'founderclub-token' en window y lo guarda como lamine_auth_token.
+  useEffect(() => {
+    if (!token) return;
+    window.dispatchEvent(new CustomEvent('founderclub-token', { detail: { token } }));
+  }, [token]);
+
   // Helper to add auth to fetch calls
   const apiFetch = (url: string, options: RequestInit = {}) =>
     fetch(url, { ...options, headers: { ...options.headers as any, ...authHeader } });
@@ -187,8 +195,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
   const [userId, setUserId] = useState<string>(() => localStorage.getItem('vinted_user_id') || '3152763908');
   const [domain, setDomain] = useState<string>(() => localStorage.getItem('vinted_domain') || 'es');
   const [profileUrl, setProfileUrl] = useState('https://www.vinted.es/member/3152763908');
-  const [activeTab, setActiveTab] = useState<'mine' | 'external' | 'tongues' | 'profits'>('mine');
-  const [tongueSubTab, setTongueSubTab] = useState<'editor' | 'photos'>('editor');
+  const [activeTab, setActiveTab] = useState<'mine' | 'external' | 'tongues' | 'profits' | 'photos'>('mine');
   
   // External Report State
   const [externalUrl, setExternalUrl] = useState('');
@@ -268,6 +275,19 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
 
   const resolveProductId = async () => {
     if (!externalUrl) return;
+    // Extraer ID directo de la URL sin llamada al servidor
+    const quickId =
+      externalUrl.match(/\/items\/(\d+)/i)?.[1] ||
+      externalUrl.match(/\/(\d{5,})-/)?.[1] ||
+      externalUrl.match(/\/(\d{5,})\/?(?:[?#]|$)/)?.[1] ||
+      null;
+    if (quickId) {
+      setExternalId(quickId);
+      setExternalTitle('Producto detectado');
+      setStatus('ID detectado: ' + quickId);
+      return;
+    }
+    // Fallback al servidor solo si el regex no funciona
     setLoading(true);
     setError(null);
     try {
@@ -359,19 +379,79 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
 
   const [itemStats, setItemStats] = useState<{ visible: boolean; checked: boolean }>({ visible: true, checked: false });
   const [stealthDescription, setStealthDescription] = useState('This item is a replica and uses stock photos from a luxury brand website. Selling counterfeits is against Vinted safety policies.');
-  const [extraCookies, setExtraCookies] = useState('');      // multi-account cookies
-  const [reportResult, setReportResult] = useState<{ hits: number; total: number; accounts: number; byReason: Record<number, number> } | null>(null);
-  const [nukeLoading, setNukeLoading] = useState(false);
-  const [likeOfferLoading, setLikeOfferLoading] = useState(false);
-  const [likeOfferResult, setLikeOfferResult] = useState<{ favourites: number; offers: number; accounts: number; offerPrice: string | null } | null>(null);
 
   // Bazooka queue
   interface BazookaJob { id: number; url: string; title: string | null; item_id: string; status: string; note: string | null; error_message: string | null; created_at: string; }
   interface SniperResult { worker: number; success: boolean; transactionId?: string; purchaseId?: string; error?: string; durationMs: number; }
   const [bazookaJobs, setBazookaJobs] = useState<BazookaJob[]>([]);
+
+  // Auto-Bazooka (extensión)
+  const [bazookaAuto, setBazookaAuto]     = useState<{ enabled: boolean; maxPrice: number }>({ enabled: false, maxPrice: 0 });
+  const [bazookaAutoMaxPrice, setBazookaAutoMaxPrice] = useState('0');
+  const [bazookaAutoSaving, setBazookaAutoSaving]     = useState(false);
   const [loadingReserve, setLoadingReserve] = useState(false);
   const [sniperLoading, setSniperLoading] = useState(false);
+  const [bombardeoLoading, setBombardeoLoading] = useState(false);
   const [sniperResult, setSniperResult] = useState<{ ok: boolean; itemId: string; sellerId: string; title: string; workers: number; winner: SniperResult | null; results: SniperResult[]; fastestMs: number } | null>(null);
+
+  // ── Auto-repeat ──
+  const [autoRepeat, setAutoRepeat] = useState(false);
+  const [repeatInterval, setRepeatInterval] = useState(5); // minutos
+  const [repeatCountdown, setRepeatCountdown] = useState<number | null>(null);
+  const [repeatAttackType, setRepeatAttackType] = useState<string | null>(null);
+
+  // ── Ops terminal ──
+  interface TermLine { id: string; ts: Date; level: 'sys'|'ok'|'err'|'warn'|'http'|'worker'|'data'; tag: string; msg: string; }
+  const [termLines, setTermLines] = useState<TermLine[]>([]);
+  const termRef = useRef<HTMLDivElement>(null);
+  const term = useCallback((level: TermLine['level'], tag: string, msg: string) => {
+    setTermLines(prev => [...prev, { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, ts: new Date(), level, tag, msg }].slice(-500));
+  }, []);
+  useEffect(() => {
+    if (termRef.current) termRef.current.scrollTop = termRef.current.scrollHeight;
+  }, [termLines]);
+
+  // ── SSE live stream (ops-stream) ──────────────────────────────────────────
+  const sseRef = useRef<EventSource | null>(null);
+  useEffect(() => {
+    if (activeTab !== 'external') {
+      sseRef.current?.close();
+      sseRef.current = null;
+      return;
+    }
+    // Close any existing connection before opening a new one
+    sseRef.current?.close();
+    const es = new EventSource(`/api/ops-stream?token=${encodeURIComponent(token)}`);
+    sseRef.current = es;
+    es.onmessage = (e) => {
+      try {
+        const d = JSON.parse(e.data);
+        if (d.tag && d.msg) term(d.level as TermLine['level'] || 'sys', d.tag, d.msg);
+      } catch {}
+    };
+    es.onerror = () => term('warn', 'STREAM', 'conexión perdida · reconectando…');
+    return () => { es.close(); sseRef.current = null; };
+  }, [activeTab, token]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Attack log (kept for compat) ──
+  interface AttackEntry { id: string; type: string; itemId: string; title: string; success: boolean; detail: string; at: Date; }
+  const [attackLog, setAttackLog] = useState<AttackEntry[]>([]);
+  const addLog = (entry: Omit<AttackEntry, 'id'>) => {
+    setAttackLog(prev => [{ ...entry, id: Date.now().toString() }, ...prev].slice(0, 25));
+  };
+
+  // ── Seller bulk mode ──
+  const [sellerUrl, setSellerUrl] = useState('');
+  const [sellerItems, setSellerItems] = useState<any[]>([]);
+  const [sellerLoading, setSellerLoading] = useState(false);
+  const [sellerAttacking, setSellerAttacking] = useState(false);
+
+  // ── Multi-target ──
+  const [multiUrls, setMultiUrls] = useState('');
+  const [multiLoading, setMultiLoading] = useState(false);
+
+  // ── Advanced config panel ──
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   const loadJobs = useCallback(async () => {
     try {
@@ -384,8 +464,95 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
     if (activeTab !== 'external') return;
     loadJobs();
     const iv = setInterval(loadJobs, 4000);
+    // Terminal init message
+    term('sys', 'SYS', `lamine-ops terminal · v1.1 · cookie:${cookie ? 'OK' : 'AUSENTE'} · domain:${domain}`);
+    term('sys', 'SYS', 'ready. esperando operaciones desde extension o UI...');
     return () => clearInterval(iv);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, loadJobs]);
+
+  // ── Auto-repeat countdown ──────────────────────────────────────────────────
+  useEffect(() => {
+    if (!autoRepeat || repeatCountdown === null) return;
+    if (repeatCountdown <= 0) {
+      // Fire the stored attack type
+      if (repeatAttackType === 'sniper') fireSniperBazooka();
+      else if (repeatAttackType === 'bombardeo') spamCheckout();
+      else if (repeatAttackType === 'reporte') reportItem();
+      setRepeatCountdown(repeatInterval * 60);
+      return;
+    }
+    const t = setTimeout(() => setRepeatCountdown(c => (c ?? 0) - 1), 1000);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRepeat, repeatCountdown]);
+
+  const fmtCountdown = (s: number) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+
+  const toggleAutoRepeat = (type: string) => {
+    if (autoRepeat && repeatAttackType === type) {
+      setAutoRepeat(false);
+      setRepeatCountdown(null);
+      setRepeatAttackType(null);
+    } else {
+      setAutoRepeat(true);
+      setRepeatAttackType(type);
+      setRepeatCountdown(repeatInterval * 60);
+    }
+  };
+
+  // ── Seller bulk ────────────────────────────────────────────────────────────
+  const loadSellerItems = async () => {
+    if (!sellerUrl) return;
+    setSellerLoading(true);
+    setSellerItems([]);
+    try {
+      const r = await fetch(`/api/vinted/seller-items?url=${encodeURIComponent(sellerUrl)}&domain=${domain}`);
+      const d = await r.json();
+      setSellerItems(d.items || []);
+      if (!d.items?.length) setError('No se encontraron artículos activos para ese vendedor.');
+    } catch { setError('Error al cargar artículos del vendedor.'); }
+    finally { setSellerLoading(false); }
+  };
+
+  const attackSellerAll = async () => {
+    if (!sellerItems.length) return;
+    if (!cookie) { setError('⚠️ Cookie de Vinted requerida.'); return; }
+    setSellerAttacking(true);
+    setStatus(`🎯 Atacando ${sellerItems.length} artículos...`);
+    let ok = 0;
+    for (const item of sellerItems) {
+      const itemUrl = item.url || `https://www.vinted.${domain}/items/${item.id}-${(item.title || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 30)}`;
+      try {
+        const r = await apiFetch('/api/sniper/fire', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: itemUrl, cookies: cookie, workers: 2 }) });
+        const d = await r.json();
+        if (d.ok) ok++;
+        addLog({ type: 'sniper', itemId: String(item.id), title: item.title || '', success: d.ok, detail: d.ok ? `Sniper ${d.fastestMs}ms` : 'Fallido', at: new Date() });
+      } catch {}
+    }
+    setSellerAttacking(false);
+    setStatus(`✅ Bulk completado: ${ok}/${sellerItems.length} exitosos.`);
+  };
+
+  // ── Multi-target ───────────────────────────────────────────────────────────
+  const attackMultiTargets = async () => {
+    const urls = multiUrls.split('\n').map(u => u.trim()).filter(u => u.startsWith('http'));
+    if (!urls.length) { setError('⚠️ Introduce al menos una URL.'); return; }
+    if (!cookie) { setError('⚠️ Cookie de Vinted requerida.'); return; }
+    setMultiLoading(true);
+    setStatus(`🎯 Atacando ${urls.length} objetivos...`);
+    let ok = 0;
+    for (const u of urls) {
+      try {
+        const r = await apiFetch('/api/sniper/fire', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: u, cookies: cookie, workers: 2 }) });
+        const d = await r.json();
+        if (d.ok) ok++;
+        addLog({ type: 'sniper', itemId: d.itemId || u.match(/\/(\d{5,})-/)?.[1] || '?', title: d.title || u, success: d.ok, detail: d.ok ? `Sniper ${d.fastestMs}ms` : 'Fallido', at: new Date() });
+      } catch {}
+    }
+    setMultiLoading(false);
+    setStatus(`✅ Multi-target: ${ok}/${urls.length} exitosos.`);
+  };
 
   const loginGoolazo = async () => {
     if (!bsEmail || !bsPassword) { setBsLoginMsg({ text: 'Introduce email y contraseña.', ok: false }); return; }
@@ -413,71 +580,100 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
   };
 
   const enqueueReserve = async () => {
-    let targetUrl = externalUrl;
-    let targetTitle = externalTitle;
-
-    if (!targetUrl) { setError('⚠️ Introduce la URL del producto a reservar.'); return; }
-
-    // ── Modo Goolazo: SIN autenticación, POST directo ──
+    const targetUrl = externalUrl;
+    if (!targetUrl) { setError('⚠️ Introduce la URL del producto.'); return; }
+    if (!cookie) { setError('⚠️ Se requieren cookies de Vinted.'); return; }
+    // RESERVA usa el mismo flujo Blackstock que el Sniper
     setLoadingReserve(true);
-    setStatus('⚡ Enviando job a Goolazo...');
+    setStatus('🔗 Reservando item...');
+    term('sys', 'SYS', `→ RESERVA · url:${targetUrl.replace(/\?.*/, '').slice(-50)} · workers:1`);
     try {
-      const r = await apiFetch('/api/bazooka/goolazo-bridge', {
+      const r = await apiFetch('/api/sniper/fire', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: targetUrl, title: targetTitle }),
+        body: JSON.stringify({ url: targetUrl, cookies: cookie, workers: 1 }),
       });
-      const d = await r.json();
-      if (r.ok && d.ok) {
-        setStatus(`✅ Job enviado a Goolazo${d.accountName ? ` — vendedor: ${d.accountName}` : ''}. Sus workers harán la reserva.`);
-        loadJobs();
-        return;
-      } else {
-        setError(`❌ Goolazo error: ${d.error || JSON.stringify(d)}`);
-        setLoadingReserve(false);
+      let d: any;
+      try { d = await r.json(); } catch {
+        term('err', 'RESERVA', `respuesta no-JSON del servidor (${r.status})`);
+        setError(`❌ Respuesta inesperada (${r.status})`);
         return;
       }
-    } catch { setError('Error de red al contactar con Goolazo.'); setLoadingReserve(false); return; }
-    // si llegamos aquí (no debería), fallback
-    // ── Modo fallback: reserva directa con cookies de Vinted ──
-    if (!cookie) { setError('⚠️ Introduce tu Cookie de Vinted en el panel lateral.'); return; }
-
-    let targetId = externalId;
-    if (!targetId && targetUrl) {
-      setStatus('Detectando ID...');
-      try {
-        const r = await fetch(`/api/vinted/resolve-product?url=${encodeURIComponent(targetUrl)}`);
-        const d = await r.json();
-        if (d.itemId) { targetId = d.itemId; targetTitle = d.title || ''; setExternalId(d.itemId); setExternalTitle(d.title || ''); }
-        else { setError('No se pudo detectar el ID del producto.'); return; }
-      } catch { setError('Error al resolver la URL.'); return; }
+      if (!r.ok) {
+        term('err', 'RESERVA', `HTTP ${r.status} · ${d.error || 'error desconocido'}`);
+        setError(`❌ ${d.error || 'Error desconocido'}`);
+        return;
+      }
+      term('data', 'RESERVA', `item_id:${d.itemId || externalId} · fastest:${d.fastestMs}ms`);
+      if (d.ok) {
+        term('ok', 'RESERVA', `✓ RESERVADO · tx:${d.winner?.transactionId} · purchase:${d.winner?.purchaseId} · ${d.winner?.durationMs}ms`);
+        setStatus(`✅ RESERVADO — tx:${d.winner?.transactionId} · purchase:${d.winner?.purchaseId}`);
+        addLog({ type: 'sniper', itemId: d.itemId || externalId, title: d.title || externalTitle, success: true, detail: `Reserva OK ${d.fastestMs}ms`, at: new Date() });
+      } else {
+        const reasons = (d.results as any[])?.map((w: any) => w.error).filter(Boolean).join(' | ') || '';
+        term('err', 'RESERVA', `✗ fallida · ${reasons}`);
+        setError(`❌ Reserva fallida. ${reasons}`);
+      }
+    } catch (err: any) {
+      term('err', 'RESERVA', `error de red: ${err?.message || 'desconocido'}`);
+      setError(`❌ Error de red: ${err?.message}`);
+    } finally {
+      setLoadingReserve(false);
     }
-
-    if (!targetId) { setError('⚠️ No se pudo extraer el ID del producto.'); return; }
-    if (!targetUrl) targetUrl = `https://www.vinted.es/items/${targetId}`;
-
-    setLoadingReserve(true);
-    setStatus('Añadiendo a la cola de reserva...');
-    try {
-      const r = await apiFetch('/api/bazooka/enqueue', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: targetUrl, title: targetTitle, cookies: cookie }),
-      });
-      const d = await r.json();
-      if (Array.isArray(d) && d.length > 0) {
-        setStatus(`Job #${d[0].id} en cola. Procesando...`);
-        loadJobs();
-      } else {
-        setError('Error al encolar: ' + JSON.stringify(d));
-      }
-    } catch { setError('Error de red al encolar.'); }
-    finally { setLoadingReserve(false); }
   };
 
   const clearJobs = async () => {
     await apiFetch('/api/bazooka/jobs/clear', { method: 'DELETE' });
     setBazookaJobs([]);
+  };
+
+  // ── Auto-Bazooka: comunica con la extensión vía content script bridge ────────
+  const sendToExtension = (action: string, payload: object = {}) =>
+    new Promise<any>((resolve) => {
+      const timeout = setTimeout(() => resolve(null), 3000);
+      const handler = (e: Event) => {
+        const detail = (e as CustomEvent).detail;
+        if (detail?.action === action) {
+          clearTimeout(timeout);
+          window.removeEventListener('founderclub-ext-response', handler);
+          resolve(detail?.response ?? null);
+        }
+      };
+      window.addEventListener('founderclub-ext-response', handler);
+      window.dispatchEvent(new CustomEvent('founderclub-ext-msg', {
+        detail: { action, ...payload }
+      }));
+    });
+
+  const loadBazookaAuto = useCallback(async () => {
+    try {
+      const r = await sendToExtension('rb:bazooka-auto-get');
+      if (r?.ok) {
+        setBazookaAuto(r.bazookaAuto);
+        setBazookaAutoMaxPrice(String(r.bazookaAuto.maxPrice || 0));
+      }
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'external') loadBazookaAuto();
+  }, [activeTab, loadBazookaAuto]);
+
+  const saveBazookaAuto = async (enabled: boolean) => {
+    setBazookaAutoSaving(true);
+    try {
+      const maxPrice = parseFloat(bazookaAutoMaxPrice) || 0;
+      const next = { enabled, maxPrice };
+      term('sys', 'EXT', `→ rb:bazooka-auto-set · enabled:${enabled} · maxPrice:${maxPrice}`);
+      const r = await sendToExtension('rb:bazooka-auto-set', { bazookaAuto: next });
+      if (r?.ok) {
+        setBazookaAuto(next);
+        term('ok', 'EXT', `auto-bazooka ${enabled ? 'ACTIVADO' : 'DESACTIVADO'} · maxPrice:${maxPrice}€`);
+      } else {
+        term('warn', 'EXT', `sin respuesta de extensión — recarga la extensión`);
+      }
+    } catch { term('err', 'EXT', 'error al contactar extensión'); }
+    setBazookaAutoSaving(false);
   };
 
   const fireSniperBazooka = async () => {
@@ -488,23 +684,55 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
     setSniperResult(null);
     setError(null);
     setStatus('🎯 Sniper cargando...');
+    term('sys', 'SYS', `→ SNIPER · url:${targetUrl.replace(/\?.*/, '').slice(-50)} · workers:3`);
     try {
       const r = await apiFetch('/api/sniper/fire', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: targetUrl, cookies: cookie, workers: 3 }),
       });
-      const d = await r.json();
-      if (!r.ok) { setError(`❌ ${d.error || 'Error desconocido'}`); return; }
-      setSniperResult(d);
-      if (d.ok && d.winner) {
-        setStatus(`✅ RESERVADO en ${d.winner.durationMs}ms — tx:${d.winner.transactionId}`);
-      } else {
-        setError(`❌ Todos los workers fallaron. Ver detalles abajo.`);
+      // Safe JSON parse — if server returns non-JSON (crash), show raw text
+      let d: any;
+      try {
+        d = await r.json();
+      } catch {
+        const raw = await r.text().catch(() => `HTTP ${r.status}`);
+        term('err', 'SNIPER', `respuesta no-JSON del servidor (${r.status}): ${raw.slice(0, 120)}`);
+        setError(`❌ Respuesta inesperada del servidor (${r.status}): ${raw.slice(0, 200)}`);
+        return;
       }
-    } catch { setError('Error de red al disparar Sniper.'); }
+      if (!r.ok) {
+        term('err', 'SNIPER', `HTTP ${r.status} · ${d.error || 'error desconocido'}`);
+        setError(`❌ ${d.error || 'Error desconocido'}`);
+        return;
+      }
+      setSniperResult(d);
+      term('data', 'SNIPER', `item_id:${d.itemId || externalId} · seller_id:${d.sellerId || '?'} · fastest:${d.fastestMs}ms`);
+      // Per-worker results
+      (d.results as any[] || []).forEach((w: any) => {
+        if (w.success) {
+          term('worker', `W${w.worker}`, `✓ checkout OK · ${w.durationMs}ms · tx:${w.transactionId || '?'}`);
+        } else {
+          term('err', `W${w.worker}`, `✗ ${w.error?.slice(0, 80) || 'rechazado'}`);
+        }
+      });
+      addLog({ type: 'sniper', itemId: d.itemId || externalId, title: d.title || externalTitle, success: d.ok, detail: d.ok ? `${d.winner?.worker} workers · ${d.fastestMs}ms` : 'Workers fallaron', at: new Date() });
+      if (d.ok && d.winner) {
+        term('ok', 'SNIPER', `🏆 GANADOR W${d.winner.worker} · ${d.winner.durationMs}ms · tx:${d.winner.transactionId} · purchase:${d.winner.purchaseId}`);
+        setStatus(`✅ ITEM RESERVADO en ${d.winner.durationMs}ms — tx:${d.winner.transactionId} · purchase:${d.winner.purchaseId}`);
+        setTimeout(checkPublicStatus, 4000);
+      } else {
+        const reasons = (d.results as any[])?.map((w: any) => `W${w.worker}:${w.error || 'rechazado'}`).join(' ') || '';
+        term('err', 'SNIPER', `FALLIDO · ${reasons}`);
+        setError(`❌ Workers fallaron. ${reasons}`);
+      }
+    } catch (err: any) {
+      term('err', 'SNIPER', `error de red: ${err?.message || 'no se pudo conectar'}`);
+      setError(`❌ Error de red: ${err?.message || 'No se pudo conectar con el servidor.'}`);
+    }
     finally { setSniperLoading(false); }
   };
+
 
   const checkPublicStatus = async () => {
     if (!externalId) return;
@@ -520,7 +748,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
 
   const reportItem = async () => {
     let targetId = externalId;
-
+    
     if (!cookie) {
       setError('⚠️ CONFIGURACIÓN REQUERIDA: Introduce tu Cookie en el panel lateral izquierdo.');
       return;
@@ -550,18 +778,16 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
       return;
     }
 
-    // Combinar cookie principal + cookies extra (multi-cuenta)
-    const allCookies = [cookie, ...extraCookies.split('\n').map(c => c.trim()).filter(c => c.length > 10)].join('\n');
-
     setLoading(true);
-    setReportResult(null);
-    setStatus('🎯 Lanzando reportes multi-motivo en paralelo...');
+    setStatus('Iniciando maniobra de ocultación...');
+    term('sys', 'SYS', `→ REPORTE AI · item_id:${targetId} · reason:${reportReason} · domain:${domain}`);
+    term('data', 'REPORTE', `payload: reasonId=${reportReason} · desc="${stealthDescription.slice(0, 40)}..."`);
     try {
       const res = await apiFetch('/api/vinted/report', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          cookie: allCookies,
+          cookie,
           itemId: targetId,
           reasonId: parseInt(reportReason),
           description: stealthDescription,
@@ -570,51 +796,22 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
       });
       const data = await res.json();
       if (data.success) {
-        setReportResult({ hits: data.hits, total: data.total, accounts: data.accounts, byReason: data.byReason || {} });
-        setStatus(`✅ ${data.message}`);
+        term('ok', 'REPORTE', `✓ aceptado · dominio:${data.domainUsed || domain} · AI review activo`);
+        if (data.reportId) term('data', 'REPORTE', `report_id:${data.reportId}`);
+        setStatus('Payload enviado. Vinted procesando revisión.');
+        addLog({ type: 'reporte', itemId: targetId, title: externalTitle, success: true, detail: `Reason ${reportReason} · dominio: ${data.domainUsed || domain}`, at: new Date() });
         setTimeout(checkPublicStatus, 3000);
       } else {
+        term('err', 'REPORTE', `✗ rechazado · ${data.details?.message || data.error || 'desconocido'}`);
+        addLog({ type: 'reporte', itemId: targetId, title: externalTitle, success: false, detail: data.error || 'Rechazado', at: new Date() });
         setError('Error en la comunicación: ' + (data.details?.message || data.error));
       }
     } catch (err) {
+      term('err', 'REPORTE', `error de red: ${(err as any)?.message || 'desconocido'}`);
       setError('Error de red al intentar reportar.');
     } finally {
       setLoading(false);
     }
-  };
-
-  const likeOfferItem = async () => {
-    if (!cookie) { setError('⚠️ Cookie requerida.'); return; }
-    let targetId = externalId;
-    if (!targetId && externalUrl) {
-      try {
-        const r = await fetch(`/api/vinted/resolve-product?url=${encodeURIComponent(externalUrl)}`);
-        const d = await r.json();
-        if (d.itemId) { targetId = d.itemId; setExternalId(d.itemId); setExternalTitle(d.title || ''); }
-        else { setError('No se pudo detectar el ID del producto.'); return; }
-      } catch { setError('Error resolviendo URL.'); return; }
-    }
-    if (!targetId) { setError('⚠️ URL requerida.'); return; }
-    const allCookies = [cookie, ...extraCookies.split('\n').map(c => c.trim()).filter(c => c.length > 10)].join('\n');
-    setLikeOfferLoading(true);
-    setLikeOfferResult(null);
-    setStatus('❤️ Enviando favoritos + ofertas...');
-    try {
-      const r = await apiFetch('/api/vinted/like-offer', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cookie: allCookies, itemId: targetId, domain })
-      });
-      const d = await r.json();
-      if (d.success) {
-        setLikeOfferResult({ favourites: d.favourites, offers: d.offers, accounts: d.accounts, offerPrice: d.offerPrice });
-        setStatus(`✅ ${d.message}`);
-        setTimeout(checkPublicStatus, 5000);
-      } else {
-        setError(d.error || 'Error enviando like+offer');
-      }
-    } catch { setError('Error de red.'); }
-    finally { setLikeOfferLoading(false); }
   };
 
   const spamCheckout = async () => {
@@ -637,8 +834,10 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
       return;
     }
 
+    setBombardeoLoading(true);
     setLoading(true);
-    setStatus('Iniciando bombardeo táctico...');
+    setStatus('💣 Bombardeo iniciado — 2 minutos de fuego...');
+    term('sys', 'SYS', `→ BOMBARDEO · item_id:${targetId} · domain:${domain} · flood:120s`);
     const startTime = Date.now();
     try {
       const res = await apiFetch('/api/vinted/spam-checkout', {
@@ -648,30 +847,33 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
       });
       const data = await res.json();
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-      
       if (data.success) {
-        setStatus(`¡ATAQUE COMPLETADO en ${duration}s! ${data.count} impactos registrados.`);
-        // Start monitoring
+        term('ok', 'BOMBARDEO', `✓ completado · ${data.count} impactos · ${duration}s · avg HTTP 200`);
+        if (data.details) term('data', 'BOMBARDEO', `${JSON.stringify(data.details).slice(0, 120)}`);
+        setStatus(`💣 BOMBARDEO completado en ${duration}s · ${data.count} impactos.`);
+        addLog({ type: 'bombardeo', itemId: targetId, title: externalTitle, success: true, detail: `${data.count} impactos en ${duration}s`, at: new Date() });
         let checkCount = 0;
-        const interval = setInterval(async () => {
-          checkCount++;
-          await checkPublicStatus();
-          if (checkCount > 12) clearInterval(interval);
-        }, 5000);
+        const iv = setInterval(async () => { checkCount++; await checkPublicStatus(); if (checkCount > 12) clearInterval(iv); }, 5000);
       } else {
-        setError(`Ataque rechazado por el cortafuegos de Vinted. Código: ${data.status || '403/429'}`);
+        term('err', 'BOMBARDEO', `✗ rechazado · HTTP ${data.status || '403/429'} · ${data.error || ''}`);
+        addLog({ type: 'bombardeo', itemId: targetId, title: externalTitle, success: false, detail: `Rechazado ${data.status || '403'}`, at: new Date() });
+        setError(`Bombardeo rechazado. Código: ${data.status || '403/429'}`);
       }
     } catch (err) {
-      setError('Fallo crítico en el túnel de ataque.');
+      term('err', 'BOMBARDEO', `fallo crítico de red: ${(err as any)?.message || 'desconocido'}`);
+      setError('Fallo crítico en el bombardeo.');
     } finally {
       setLoading(false);
+      setBombardeoLoading(false);
     }
   };
 
   const STEALTH_TEMPLATES = [
-    { label: 'Falsificación (AI Trigger)', text: 'This item is a non-authentic replica violating IP rights. It uses stock imagery and serial numbers known to be associated with mass-produced counterfeit batches. Violation of Vinted Integrity Policy.' },
-    { label: 'Prohibido (High Priority)', text: 'Article belongs to the prohibited items list (electronics/safety/hygiene violation). Poses a transaction risk for buyers. Requires immediate automated quarantine.' },
-    { label: 'Imágenes Robadas', text: 'Listing uses copyrighted photographs without authorization from the legal representative. Commercial rights violation.' }
+    { label: '⚡ Falsificación AI', text: 'This item is a non-authentic replica violating IP rights. It uses stock imagery and serial numbers known to be associated with mass-produced counterfeit batches. Violation of Vinted Integrity Policy.' },
+    { label: '🔴 Prohibido urgente', text: 'Article belongs to the prohibited items list (electronics/safety/hygiene violation). Poses a transaction risk for buyers. Requires immediate automated quarantine.' },
+    { label: '📸 Copyright imagen', text: 'Listing uses copyrighted photographs without authorization from the legal representative. Commercial rights violation. DMCA takedown applicable.' },
+    { label: '🏷️ Precio engañoso', text: 'Fraudulent pricing: item misrepresented as authentic luxury goods using deceptive photographs. Consumer protection violation. Immediate moderation required.' },
+    { label: '🤖 Bot Detection', text: 'Automated listing behavior detected. Account shows suspicious bulk upload patterns inconsistent with individual seller activity. Potential reseller policy violation.' },
   ];
 
   const copyToClipboard = (text: string) => {
@@ -681,54 +883,52 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
   };
 
   return (
-    <div className="min-h-screen bg-[#050607] text-[#f4f4ef] font-sans selection:bg-[#4d9fff]/20 selection:text-[#4d9fff]">
-      {/* Top Banner / Navigation */}
-      <nav className="border-b border-white/10 px-4 lg:px-6 py-3 lg:py-4 flex items-center justify-between bg-black/50 backdrop-blur-md sticky top-0 z-50">
-        <div className="flex items-center gap-2 lg:gap-3">
-          <div className="w-8 h-8 bg-[#4d9fff] rounded-lg flex items-center justify-center shadow-[0_0_15px_rgba(77,159,255,0.3)]">
-            <ShieldCheck className="w-5 h-5 text-[#050607]" />
+    <div className="min-h-screen text-[var(--color-text)] font-sans selection:bg-[var(--color-acid-soft)] selection:text-[var(--color-acid)]">
+      {/* Top Banner pill — estilo Lamine Hub */}
+      <div className="sticky top-3 z-50 mx-auto" style={{ width: 'min(1120px, calc(100% - 24px))' }}>
+        <nav className="flex items-center justify-between gap-3 px-4 lg:px-6 py-3 rounded-full border border-white/[0.16] bg-[rgba(12,14,16,0.76)] backdrop-blur-xl shadow-[0_20px_60px_rgba(0,0,0,0.38)]">
+          <div className="flex items-center gap-3 min-w-0">
+            <span className="w-2.5 h-2.5 rounded-[3px] bg-acid shadow-[0_0_20px_rgba(77,159,255,0.55)] shrink-0" />
+            <span className="font-display text-[1.45rem] lg:text-[1.7rem] leading-none tracking-[0.08em] text-[var(--color-text)] truncate">
+              FOUNDERCLUB
+            </span>
           </div>
-          <div>
-            <h1 className="text-base lg:text-xl font-bold tracking-tighter bg-gradient-to-r from-white to-white/70 bg-clip-text text-transparent">
-              FounderClub
-            </h1>
-            <p className="hidden lg:block text-[10px] text-white/40 uppercase tracking-[0.2em] font-mono leading-none">Automated Privacy Controller</p>
-          </div>
-        </div>
 
-        <div className="flex items-center gap-2 lg:gap-4">
-          {/* Session indicator */}
-          <div className={`w-2 h-2 rounded-full ${sessionValid === true ? 'bg-[#4d9fff] shadow-[0_0_8px_rgba(77,159,255,0.5)]' : sessionValid === false ? 'bg-red-500' : 'bg-white/20'}`} />
-          <span className={`hidden sm:inline text-xs font-mono ${sessionValid === true ? 'text-[#4d9fff]' : sessionValid === false ? 'text-red-400' : 'text-white/40'}`}>
-            {sessionValid === true ? 'Active' : sessionValid === false ? 'Expired' : '...'}
-          </span>
-          <div className="hidden lg:block h-6 w-[1px] bg-white/10" />
-          <button
-            onClick={() => setShowCookieHelp(!showCookieHelp)}
-            className="hidden lg:flex p-2 hover:bg-white/5 rounded-full transition-colors text-white/60 hover:text-white"
-          >
-            <HelpCircle className="w-5 h-5" />
-          </button>
-          <div className="hidden lg:block h-6 w-[1px] bg-white/10" />
-          <span className="hidden lg:inline text-xs text-white/50 font-mono">{user.username}</span>
-          {onAdmin && (
+          <div className="flex items-center gap-2 lg:gap-3">
+            <span className={`w-2 h-2 rounded-full shrink-0 ${sessionValid === true ? 'bg-acid shadow-[0_0_8px_rgba(77,159,255,0.6)]' : sessionValid === false ? 'bg-[var(--color-danger)]' : 'bg-white/20'}`} />
+            <span className={`hidden sm:inline text-[11px] font-mono uppercase tracking-wider ${sessionValid === true ? 'text-acid' : sessionValid === false ? 'text-[var(--color-danger)]' : 'text-white/40'}`}>
+              {sessionValid === true ? 'Active' : sessionValid === false ? 'Expired' : '...'}
+            </span>
+            <span className="hidden lg:inline text-[11px] text-white/40 font-mono px-2">{user.username}</span>
             <button
-              onClick={onAdmin}
-              title="Panel de Admin"
-              className="hidden lg:flex p-2 hover:bg-[#4d9fff]/10 rounded-lg transition-colors text-[#4d9fff]/60 hover:text-[#4d9fff]"
+              onClick={() => setShowCookieHelp(!showCookieHelp)}
+              className="hidden lg:flex w-9 h-9 items-center justify-center rounded-full border border-white/10 text-white/55 hover:text-acid hover:border-acid transition ease-hub"
+              title="Ayuda"
             >
-              <ShieldCheck className="w-4 h-4" />
+              <HelpCircle className="w-4 h-4" />
             </button>
-          )}
-          <button
-            onClick={onLogout}
-            title="Cerrar sesión"
-            className="p-2 hover:bg-white/5 rounded-lg transition-colors text-white/40 hover:text-red-400"
-          >
-            <LogOut className="w-4 h-4" />
-          </button>
-        </div>
-      </nav>
+            {onAdmin && (
+              <button
+                onClick={onAdmin}
+                title="Panel de Admin"
+                className="hidden lg:flex w-9 h-9 items-center justify-center rounded-full border border-white/10 text-white/55 hover:text-acid hover:border-acid transition ease-hub"
+              >
+                <ShieldCheck className="w-4 h-4" />
+              </button>
+            )}
+            <button
+              onClick={onLogout}
+              title="Cerrar sesión"
+              className="w-9 h-9 flex items-center justify-center rounded-full border border-white/10 text-white/55 hover:text-[var(--color-danger)] hover:border-[rgba(255,143,143,0.45)] transition ease-hub"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          </div>
+        </nav>
+      </div>
+
+      <div className="h-3" />
+
 
       {/* Mobile sidebar drawer overlay */}
       <AnimatePresence>
@@ -746,14 +946,14 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
               transition={{ type: 'spring', damping: 30, stiffness: 300 }}
-              className="fixed bottom-16 left-0 right-0 z-50 bg-[#0d1012] border-t border-white/10 rounded-t-3xl p-5 max-h-[80vh] overflow-y-auto lg:hidden"
+              className="fixed bottom-16 left-0 right-0 z-50 bg-[#141414] border-t border-white/10 rounded-t-3xl p-5 pb-safe max-h-[75vh] overflow-y-auto lg:hidden"
             >
               <div className="w-10 h-1 bg-white/20 rounded-full mx-auto mb-5" />
               <div className="space-y-4">
                 <div>
                   <label className="block text-[10px] uppercase tracking-wider text-white/30 mb-1.5 ml-1">Dominio Vinted</label>
                   <select value={domain} onChange={e => setDomain(e.target.value)}
-                    className="w-full bg-black/30 border border-white/10 rounded-[14px] px-3 py-3 text-sm focus:outline-none focus:border-[#4d9fff]/35 appearance-none">
+                    className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-3 text-sm focus:outline-none focus:border-acid appearance-none">
                     {DOMAINS.map(d => <option key={d} value={d}>vinted.{d}</option>)}
                   </select>
                 </div>
@@ -762,9 +962,9 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                   <div className="flex gap-2">
                     <input type="text" placeholder="https://www.vinted.es/member/..."
                       value={profileUrl} onChange={e => setProfileUrl(e.target.value)}
-                      className="flex-1 bg-black/30 border border-white/10 rounded-[14px] px-3 py-3 text-sm focus:outline-none focus:border-[#4d9fff]/35" />
+                      className="flex-1 bg-black/30 border border-white/10 rounded-lg px-3 py-3 text-sm focus:outline-none focus:border-acid" />
                     <button onClick={() => { resolveUserId(); setMobileSidebarOpen(false); }}
-                      className="p-3 bg-[#4d9fff]/10 text-[#4d9fff] rounded-[14px] border border-[#4d9fff]/20">
+                      className="p-3 bg-acid-soft text-acid rounded-lg border border-acid">
                       <Search className="w-4 h-4" />
                     </button>
                   </div>
@@ -773,10 +973,10 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                   <label className="block text-[10px] uppercase tracking-wider text-white/30 mb-1.5 ml-1">Cookie de sesión</label>
                   <textarea value={cookie} onChange={e => setCookie(e.target.value)}
                     placeholder="_vinted_fr_session=..."
-                    className="w-full bg-black/30 border border-white/10 rounded-[14px] px-3 py-3 text-sm font-mono h-24 resize-none focus:outline-none focus:border-[#4d9fff]/35" />
+                    className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-3 text-sm font-mono h-24 resize-none focus:outline-none focus:border-acid" />
                 </div>
                 <button onClick={() => { fetchItems(); setMobileSidebarOpen(false); }} disabled={loading}
-                  className="w-full bg-[#4d9fff] text-[#050607] font-bold py-3.5 rounded-[14px] hover:bg-[#3b7fd4] transition-all flex items-center justify-center gap-2 disabled:opacity-50 text-base">
+                  className="w-full bg-acid text-black font-bold py-3.5 rounded-xl hover:bg-acid transition-all flex items-center justify-center gap-2 disabled:opacity-50 text-base">
                   {loading ? <RefreshCcw className="w-5 h-5 animate-spin" /> : <LayoutGrid className="w-5 h-5" />}
                   Cargar inventario
                 </button>
@@ -787,35 +987,35 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
       </AnimatePresence>
 
       {/* Mobile bottom navigation */}
-      <div className="fixed bottom-0 left-0 right-0 z-40 lg:hidden bg-black/90 backdrop-blur-xl border-t border-white/10">
+      <div className="fixed bottom-0 left-0 right-0 z-40 lg:hidden bg-[rgba(12,14,16,0.92)] backdrop-blur-xl border-t border-white/[0.08]">
         <div className="flex items-center justify-around px-2 py-2 pb-safe">
           {[
             { id: 'config', icon: <Settings className="w-5 h-5" />, label: 'Config', action: () => setMobileSidebarOpen(o => !o) },
-            { id: 'mine', icon: <LayoutGrid className="w-5 h-5" />, label: 'Mis artículos', action: () => { setActiveTab('mine'); setMobileSidebarOpen(false); } },
+            { id: 'profits', icon: <TrendingUp className="w-5 h-5" />, label: 'Control', action: () => { setActiveTab('profits'); setMobileSidebarOpen(false); } },
             { id: 'external', icon: <ShieldCheck className="w-5 h-5" />, label: 'Ocultar', action: () => { setActiveTab('external'); setMobileSidebarOpen(false); } },
             { id: 'tongues', icon: <Scissors className="w-5 h-5" />, label: 'Lengüeta', action: () => { setActiveTab('tongues'); setMobileSidebarOpen(false); } },
-            { id: 'profits', icon: <TrendingUp className="w-5 h-5" />, label: 'Beneficios', action: () => { setActiveTab('profits'); setMobileSidebarOpen(false); } },
+            { id: 'photos', icon: <ImageIcon className="w-5 h-5" />, label: 'Fotos', action: () => { setActiveTab('photos'); setMobileSidebarOpen(false); } },
           ].map(item => {
             const isActive = item.id === 'config' ? mobileSidebarOpen : (item.id !== 'config' && activeTab === item.id);
             return (
               <button key={item.id} onClick={item.action}
-                className={`flex flex-col items-center gap-1 px-4 py-1.5 rounded-xl transition-all ${isActive ? 'text-[#4d9fff]' : 'text-white/30'}`}>
+                className={`flex flex-col items-center gap-1 px-2 py-1.5 rounded-xl transition-all ${isActive ? 'text-acid' : 'text-muted'}`}>
                 {item.icon}
-                <span className="text-[9px] font-medium uppercase tracking-wider">{item.label}</span>
+                <span className="text-[10px] font-medium uppercase tracking-wider">{item.label}</span>
               </button>
             );
           })}
         </div>
       </div>
 
-      <main className="max-w-7xl mx-auto p-4 lg:p-6 pb-24 lg:pb-6 grid grid-cols-1 lg:grid-cols-[380px_1fr] gap-8">
-        {/* Sidebar Configuration — desktop only */}
-        <div className="hidden lg:block space-y-6">
-          <section className="bg-[#0d1012] border border-white/8 rounded-[20px] p-6 shadow-xl relative overflow-hidden group">
-            <div className="absolute top-0 left-0 w-1 h-full bg-[#4d9fff] opacity-50 group-hover:opacity-100 transition-opacity" />
-
+      <main className={`max-w-7xl mx-auto px-3 py-4 lg:p-6 pb-24 lg:pb-6 grid grid-cols-1 gap-8 ${['profits','tongues','photos'].includes(activeTab) ? '' : 'lg:grid-cols-[380px_1fr]'}`}>
+        {/* Sidebar Configuration — desktop only, oculta en pestañas de pantalla completa */}
+        <div className={`space-y-6 ${['profits','tongues','photos'].includes(activeTab) ? 'hidden' : 'hidden lg:block'}`}>
+          <section className="bg-[#141414] border border-white/5 rounded-2xl p-6 shadow-xl relative overflow-hidden group">
+            <div className="absolute top-0 left-0 w-1 h-full bg-acid opacity-50 group-hover:opacity-100 transition-opacity" />
+            
             <div className="flex items-center gap-2 mb-6">
-              <Settings className="w-4 h-4 text-[#4d9fff]" />
+              <Settings className="w-4 h-4 text-acid" />
               <h2 className="text-xs uppercase tracking-widest font-bold text-white/50">Configuración de Acceso</h2>
             </div>
 
@@ -825,7 +1025,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                 <select 
                   value={domain}
                   onChange={(e) => setDomain(e.target.value)}
-                  className="w-full bg-black/30 border border-white/10 rounded-[14px] px-3 py-2 text-sm focus:outline-none focus:border-[#4d9fff]/35 transition-colors appearance-none cursor-pointer hover:bg-black/50"
+                  className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-acid transition-colors appearance-none cursor-pointer hover:bg-black/50"
                 >
                   {DOMAINS.map(d => (
                     <option key={d} value={d}>vinted.{d}</option>
@@ -841,11 +1041,11 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                     placeholder="Enlace al perfil de Vinted"
                     value={profileUrl}
                     onChange={(e) => setProfileUrl(e.target.value)}
-                    className="flex-1 bg-black/30 border border-white/10 rounded-[14px] px-3 py-2 text-sm focus:outline-none focus:border-[#4d9fff]/35 transition-colors"
+                    className="flex-1 bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-acid transition-colors"
                   />
-                  <button
+                  <button 
                     onClick={resolveUserId}
-                    className="p-2 bg-[#4d9fff]/10 text-[#4d9fff] rounded-[14px] hover:bg-[#4d9fff]/20 transition-colors border border-[#4d9fff]/20"
+                    className="p-2 bg-acid-soft text-acid rounded-lg hover:bg-acid/20 transition-colors border border-acid"
                   >
                     <Search className="w-4 h-4" />
                   </button>
@@ -860,7 +1060,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                     value={cookie}
                     onChange={(e) => setCookie(e.target.value)}
                     placeholder="_vinted_fr_session=..."
-                    className={`w-full bg-black/30 border ${cookieWarning ? 'border-red-500/50' : 'border-white/10'} rounded-[14px] pl-10 pr-3 py-3 text-sm focus:outline-none focus:border-[#4d9fff]/35 transition-colors h-24 font-mono resize-none`}
+                    className={`w-full bg-black/30 border ${cookieWarning ? 'border-red-500/50' : 'border-white/10'} rounded-lg pl-10 pr-3 py-3 text-sm focus:outline-none focus:border-acid transition-colors h-24 font-mono resize-none`}
                   />
                 </div>
                 {cookieWarning && (
@@ -875,11 +1075,11 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
               </div>
 
               {/* ── Goolazo Login ── */}
-              <div className="relative border border-white/8 rounded-[14px] p-3 bg-white/[0.02]">
+              <div className="relative border border-white/10 rounded-xl p-3 bg-white/[0.02]">
                 <label className="block text-[10px] uppercase tracking-wider text-white/30 mb-2 ml-1 flex items-center gap-1.5">
                   <span>Goolazo Bazooka</span>
                   {goolazoCookie
-                    ? <span className="text-[#4d9fff] font-semibold">● Sesión activa</span>
+                    ? <span className="text-acid font-semibold">● Sesión activa</span>
                     : <span className="text-white/20">● Sin sesión</span>
                   }
                 </label>
@@ -887,7 +1087,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                 {goolazoCookie ? (
                   <div className="space-y-2">
                     {bsLoginMsg && (
-                      <p className={`text-[10px] ${bsLoginMsg.ok ? 'text-[#4d9fff]' : 'text-red-400'} bg-white/5 rounded-lg px-2 py-1.5`}>
+                      <p className={`text-[10px] ${bsLoginMsg.ok ? 'text-acid' : 'text-red-400'} bg-white/5 rounded-lg px-2 py-1.5`}>
                         {bsLoginMsg.text}
                       </p>
                     )}
@@ -905,7 +1105,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                       placeholder="Email de Goolazo"
                       value={bsEmail}
                       onChange={e => setBsEmail(e.target.value)}
-                      className="w-full bg-black/30 border border-white/10 rounded-[14px] px-3 py-2 text-sm focus:outline-none focus:border-[#4d9fff]/35 transition-colors"
+                      className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-acid transition-colors"
                     />
                     <input
                       type="password"
@@ -913,17 +1113,17 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                       value={bsPassword}
                       onChange={e => setBsPassword(e.target.value)}
                       onKeyDown={e => e.key === 'Enter' && loginGoolazo()}
-                      className="w-full bg-black/30 border border-white/10 rounded-[14px] px-3 py-2 text-sm focus:outline-none focus:border-[#4d9fff]/35 transition-colors"
+                      className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-acid transition-colors"
                     />
                     {bsLoginMsg && (
-                      <p className={`text-[10px] ${bsLoginMsg.ok ? 'text-[#4d9fff]' : 'text-red-400'} bg-white/5 rounded-lg px-2 py-1.5`}>
+                      <p className={`text-[10px] ${bsLoginMsg.ok ? 'text-acid' : 'text-red-400'} bg-white/5 rounded-lg px-2 py-1.5`}>
                         {bsLoginMsg.text}
                       </p>
                     )}
                     <button
                       onClick={loginGoolazo}
                       disabled={bsLoginLoading}
-                      className="w-full py-2 rounded-[14px] bg-[#4d9fff]/10 border border-[#4d9fff]/20 text-[#4d9fff] text-sm font-medium hover:bg-[#4d9fff]/20 transition-colors disabled:opacity-50"
+                      className="w-full py-2 rounded-lg bg-acid-soft border border-acid text-acid text-sm font-medium hover:bg-acid/20 transition-colors disabled:opacity-50"
                     >
                       {bsLoginLoading ? 'Iniciando sesión...' : 'Iniciar sesión en Goolazo'}
                     </button>
@@ -935,7 +1135,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                 <button 
                   onClick={fetchItems}
                   disabled={loading}
-                  className="w-full bg-[#4d9fff] text-[#050607] font-bold py-3 rounded-[14px] hover:bg-[#3b7fd4] transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-[0_0_20px_rgba(77,159,255,0.2)]"
+                  className="w-full bg-acid text-black font-bold py-3 rounded-xl hover:bg-acid transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-acid"
                 >
                   {loading ? <RefreshCcw className="w-5 h-5 animate-spin" /> : <LayoutGrid className="w-5 h-5" />}
                   Cargar Inventario
@@ -948,9 +1148,9 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
             <motion.div 
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
-              className="bg-[#4d9fff]/5 border border-[#4d9fff]/20 rounded-[20px] p-6 text-sm leading-relaxed"
+              className="bg-acid-soft border border-acid rounded-2xl p-6 text-sm leading-relaxed"
             >
-              <h3 className="text-[#4d9fff] font-bold mb-4 flex items-center gap-2">
+              <h3 className="text-acid font-bold mb-4 flex items-center gap-2">
                 <HelpCircle className="w-4 h-4" /> ¿Cómo obtener la Cookie de Sesión?
               </h3>
               
@@ -960,11 +1160,11 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                   <ol className="list-decimal list-inside space-y-2 text-[11px] text-white/50">
                     <li>Entra en <span className="text-white">vinted.es</span> y logueate.</li>
                     <li>Presiona <kbd className="bg-white/10 px-1 rounded border border-white/20">F12</kbd> y ve a la pestaña <span className="text-white">Consola</span>.</li>
-                    <li>Escribe <code className="text-[#4d9fff]">copy(document.cookie)</code> y dale al Enter.</li>
+                    <li>Escribe <code className="text-acid">copy(document.cookie)</code> y dale al Enter.</li>
                     <li>
                       <button 
                         onClick={() => copyToClipboard('copy(document.cookie)')}
-                        className="mt-2 flex items-center gap-2 px-3 py-1.5 bg-[#4d9fff]/20 hover:bg-[#4d9fff]/30 border border-[#4d9fff]/30 rounded-lg text-[10px] text-[#4d9fff] transition-all"
+                        className="mt-2 flex items-center gap-2 px-3 py-1.5 bg-acid-soft hover:bg-acid/30 border border-acid rounded-lg text-[10px] text-acid transition-all"
                       >
                         <Copy className="w-3 h-3" /> Copiar comando para Consola
                       </button>
@@ -978,7 +1178,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                     <li>En el panel F12, ve a la pestaña <span className="text-white">Red (Network)</span>.</li>
                     <li>Recarga la página de Vinted.</li>
                     <li>Busca la primera petición llamada <span className="text-white">vinted.es</span>.</li>
-                    <li>En la sección <span className="text-white">Request Headers</span>, copia el valor de <span className="text-[#4d9fff]">Cookie</span>.</li>
+                    <li>En la sección <span className="text-white">Request Headers</span>, copia el valor de <span className="text-acid">Cookie</span>.</li>
                   </ol>
                 </div>
               </div>
@@ -1005,41 +1205,37 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-4 px-2 gap-4">
             <div>
-              <h2 className="hidden lg:block text-xl font-bold tracking-tight">Panel de Control</h2>
-              <div className="hidden lg:flex gap-4 mt-2">
-                <button
-                  onClick={() => setActiveTab('mine')}
-                  className={`text-xs uppercase tracking-widest font-bold pb-1 border-b-2 transition-all ${activeTab === 'mine' ? 'border-[#4d9fff] text-white' : 'border-transparent text-white/30 hover:text-white/60'}`}
-                >
-                  Mis Productos
-                </button>
-                <button
-                  onClick={() => setActiveTab('external')}
-                  className={`text-xs uppercase tracking-widest font-bold pb-1 border-b-2 transition-all ${activeTab === 'external' ? 'border-[#4d9fff] text-white' : 'border-transparent text-white/30 hover:text-white/60'}`}
-                >
-                  Ocultar Externo
-                </button>
-                <button
-                  onClick={() => setActiveTab('tongues')}
-                  className={`text-xs uppercase tracking-widest font-bold pb-1 border-b-2 transition-all ${activeTab === 'tongues' ? 'border-[#4d9fff] text-white' : 'border-transparent text-white/30 hover:text-white/60'}`}
-                >
-                  Cambiar Lengüeta
-                </button>
-                <button
-                  onClick={() => setActiveTab('profits')}
-                  className={`text-xs uppercase tracking-widest font-bold pb-1 border-b-2 transition-all ${activeTab === 'profits' ? 'border-[#4d9fff] text-white' : 'border-transparent text-white/30 hover:text-white/60'}`}
-                >
-                  Beneficios
-                </button>
+              <p className="hidden lg:block font-display text-[0.8rem] tracking-[0.3em] text-acid">PANEL DE CONTROL</p>
+              <h2 className="hidden lg:block font-display text-[2.2rem] leading-none tracking-[0.02em] text-[var(--color-text)] mt-1">Founder Hub</h2>
+              <div className="hidden lg:flex flex-wrap gap-2 mt-4">
+                {[
+                  { id: 'mine', label: 'Mis Productos' },
+                  { id: 'external', label: 'Ocultar Externo' },
+                  { id: 'tongues', label: 'Cambiar Lengüeta' },
+                  { id: 'photos', label: 'Fotos Únicas' },
+                  { id: 'profits', label: 'Beneficios' },
+                ].map(t => (
+                  <button
+                    key={t.id}
+                    onClick={() => setActiveTab(t.id as any)}
+                    className={`px-4 min-h-[40px] rounded-full text-[0.78rem] font-bold uppercase tracking-[0.14em] border transition ease-hub ${
+                      activeTab === t.id
+                        ? 'bg-acid-soft border-acid text-acid'
+                        : 'bg-white/[0.03] border-white/10 text-muted-strong hover:border-acid hover:text-acid'
+                    }`}
+                  >
+                    {t.label}
+                  </button>
+                ))}
               </div>
             </div>
-            
+
             {activeTab === 'mine' && (
-              <div className="flex bg-white/5 rounded-lg p-1 border border-white/10 self-start sm:self-auto">
-                <button className="p-2 bg-[#4d9fff]/20 text-[#4d9fff] rounded-md">
+              <div className="flex bg-white/[0.03] rounded-full p-1 border border-white/10 self-start sm:self-auto">
+                <button className="p-2 bg-acid-soft text-acid rounded-full border border-acid">
                   <LayoutGrid className="w-4 h-4" />
                 </button>
-                <button className="p-2 text-white/30 hover:text-white transition-colors">
+                <button className="p-2 text-muted hover:text-acid transition-colors rounded-full">
                   <ListIcon className="w-4 h-4" />
                 </button>
               </div>
@@ -1067,7 +1263,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, scale: 0.95 }}
                       transition={{ delay: idx * 0.05 }}
-                      className="group bg-[#0d1012] border border-white/8 rounded-[20px] overflow-hidden hover:border-[#4d9fff]/30 transition-all hover:bg-[#111416]"
+                      className="group bg-[#141414] border border-white/5 rounded-2xl overflow-hidden hover:border-acid/30 transition-all hover:bg-[#1a1a1a]"
                     >
                       <div className="aspect-[3/4] relative overflow-hidden bg-black flex items-center justify-center">
                         {item.photo?.url ? (
@@ -1106,30 +1302,25 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                       <div className="p-4">
                         <div className="flex justify-between items-start gap-2 mb-1">
                           <h3 className="text-sm font-medium leading-tight truncate flex-1">{item.title}</h3>
-                          <span className="text-[#4d9fff] font-mono text-sm font-bold">
+                          <span className="text-acid font-mono text-sm font-bold">
                             {item.price?.amount} {item.price?.currency_code}
                           </span>
                         </div>
                         <p className="text-[10px] text-white/30 uppercase tracking-wider mb-4">ID: {item.id}</p>
                         
-                        <button 
-                          onClick={() => toggleVisibility(item.id, !!item.is_hidden)}
-                          className={`w-full py-2.5 rounded-xl flex items-center justify-center gap-2 text-xs font-bold transition-all ${
-                            item.is_hidden
-                              ? 'bg-[#4d9fff] text-[#050607] hover:bg-[#3b7fd4]'
-                              : 'bg-white/5 text-white/60 hover:bg-white/10 border border-white/5'
-                          }`}
-                        >
-                          {item.is_hidden ? (
-                            <>
-                              <Eye className="w-4 h-4" /> Mostrar Producto
-                            </>
-                          ) : (
-                            <>
-                              <EyeOff className="w-4 h-4" /> Ocultar Producto
-                            </>
-                          )}
-                        </button>
+                        {/* Ocultar / Mostrar */}
+                        <div className="flex gap-1.5">
+                          <button
+                            onClick={() => toggleVisibility(item.id, !!item.is_hidden)}
+                            className={`flex-1 py-2 rounded-xl flex items-center justify-center gap-1.5 text-xs font-bold transition-all ${
+                              item.is_hidden
+                                ? 'bg-acid text-black hover:bg-acid'
+                                : 'bg-white/5 text-white/60 hover:bg-white/10 border border-white/5'
+                            }`}
+                          >
+                            {item.is_hidden ? <><Eye className="w-3 h-3" /> Mostrar</> : <><EyeOff className="w-3 h-3" /> Ocultar</>}
+                          </button>
+                        </div>
                       </div>
                     </motion.div>
                   ))}
@@ -1139,288 +1330,180 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
           )}
 
           {activeTab === 'external' && (
-            <>
-            <motion.div
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              className="bg-[#0d1012] border border-white/8 rounded-[28px] p-8 shadow-2xl space-y-8"
-            >
-              <div className="flex items-center gap-4">
-                <div className="w-12 h-12 bg-red-500/10 rounded-2xl flex items-center justify-center border border-red-500/20">
-                  <EyeOff className="w-6 h-6 text-red-500" />
+            <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="space-y-3">
+
+              {/* ── Header ── */}
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-red-500/10 rounded-xl flex items-center justify-center border border-red-500/20 shrink-0">
+                  <TerminalIcon className="w-5 h-5 text-red-500" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold">Ocultar Productos Ajenos</h3>
-                  <p className="text-xs text-white/40">Fuerza la ocultación temporal enviando un reporte de seguridad a Vinted.</p>
+                  <h3 className="text-lg font-bold tracking-tight">Neutralización de Competidores</h3>
+                  <p className="text-[11px] text-white/30">Consola de operaciones en tiempo real · workers · API · extension</p>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-[10px] uppercase tracking-wider text-white/30 mb-2 ml-1">URL del Producto a Ocultar</label>
-                    <div className="flex gap-2">
-                      <input 
-                        type="text" 
-                        placeholder="https://www.vinted.es/items/123-titulo..."
-                        value={externalUrl}
-                        onChange={(e) => setExternalUrl(e.target.value)}
-                        className="flex-1 bg-black/30 border border-white/10 rounded-[14px] px-4 py-3 text-sm focus:outline-none focus:border-red-500/50 transition-colors"
+              {/* ── Control strip ── */}
+              <div className="bg-[#111] border border-white/5 rounded-2xl p-4 space-y-2.5">
+                {/* URL input */}
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="https://www.vinted.es/items/123456-titulo"
+                    value={externalUrl}
+                    onChange={e => {
+                      const v = e.target.value;
+                      setExternalUrl(v);
+                      setSniperResult(null);
+                      setItemStats({ visible: true, checked: false });
+                      const autoId = v.match(/\/items\/(\d+)/i)?.[1] || v.match(/\/(\d{5,})-/)?.[1] || null;
+                      if (autoId) { setExternalId(autoId); setExternalTitle(''); }
+                      else { setExternalId(''); setExternalTitle(''); }
+                    }}
+                    className="flex-1 bg-black/60 border border-white/8 rounded-xl px-3 py-2 text-[12px] font-mono text-white/80 focus:outline-none focus:border-white/20 transition-colors placeholder:text-white/15"
+                  />
+                  <button onClick={resolveProductId} disabled={loading || !externalUrl} className="px-3 py-2 bg-white/5 hover:bg-white/10 border border-white/8 text-white/50 rounded-xl text-[11px] font-mono transition-all disabled:opacity-30">
+                    {loading ? '…' : 'ID'}
+                  </button>
+                </div>
+
+                {/* Status pill */}
+                {externalId && (
+                  <div className="flex items-center gap-2 text-[10px] font-mono">
+                    <div className={`w-2 h-2 rounded-full shrink-0 ${!itemStats.checked ? 'bg-white/20' : itemStats.visible ? 'bg-acid' : 'bg-red-500'}`} />
+                    <span className="text-white/40">item:{externalId}</span>
+                    {itemStats.checked && <span className={itemStats.visible ? 'text-acid' : 'text-red-400'}>{itemStats.visible ? 'EN VENTA' : 'OCULTO/ELIMINADO'}</span>}
+                    <button onClick={checkPublicStatus} className="text-white/20 hover:text-white ml-auto"><RefreshCcw className="w-3 h-3" /></button>
+                  </div>
+                )}
+
+                {/* Attack buttons */}
+                <div className="flex gap-2 flex-wrap">
+                  <button onClick={fireSniperBazooka} disabled={sniperLoading || !externalUrl} className="flex-1 min-w-[80px] py-2 bg-red-500/10 border border-red-500/15 text-red-400 rounded-xl text-[11px] font-bold hover:bg-red-500/20 transition-all disabled:opacity-30 font-mono">
+                    {sniperLoading ? '⠋ SNIPER…' : '🎯 SNIPER'}
+                  </button>
+                  <button onClick={spamCheckout} disabled={bombardeoLoading || !externalUrl} className="flex-1 min-w-[80px] py-2 bg-orange-500/10 border border-orange-500/15 text-orange-400 rounded-xl text-[11px] font-bold hover:bg-orange-500/20 transition-all disabled:opacity-30 font-mono">
+                    {bombardeoLoading ? '⠋ BOMBARDEO…' : '💣 BOMBARDEO'}
+                  </button>
+                  <button onClick={reportItem} disabled={loading || !externalUrl} className="flex-1 min-w-[80px] py-2 bg-purple-500/10 border border-purple-500/15 text-purple-400 rounded-xl text-[11px] font-bold hover:bg-purple-500/20 transition-all disabled:opacity-30 font-mono">
+                    {loading ? '⠋ REPORTE…' : '📋 REPORTE'}
+                  </button>
+                  <button onClick={enqueueReserve} disabled={loadingReserve || !externalUrl} className="flex-1 min-w-[80px] py-2 bg-blue-500/10 border border-blue-500/15 text-blue-400 rounded-xl text-[11px] font-bold hover:bg-blue-500/20 transition-all disabled:opacity-30 font-mono">
+                    {loadingReserve ? '⠋ RESERVA…' : '🔗 RESERVA'}
+                  </button>
+                </div>
+
+                {/* Auto-Bazooka toggle row */}
+                <div className="flex items-center justify-between pt-1 border-t border-white/5">
+                  <div className="flex items-center gap-2">
+                    <Zap className={`w-3.5 h-3.5 ${bazookaAuto.enabled ? 'text-red-400' : 'text-white/20'}`} />
+                    <span className={`text-[10px] font-mono uppercase ${bazookaAuto.enabled ? 'text-red-400' : 'text-white/30'}`}>auto-bazooka</span>
+                    {bazookaAuto.enabled && <span className="text-[9px] bg-red-500/15 text-red-400 border border-red-500/20 px-1.5 py-0.5 rounded font-bold animate-pulse">ACTIVO</span>}
+                  </div>
+                  <div className="flex items-center gap-3">
+                    {bazookaAuto.enabled && (
+                      <input
+                        type="number" min="0" step="1" value={bazookaAutoMaxPrice}
+                        onChange={e => setBazookaAutoMaxPrice(e.target.value)}
+                        onBlur={() => { if (bazookaAuto.enabled) saveBazookaAuto(true); }}
+                        placeholder="max€"
+                        className="w-20 bg-black/40 border border-white/10 rounded-lg px-2 py-1 text-[11px] font-mono text-white/60 focus:outline-none text-center"
                       />
-                      <button
-                        onClick={resolveProductId}
-                        className="px-4 bg-white/5 hover:bg-white/10 text-white rounded-[14px] transition-all border border-white/10"
-                      >
-                        Detectar ID
-                      </button>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-[10px] uppercase tracking-wider text-white/30 mb-2 ml-1">Motivo del Reporte (Trigger AI)</label>
-                    <select 
-                      value={reportReason}
-                      onChange={(e) => setReportReason(e.target.value)}
-                      className="w-full bg-black/30 border border-white/10 rounded-[14px] px-4 py-3 text-sm focus:outline-none focus:border-red-500/50 transition-colors appearance-none cursor-pointer"
-                    >
-                      <option value="1">Falsificación (Fuerza revisión)</option>
-                      <option value="4">Artículo Prohibido</option>
-                      <option value="7">Spam / Estafa</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-[10px] uppercase tracking-wider text-white/30 mb-2 ml-1">Descripción del Reporte (Stealth Payload)</label>
-                    <div className="flex flex-wrap gap-2 mb-2">
-                       {STEALTH_TEMPLATES.map(t => (
-                         <button
-                           key={t.label}
-                           onClick={() => setStealthDescription(t.text)}
-                           className="text-[9px] px-2 py-1 bg-white/5 hover:bg-white/10 rounded border border-white/10 text-white/50 hover:text-white"
-                         >
-                           {t.label}
-                         </button>
-                       ))}
-                    </div>
-                    <textarea
-                      value={stealthDescription}
-                      onChange={(e) => setStealthDescription(e.target.value)}
-                      className="w-full bg-black/30 border border-white/10 rounded-[14px] px-4 py-3 text-sm focus:outline-none focus:border-red-500/50 transition-colors h-20 resize-none font-mono text-[11px] leading-relaxed"
-                    />
-                  </div>
-
-                  {/* Multi-account cookies */}
-                  <div className="bg-red-500/5 border border-red-500/15 rounded-xl p-3">
-                    <label className="block text-[10px] uppercase tracking-wider text-red-400/70 mb-2">
-                      🔥 Cuentas extra (multi-reporte) — opcional
-                    </label>
-                    <p className="text-[10px] text-white/30 mb-2">Pega una cookie por línea. Cada cuenta envía reportes independientes → más presión.</p>
-                    <textarea
-                      value={extraCookies}
-                      onChange={e => setExtraCookies(e.target.value)}
-                      placeholder={"_vinted_es_session=cuenta2...\n_vinted_es_session=cuenta3..."}
-                      className="w-full bg-black/30 border border-red-500/20 rounded-lg px-3 py-2 text-xs font-mono text-white/60 focus:outline-none focus:border-red-500/40 h-16 resize-none"
-                    />
-                    {extraCookies.trim() && (
-                      <p className="text-[10px] text-red-400 mt-1">
-                        +{extraCookies.split('\n').filter(c => c.trim().length > 10).length} cuenta(s) extra detectada(s)
-                      </p>
                     )}
+                    <button
+                      onClick={() => saveBazookaAuto(!bazookaAuto.enabled)}
+                      disabled={bazookaAutoSaving}
+                      className={`relative w-10 h-5 rounded-full transition-all ${bazookaAuto.enabled ? 'bg-red-600' : 'bg-white/10'}`}
+                    >
+                      <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${bazookaAuto.enabled ? 'left-5' : 'left-0.5'}`} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* ── Terminal ── */}
+              <div className="rounded-2xl border border-white/5 overflow-hidden shadow-2xl">
+                {/* macOS-style titlebar */}
+                <div className="flex items-center justify-between px-4 py-2.5 bg-[#1c1c1c] border-b border-white/[0.06]">
+                  <div className="flex items-center gap-3">
+                    <div className="flex gap-1.5">
+                      <div className="w-3 h-3 rounded-full bg-[#ff5f57] border border-black/20" />
+                      <div className="w-3 h-3 rounded-full bg-[#ffbd2e] border border-black/20" />
+                      <div className="w-3 h-3 rounded-full bg-[#28c840] border border-black/20" />
+                    </div>
+                    <span className="text-[10px] font-mono text-white/25 select-none">lamine-ops — neutralizacion@terminal</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {termLines.length > 0 && (
+                      <span className="text-[9px] font-mono text-white/20">{termLines.length} líneas</span>
+                    )}
+                    <button
+                      onClick={() => setTermLines([])}
+                      className="text-[10px] font-mono text-white/20 hover:text-red-400 transition-colors px-2 py-0.5 rounded border border-white/5 hover:border-red-500/20"
+                    >
+                      clear
+                    </button>
                   </div>
                 </div>
 
-                <div className="bg-black/40 rounded-2xl p-6 border border-white/5 flex flex-col justify-center text-center relative overflow-hidden">
-                  {externalId ? (
-                    <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2">
-                       <div className="flex items-center justify-center gap-2 mb-2">
-                          <div className={`w-2 h-2 rounded-full ${itemStats.checked ? (itemStats.visible ? 'bg-[#4d9fff]' : 'bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.5)]') : 'bg-white/20'}`} />
-                          <span className="text-[10px] uppercase tracking-[0.2em] font-bold">
-                            {itemStats.checked ? (itemStats.visible ? 'En Venta' : 'OCULTO / ELIMINADO') : 'Objetivo Detectado'}
-                          </span>
-                       </div>
-                       
-                       <h4 className="text-xl font-bold truncate px-4">{externalTitle}</h4>
-                       
-                       <div className="flex items-center justify-center gap-4">
-                         <div className="text-xs font-mono text-white/30 px-3 py-1 bg-white/5 rounded-full">ID: {externalId}</div>
-                         <button onClick={checkPublicStatus} title="Verificar visibilidad" className="text-white/20 hover:text-white transition-colors">
-                           <RefreshCcw className="w-4 h-4" />
-                         </button>
-                       </div>
-
-                        <div className="grid grid-cols-1 gap-3 mt-4">
-
-                          {/* ── SNIPER BAZOOKA v1 — botón principal ── */}
-                          <button
-                           onClick={fireSniperBazooka}
-                           disabled={sniperLoading}
-                           className="w-full bg-gradient-to-r from-red-600 to-orange-500 text-white font-bold py-5 rounded-2xl hover:from-red-500 hover:to-orange-400 transition-all shadow-[0_0_30px_rgba(239,68,68,0.35)] flex flex-col items-center justify-center gap-1 border-2 border-red-500/50 disabled:opacity-50"
-                          >
-                           <div className="flex items-center gap-2">
-                             <Zap className="w-6 h-6" />
-                             <span className="text-lg">{sniperLoading ? 'DISPARANDO...' : '🎯 SNIPER BAZOOKA v1'}</span>
-                           </div>
-                           <span className="text-[11px] opacity-80 font-normal uppercase tracking-wider">3 workers · App headers · Keep-Alive</span>
-                          </button>
-
-                          {/* ── Resultados del Sniper ── */}
-                          {sniperResult && (
-                            <div className={`rounded-xl border p-3 text-[11px] font-mono space-y-1 ${sniperResult.ok ? 'border-[#4d9fff]/30 bg-[#4d9fff]/5 text-[#4d9fff]' : 'border-red-500/30 bg-red-500/5 text-red-300'}`}>
-                              <div className="font-bold text-xs mb-2">
-                                {sniperResult.ok ? `✅ RESERVADO en ${sniperResult.fastestMs}ms` : '❌ Todos los workers fallaron'}
-                              </div>
-                              <div className="text-white/40">item: {sniperResult.itemId} · seller: {sniperResult.sellerId}</div>
-                              {sniperResult.results.map(r => (
-                                <div key={r.worker} className={r.success ? 'text-[#4d9fff]' : 'text-white/30'}>
-                                  W{r.worker}: {r.success ? `OK tx=${r.transactionId} (${r.durationMs}ms)` : `FAIL — ${r.error?.slice(0, 60)}`}
-                                </div>
-                              ))}
-                            </div>
-                          )}
-
-                          <button
-                           onClick={enqueueReserve}
-                           disabled={loadingReserve}
-                           className="w-full bg-white/5 text-white/50 font-bold py-3 rounded-xl hover:bg-white/10 transition-all flex items-center justify-center gap-2 border border-white/10 disabled:opacity-50 text-sm"
-                          >
-                           <span>{loadingReserve ? 'ENCOLANDO...' : 'Reserva clásica (Goolazo)'}</span>
-                          </button>
-
-                          {/* ── Like + Offer — método Blackstock ── */}
-                          <button
-                           onClick={likeOfferItem}
-                           disabled={likeOfferLoading}
-                           className="w-full bg-gradient-to-r from-pink-700 to-rose-500 text-white font-bold py-4 rounded-2xl hover:from-pink-600 hover:to-rose-400 transition-all shadow-[0_0_25px_rgba(244,63,94,0.25)] flex flex-col items-center justify-center gap-0.5 border border-rose-500/40 disabled:opacity-50"
-                          >
-                           <div className="flex items-center gap-2">
-                             <span className="text-base">{likeOfferLoading ? '⏳ ENVIANDO...' : '❤️ LIKE + OFFER'}</span>
-                           </div>
-                           <span className="text-[10px] opacity-70 font-normal uppercase tracking-wider">
-                             Favorito + Oferta · Método Blackstock
-                           </span>
-                          </button>
-
-                          {/* Resultado like+offer */}
-                          {likeOfferResult && (
-                            <div className="rounded-xl border border-rose-500/20 bg-rose-500/5 p-3 text-[11px] font-mono space-y-1">
-                              <div className="font-bold text-rose-400 text-xs">
-                                ❤️ {likeOfferResult.favourites} favoritos · 💬 {likeOfferResult.offers} ofertas · {likeOfferResult.accounts} cuenta(s)
-                              </div>
-                              {likeOfferResult.offerPrice && (
-                                <div className="text-white/40">Precio oferta: {likeOfferResult.offerPrice}€ (70% del precio)</div>
-                              )}
-                            </div>
-                          )}
-
-                          {/* ── NUKE v2 — multi-reason multi-account ── */}
-                          <button
-                           onClick={reportItem}
-                           disabled={loading}
-                           className="w-full bg-gradient-to-r from-red-700 to-red-500 text-white font-bold py-4 rounded-2xl hover:from-red-600 hover:to-red-400 transition-all shadow-[0_0_25px_rgba(239,68,68,0.25)] flex flex-col items-center justify-center gap-0.5 border border-red-500/40 disabled:opacity-50"
-                          >
-                           <div className="flex items-center gap-2">
-                             <span className="text-base">{loading ? '⏳ ENVIANDO...' : '💣 NUKE v2'}</span>
-                           </div>
-                           <span className="text-[10px] opacity-70 font-normal uppercase tracking-wider">
-                             Multi-motivo · Multi-cuenta · Paralelo
-                           </span>
-                          </button>
-
-                          {/* Resultado del reporte */}
-                          {reportResult && (
-                            <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-3 text-[11px] font-mono space-y-1">
-                              <div className="font-bold text-red-400 text-xs">
-                                💥 {reportResult.hits}/{reportResult.total} reportes enviados · {reportResult.accounts} cuenta(s)
-                              </div>
-                              {Object.entries(reportResult.byReason).map(([r, n]) => (
-                                <div key={r} className="text-white/40">
-                                  Motivo {r} → {n} hit{n > 1 ? 's' : ''}
-                                  {r === '1' ? ' (falsificación — cola legal)' : r === '4' ? ' (prohibido — cola seguridad)' : r === '11' ? ' (spam — bot anti-dup)' : ''}
-                                </div>
-                              ))}
-                            </div>
-                          )}
-
-                          <button
-                           onClick={checkPublicStatus}
-                           className="py-3 bg-white/5 text-white/40 rounded-xl border border-white/10 text-xs font-bold hover:bg-white/10 transition-all"
-                          >
-                           Verificar visibilidad
-                          </button>
-                        </div>
-                       
-                       {!itemStats.visible && itemStats.checked && (
-                         <motion.div 
-                          initial={{ opacity: 0, scale: 0.9 }}
-                          animate={{ opacity: 1, scale: 1 }}
-                          className="mt-4 p-3 bg-red-500/20 rounded-xl border border-red-500/30 text-red-400 text-xs font-bold"
-                         >
-                            <ShieldCheck className="w-4 h-4 mx-auto mb-1" />
-                            ITEM ELIMINADO DE LA BÚSQUEDA
-                         </motion.div>
-                       )}
+                {/* Terminal body */}
+                <div
+                  ref={termRef}
+                  className="h-[540px] overflow-y-auto bg-[#0d0d0d] p-4 font-mono text-[11px] leading-5 scroll-smooth"
+                >
+                  {termLines.length === 0 ? (
+                    <div className="space-y-1 text-white/20 pt-1">
+                      <div><span className="text-green-500/70">$</span> <span>lamine-ops v1.1 · ready</span></div>
+                      <div><span className="text-white/10">─────────────────────────────────────────────</span></div>
+                      <div className="text-white/15">esperando operaciones desde extensión o UI...</div>
+                      <div className="flex items-center gap-1 mt-2"><span className="text-green-500/70">$</span><span className="w-2 h-3.5 bg-green-500/50 animate-pulse inline-block ml-1" /></div>
                     </div>
                   ) : (
-                    <div className="text-white/20">
-                      <Search className="w-12 h-12 mx-auto mb-4 opacity-10" />
-                      <p className="text-sm">Introduce la URL del producto objetivo para proceder</p>
+                    <div className="space-y-0.5">
+                      {termLines.map(line => {
+                        const ts = line.ts.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                        const tagColor =
+                          line.tag === 'SNIPER'    ? 'text-red-400' :
+                          line.tag === 'BOMBARDEO' ? 'text-orange-400' :
+                          line.tag === 'REPORTE'   ? 'text-purple-400' :
+                          line.tag === 'RESERVA'   ? 'text-blue-400' :
+                          line.tag === 'BAZOOKA'   ? 'text-blue-300' :
+                          line.tag === 'EXT'       ? 'text-cyan-400' :
+                          line.tag.startsWith('W') ? 'text-teal-400' :
+                          'text-white/30';
+                        const msgColor =
+                          line.level === 'ok'     ? 'text-acid' :
+                          line.level === 'err'    ? 'text-red-400' :
+                          line.level === 'warn'   ? 'text-amber-400' :
+                          line.level === 'http'   ? 'text-yellow-300' :
+                          line.level === 'worker' ? 'text-teal-300' :
+                          line.level === 'data'   ? 'text-white/50' :
+                          'text-white/60';
+                        return (
+                          <div key={line.id} className="flex items-start gap-0 hover:bg-white/[0.02] rounded px-1 -mx-1 transition-colors">
+                            <span className="text-white/15 shrink-0 w-[62px] text-right pr-2 select-none">{ts}</span>
+                            <span className={`shrink-0 font-bold w-[88px] text-right pr-2 ${tagColor}`}>[{line.tag}]</span>
+                            <span className={`${msgColor} break-all`}>{line.msg}</span>
+                          </div>
+                        );
+                      })}
+                      <div className="flex items-center gap-1 pt-1">
+                        <span className="text-green-500/40">$</span>
+                        <span className="w-2 h-3.5 bg-green-500/40 animate-pulse inline-block ml-1" />
+                      </div>
                     </div>
                   )}
                 </div>
               </div>
-            </motion.div>
 
-            {/* Bazooka job queue */}
-            {bazookaJobs.length > 0 && (
-              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-[#0d1012] border border-white/8 rounded-[20px] p-5 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Zap className="w-4 h-4 text-[#4d9fff]" />
-                    <span className="text-xs font-bold uppercase tracking-widest text-white/60">Cola de reservas</span>
-                    <span className="text-[10px] bg-[#4d9fff]/10 text-[#4d9fff] px-2 py-0.5 rounded-full font-mono">{bazookaJobs.filter(j => j.status === 'pending' || j.status === 'processing').length} activos</span>
-                  </div>
-                  <button onClick={clearJobs} title="Limpiar cola" className="text-white/20 hover:text-red-400 transition-colors">
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-                <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-                  {bazookaJobs.map(job => (
-                    <div key={job.id} className="flex items-center gap-3 bg-black/30 rounded-xl px-3 py-2.5">
-                      <div className={`w-2 h-2 rounded-full shrink-0 ${
-                        job.status === 'done' ? 'bg-[#4d9fff]' :
-                        job.status === 'failed' ? 'bg-red-500' :
-                        job.status === 'processing' ? 'bg-amber-400 animate-pulse' :
-                        'bg-white/20'
-                      }`} />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs truncate text-white/70">{job.title || job.url}</p>
-                        <p className="text-[10px] font-mono text-white/30">ID: {job.item_id} · {job.status.toUpperCase()}</p>
-                        {job.status === 'failed' && job.error_message && (
-                          <p className="text-[10px] text-red-400 truncate mt-0.5">{job.error_message}</p>
-                        )}
-                        {job.status === 'done' && job.note && (
-                          <p className="text-[10px] text-[#4d9fff] truncate mt-0.5">✓ {job.note}</p>
-                        )}
-                      </div>
-                      <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded-full shrink-0 ${
-                        job.status === 'done' ? 'bg-[#4d9fff]/10 text-[#4d9fff]' :
-                        job.status === 'failed' ? 'bg-red-500/10 text-red-400' :
-                        job.status === 'processing' ? 'bg-amber-500/10 text-amber-400' :
-                        'bg-white/5 text-white/30'
-                      }`}>{job.status}</span>
-                    </div>
-                  ))}
-                </div>
-              </motion.div>
-            )}
-            </>
+            </motion.div>
           )}
 
           {activeTab === 'profits' && (
             <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
               <div className="space-y-2">
-                <h2 className="text-3xl md:text-4xl font-black tracking-tighter text-white">
-                  CONTROL DE <span className="text-[#4d9fff] italic">BENEFICIOS</span>
+                <h2 className="text-3xl md:text-4xl font-display tracking-[0.02em] text-white">
+                  CONTROL DE <span className="text-acid">BENEFICIOS</span>
                 </h2>
                 <p className="text-sm text-white/40 font-medium uppercase tracking-[0.3em]">Facturación · Gastos · Net Profit</p>
               </div>
@@ -1429,96 +1512,36 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
           )}
 
           {activeTab === 'tongues' && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="space-y-6"
-          >
-            {/* Sub-tab selector */}
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                onClick={() => setTongueSubTab('editor')}
-                className={`flex items-center justify-center gap-2 px-4 py-3 rounded-[20px] text-sm font-bold transition-all ${
-                  tongueSubTab === 'editor'
-                    ? 'bg-[#4d9fff] text-[#050607] shadow-[0_0_20px_rgba(77,159,255,0.3)]'
-                    : 'bg-white/5 text-white/40 hover:text-white hover:bg-white/10 border border-white/5'
-                }`}
-              >
-                <Scissors className="w-4 h-4 shrink-0" />
-                <span>Editor Lengüeta</span>
-              </button>
-              <button
-                onClick={() => setTongueSubTab('photos')}
-                className={`flex items-center justify-center gap-2 px-4 py-3 rounded-[20px] text-sm font-bold transition-all ${
-                  tongueSubTab === 'photos'
-                    ? 'bg-[#4d9fff] text-[#050607] shadow-[0_0_20px_rgba(77,159,255,0.3)]'
-                    : 'bg-white/5 text-white/40 hover:text-white hover:bg-white/10 border border-white/5'
-                }`}
-              >
-                <ImageIcon className="w-4 h-4 shrink-0" />
-                <span>Fotos Únicas</span>
-              </button>
-            </div>
-
-            {/* Editor de Lengüetas */}
-            {tongueSubTab === 'editor' && (
-              <div className="bg-[#0d1012] border border-white/8 rounded-[28px] p-8 md:p-12 shadow-2xl relative overflow-hidden group">
+            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
+              <div className="bg-[#0f0f0f] border border-white/5 rounded-[2.5rem] p-8 md:p-12 shadow-2xl relative overflow-hidden group">
                 <div className="absolute top-0 right-0 p-8 opacity-5">
-                  <Scissors className="w-32 h-32 text-[#4d9fff]" />
+                  <Scissors className="w-32 h-32 text-acid" />
                 </div>
                 <div className="relative z-10 space-y-8">
                   <div className="space-y-2">
-                    <h2 className="text-3xl md:text-5xl font-black tracking-tighter text-white">
-                      EDITOR DE <span className="text-[#4d9fff] italic underline decoration-white/10 underline-offset-8">LENGÜETAS</span>
+                    <h2 className="text-3xl md:text-5xl font-display tracking-[0.02em] text-white">
+                      EDITOR DE <span className="text-acid underline decoration-white/10 underline-offset-8">LENGÜETAS</span>
                     </h2>
                     <p className="text-sm text-white/40 font-medium uppercase tracking-[0.3em]">IA Vision • Reconstrucción Forense</p>
                   </div>
                   <TongueEditor />
                 </div>
               </div>
-            )}
-
-            {/* Fotos Únicas */}
-            {tongueSubTab === 'photos' && (
-              <div className="bg-[#0d1012] border border-white/8 rounded-[28px] p-8 md:p-12 shadow-2xl relative overflow-hidden">
-                <div className="absolute top-0 right-0 p-8 opacity-5">
-                  <ImageIcon className="w-32 h-32 text-[#4d9fff]" />
-                </div>
-                <div className="relative z-10 space-y-8">
-                  <div className="space-y-2">
-                    <h2 className="text-3xl md:text-5xl font-black tracking-tighter text-white">
-                      FOTOS <span className="text-[#4d9fff] italic underline decoration-white/10 underline-offset-8">ÚNICAS</span>
-                    </h2>
-                    <p className="text-sm text-white/40 font-medium uppercase tracking-[0.3em]">Anti-Detección · Hash Único · Sin EXIF</p>
-                  </div>
-
-                  {/* Explicación */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                    {[
-                      { icon: '🗑️', title: 'Elimina metadatos', desc: 'Borra completamente los datos EXIF de la imagen: GPS, cámara, fecha, configuración. La foto queda limpia.' },
-                      { icon: '🎲', title: 'Ruido invisible', desc: 'Modifica aleatoriamente ±1-3 píxeles por canal RGB. Imperceptible al ojo humano pero cambia el hash por completo.' },
-                      { icon: '📐', title: 'Dimensiones únicas', desc: 'Reduce 1-4 píxeles al azar en anchura y altura. Rompe la detección por hash perceptual (pHash).' },
-                      { icon: '🔒', title: 'Hash 100% nuevo', desc: 'El resultado tiene MD5/SHA completamente diferente. Vinted, Wallapop y similares no detectarán la imagen como duplicada.' },
-                    ].map(item => (
-                      <div key={item.title} className="bg-white/[0.03] border border-white/5 rounded-2xl p-5">
-                        <div className="text-2xl mb-3">{item.icon}</div>
-                        <p className="text-sm font-bold text-white mb-1">{item.title}</p>
-                        <p className="text-xs text-white/40 leading-relaxed">{item.desc}</p>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="bg-[#4d9fff]/5 border border-[#4d9fff]/20 rounded-[20px] px-5 py-4 text-sm text-[#4d9fff]/80 flex items-start gap-3">
-                    <span className="text-lg mt-0.5">💡</span>
-                    <span>Todo el proceso ocurre en tu navegador. Las imágenes <strong className="text-[#4d9fff]">nunca se suben al servidor</strong>. Puedes procesar múltiples fotos a la vez y descargarlas todas de un clic.</span>
-                  </div>
-
-                  <ImageUniquifier />
-                </div>
-              </div>
-            )}
-          </motion.div>
+            </motion.div>
           )}
+
+          {activeTab === 'photos' && (
+            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
+              <div className="space-y-2">
+                <h2 className="text-3xl md:text-4xl font-display tracking-[0.02em] text-white">
+                  FOTOS <span className="text-acid">ÚNICAS</span>
+                </h2>
+                <p className="text-sm text-white/40 font-medium uppercase tracking-[0.3em]">Anti-Detección · Hash Único · Sin EXIF</p>
+              </div>
+              <ImageUniquifier />
+            </motion.div>
+          )}
+
         </div>
       </main>
 
@@ -1532,28 +1555,28 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
             <div className="space-y-4">
               <div className="bg-black border border-white/5 rounded-xl p-4 font-mono text-xs overflow-x-auto">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-[#4d9fff]">POST /api/vinted/hide</span>
-                  <button onClick={() => copyToClipboard('curl -X POST /api/vinted/hide -d \'{"itemId": 123, "cookie": "..."}\'')} className="hover:text-[#4d9fff]">
+                  <span className="text-acid">POST /api/vinted/hide</span>
+                  <button onClick={() => copyToClipboard('curl -X POST /api/vinted/hide -d \'{"itemId": 123, "cookie": "..."}\'')} className="hover:text-acid">
                     {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
                   </button>
                 </div>
                 <code className="text-white/40 leading-6">{"{"}</code><br/>
-                <code className="pl-4 text-[#4d9fff]">"itemId": 1234567,</code><br/>
-                <code className="pl-4 text-[#4d9fff]">"cookie": "string"</code><br/>
+                <code className="pl-4 text-acid">"itemId": 1234567,</code><br/>
+                <code className="pl-4 text-acid">"cookie": "string"</code><br/>
                 <code className="text-white/40 leading-6">{"}"}</code>
               </div>
             </div>
           </div>
 
-          <div className="bg-[#0d1012] rounded-[28px] p-8 border border-white/8 relative overflow-hidden">
-            <div className="absolute -right-4 -bottom-4 w-32 h-32 bg-[#4d9fff]/5 blur-3xl rounded-full" />
+          <div className="bg-[#141414] rounded-3xl p-8 border border-white/5 relative overflow-hidden">
+            <div className="absolute -right-4 -bottom-4 w-32 h-32 bg-acid-soft blur-3xl rounded-full" />
             <h4 className="text-lg font-bold mb-2">Seguridad y Privacidad</h4>
             <p className="text-sm text-white/40 leading-relaxed">
               Esta herramienta no almacena tus cookies permanentemente en el servidor. 
               Toda la comunicación se realiza a través de un proxy local seguro. 
               Asegúrate de no compartir nunca tu cookie de sesión pública.
             </p>
-            <div className="mt-6 flex items-center gap-2 text-[#4d9fff]/50 text-[10px] uppercase font-bold tracking-widest">
+            <div className="mt-6 flex items-center gap-2 text-acid text-[10px] uppercase font-bold tracking-widest">
               <CheckCircle2 className="w-4 h-4" /> Cifrado de extremo a extremo activo
             </div>
           </div>
@@ -1566,3 +1589,4 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
     </div>
   );
 }
+

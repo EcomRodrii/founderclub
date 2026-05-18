@@ -46,8 +46,49 @@ export async function initDB() {
       id SERIAL PRIMARY KEY,
       user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
       username VARCHAR(100) NOT NULL,
+      cookie TEXT,
+      domain VARCHAR(5) DEFAULT 'es',
+      is_active BOOLEAN DEFAULT TRUE,
+      balance DECIMAL(10,2),
+      items_count INTEGER DEFAULT 0,
+      sold_count INTEGER DEFAULT 0,
+      last_synced_at TIMESTAMP,
       created_at TIMESTAMP DEFAULT NOW(),
       UNIQUE(user_id, username)
+    );
+
+    CREATE TABLE IF NOT EXISTS vinted_inventory (
+      id SERIAL PRIMARY KEY,
+      account_id INTEGER REFERENCES vinted_accounts(id) ON DELETE CASCADE,
+      item_id VARCHAR(50) NOT NULL,
+      title TEXT,
+      price DECIMAL(10,2),
+      status VARCHAR(20) DEFAULT 'active',
+      is_hidden BOOLEAN DEFAULT FALSE,
+      views INTEGER DEFAULT 0,
+      likes INTEGER DEFAULT 0,
+      brand VARCHAR(100),
+      size VARCHAR(30),
+      category VARCHAR(100),
+      url TEXT,
+      image_url TEXT,
+      buy_price DECIMAL(10,2),
+      profit DECIMAL(10,2),
+      listed_at TIMESTAMP,
+      sold_at TIMESTAMP,
+      last_synced_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(account_id, item_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS vinted_expenses (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      account_id INTEGER REFERENCES vinted_accounts(id) ON DELETE SET NULL,
+      description TEXT NOT NULL,
+      amount DECIMAL(10,2) NOT NULL,
+      category VARCHAR(50) DEFAULT 'general',
+      date DATE DEFAULT CURRENT_DATE,
+      created_at TIMESTAMP DEFAULT NOW()
     );
 
     CREATE TABLE IF NOT EXISTS sales (
@@ -113,7 +154,98 @@ export async function initDB() {
       prompt TEXT NOT NULL DEFAULT '',
       updated_at TIMESTAMP DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS device_sessions (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      install_id TEXT,
+      browser_id TEXT,
+      hwid TEXT,
+      version TEXT,
+      ip TEXT,
+      user_agent TEXT,
+      last_seen TIMESTAMP DEFAULT NOW(),
+      UNIQUE(user_id, install_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS whitelist_items (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      item_id TEXT NOT NULL,
+      item_url TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(user_id, item_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS whitelist_profiles (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      member_id TEXT NOT NULL,
+      profile_url TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(user_id, member_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS bazooka_workers (
+      name TEXT PRIMARY KEY,
+      status TEXT NOT NULL DEFAULT 'idle',
+      active_jobs INTEGER DEFAULT 0,
+      version TEXT,
+      host TEXT,
+      uptime_sec INTEGER,
+      last_seen TIMESTAMP DEFAULT NOW()
+    );
   `);
+
+  // Migrations — añadir columnas nuevas si no existen
+  const migrations = [
+    `ALTER TABLE vinted_accounts ADD COLUMN IF NOT EXISTS cookie TEXT`,
+    `ALTER TABLE vinted_accounts ADD COLUMN IF NOT EXISTS domain VARCHAR(5) DEFAULT 'es'`,
+    `ALTER TABLE vinted_accounts ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE`,
+    `ALTER TABLE vinted_accounts ADD COLUMN IF NOT EXISTS balance DECIMAL(10,2)`,
+    `ALTER TABLE vinted_accounts ADD COLUMN IF NOT EXISTS items_count INTEGER DEFAULT 0`,
+    `ALTER TABLE vinted_accounts ADD COLUMN IF NOT EXISTS sold_count INTEGER DEFAULT 0`,
+    `ALTER TABLE vinted_accounts ADD COLUMN IF NOT EXISTS last_synced_at TIMESTAMP`,
+    `ALTER TABLE sales ADD COLUMN IF NOT EXISTS account_id INTEGER REFERENCES vinted_accounts(id) ON DELETE SET NULL`,
+    `ALTER TABLE sales ADD COLUMN IF NOT EXISTS notes TEXT`,
+    `ALTER TABLE sales ADD COLUMN IF NOT EXISTS platform VARCHAR(30) DEFAULT 'vinted'`,
+    `ALTER TABLE sales ADD COLUMN IF NOT EXISTS boost_cost DECIMAL(10,2) DEFAULT 0`,
+    `ALTER TABLE sales ADD COLUMN IF NOT EXISTS shipping_cost DECIMAL(10,2) DEFAULT 0`,
+    `ALTER TABLE sales ADD COLUMN IF NOT EXISTS supplier VARCHAR(255)`,
+    `ALTER TABLE sales ADD COLUMN IF NOT EXISTS invoice_filename VARCHAR(255)`,
+    // Permitir buy_price 0 (las compras pueden venir solo del lote)
+    `ALTER TABLE sales ALTER COLUMN buy_price SET DEFAULT 0`,
+    `ALTER TABLE sales ALTER COLUMN buy_price DROP NOT NULL`,
+    `ALTER TABLE sales ADD COLUMN IF NOT EXISTS refunded BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE sales ADD COLUMN IF NOT EXISTS refunded_at TIMESTAMP`,
+    // Tabla nueva de compras (facturas de lote) — separadas de las ventas
+    `CREATE TABLE IF NOT EXISTS purchases (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      supplier VARCHAR(255),
+      total_amount DECIMAL(10,2) NOT NULL,
+      units INTEGER DEFAULT 1,
+      date DATE NOT NULL,
+      invoice_filename VARCHAR(255),
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_purchases_user_date ON purchases(user_id, date DESC)`,
+    `ALTER TABLE sniper_history ADD COLUMN IF NOT EXISTS purchase_id TEXT`,
+    // Bazooka worker-fleet columns on top of the existing bazooka_jobs schema
+    `ALTER TABLE bazooka_jobs ADD COLUMN IF NOT EXISTS type TEXT NOT NULL DEFAULT 'report'`,
+    `ALTER TABLE bazooka_jobs ADD COLUMN IF NOT EXISTS params JSONB DEFAULT '{}'::jsonb`,
+    `ALTER TABLE bazooka_jobs ADD COLUMN IF NOT EXISTS claimed_by TEXT`,
+    `ALTER TABLE bazooka_jobs ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMP`,
+    `ALTER TABLE bazooka_jobs ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP`,
+    `ALTER TABLE bazooka_jobs ADD COLUMN IF NOT EXISTS duration_ms INTEGER`,
+    `ALTER TABLE bazooka_jobs ADD COLUMN IF NOT EXISTS error TEXT`,
+    `ALTER TABLE bazooka_jobs ALTER COLUMN vinted_cookies DROP NOT NULL`,
+    `CREATE INDEX IF NOT EXISTS idx_bazooka_jobs_pending ON bazooka_jobs(status, created_at) WHERE status = 'pending'`,
+  ];
+  for (const sql of migrations) {
+    await pool.query(sql).catch(() => {}); // silently ignore if column already exists
+  }
 
   // Create first admin from env if no admins exist
   const adminEmail = process.env.ADMIN_EMAIL;

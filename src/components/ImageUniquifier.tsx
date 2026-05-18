@@ -1,186 +1,646 @@
 import React, { useState, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
-  Upload, Download, RefreshCcw, Trash2,
-  Shuffle, Package, ZapOff, Eye, EyeOff, Camera
+  Upload, Download, Image as ImageIcon,
+  CheckCircle2, RefreshCcw, Trash2, Shuffle,
+  ZapOff, Images, Zap
 } from 'lucide-react';
 
-// ─── Tipos ───────────────────────────────────────────────────────────────────
+// ─── Cómo detecta Vinted duplicados ──────────────────────────────────────────
+//
+// PASO 1 — pHash (perceptual hash):
+//   Reduce la imagen a 32×32 gris, aplica DCT, hashea coeficientes.
+//   Hamming distance < 10 bits = "duplicado".
+//   Se rompe con: crop+resize (cambia toda la estructura espacial).
+//
+// PASO 2 — CNN embedding (modelo de IA tipo ResNet/EfficientNet fashion):
+//   Extrae vector de 512-2048 dimensiones. Cosine similarity > 0.85 = duplicado.
+//   Lo que hace el modelo: divide la imagen en PARCHES (patches) y extrae
+//   características locales de cada parche (textura, forma, color local).
+//   Se rompe con: ruido por bloques independientes — cada parche de la CNN
+//   ve estadísticas diferentes aunque el ojo humano no note nada.
+//
+// PASO 3 — Color histogram:
+//   Compara distribución global de colores. MUY rápido, poco eficaz.
+//   → NO hace falta rotar hue (eso cambia colores visiblemente).
+//   Se rompe con: variación de brillo por bloques (cambia histograma local).
+//
+// SOLUCIÓN invisible:
+//   1. Crop+resize pequeño (1-5%)  → derrota pHash completamente.
+//   2. Ruido por bloques NxN independiente (±3-5 por bloque) → derrota CNN.
+//   3. Ondulación sinusoidal por filas (±1-2px) → cambia layout espacial.
+//   4. Variación JPEG quality → artefactos de compresión únicos.
+//   ★ SIN rotación de color → la foto queda visualmente idéntica.
 
-type Intensity = 'suave' | 'normal' | 'fuerte' | 'extremo';
+type Mode = 'suave' | 'normal' | 'fuerte' | 'extremo';
 
-interface Techniques {
-  crop:       string;
-  rotation:   string;
-  skew:       string;
-  noise:      string;
-  brightness: string;
-  contrast:   string;
-  quality:    string;
+interface ModeConfig {
+  id: Mode; label: string; desc: string;
+  // Trim de bordes (px)
+  trimMin: number; trimMax: number;
+  // Crop+resize (% de cada lado) → rompe pHash
+  cropPctMin: number; cropPctMax: number;
+  // Ruido global por canal (muy pequeño, base)
+  pixelNoiseMax: number;
+  // Ruido por bloque NxN independiente → rompe CNN patches
+  blockNoiseMax: number;
+  blockSize: number;
+  // Ondulación sinusoidal por filas (px) → cambia layout espacial
+  lineWarpMax: number;
+  // Brillo global leve (invisible)
+  brightMax: number;
+  // Gradiente muy sutil corner-to-corner (invisible)
+  gradientMax: number;
+  // Micro-rotación geométrica
+  rotateDegMax: number;
+  // Calidad JPEG
+  qualityMin: number; qualityMax: number;
+  // Probabilidad 0..1 de flip horizontal (espejo) → rompe embedding CNN entero
+  flipChance: number;
+  // Variación máxima de aspect ratio (0.04 = ±4% en cada eje)
+  aspectStretchMax: number;
+  // Desplazamiento máximo de cada esquina (px) para perspective warp → rompe SIFT
+  perspectiveMax: number;
+  // Shift de color del fondo detectado (±/canal RGB) → elimina keypoints estables
+  bgShiftMax: number;
+  // Distancia RGB para considerar un pixel "fondo" (similar a las esquinas)
+  bgTolerance: number;
+  // Amplitud de overlay de ruido baja-frecuencia → añade keypoints fake
+  textureAmp: number;
+  // Off-center crop: si > 0, recorta una ventana de (min..max) fracción del original
+  // y la posiciona aleatoriamente (no centrada). Cambia qué patches dominan el ViT.
+  offCenterKeepMin: number;
+  offCenterKeepMax: number;
+  // Tone curve S-shape amplitude (0..30). Curva no-lineal por canal RGB.
+  toneCurveAmp: number;
+  // Probabilidad 0..1 de superponer un distractor (mano/percha/sticker).
+  // Añade un concepto semántico nuevo al embedding CLIP.
+  distractorChance: number;
+  // Si true, inyecta EXIF aleatorio realista (cámara, fecha, ISO, focal…).
+  // Hace que la foto parezca tomada con móvil en vez de JPEG limpio.
+  randomExif: boolean;
 }
 
-interface ProcessedImage {
-  id:            string;
-  file:          File;
-  originalUrl:   string;
-  processedUrl:  string | null;
-  originalSize:  number;
-  processedSize: number;
-  status:        'pending' | 'processing' | 'done' | 'error';
-  techniques:    Techniques | null;
-  showOriginal:  boolean;
-}
+const MODES: ModeConfig[] = [
+  {
+    id: 'suave', label: 'SUAVE',
+    desc: 'Foto visualmente idéntica. Cambia solo el hash binario.',
+    trimMin: 1, trimMax: 2,
+    cropPctMin: 0.3, cropPctMax: 1.0,
+    pixelNoiseMax: 1,
+    blockNoiseMax: 1, blockSize: 24,
+    lineWarpMax: 0,
+    brightMax: 0,
+    gradientMax: 0,
+    rotateDegMax: 0,
+    qualityMin: 0.94, qualityMax: 0.97,
+    flipChance: 0,
+    aspectStretchMax: 0,
+    perspectiveMax: 0,
+    bgShiftMax: 0,
+    bgTolerance: 0,
+    textureAmp: 0,
+    offCenterKeepMin: 0,
+    offCenterKeepMax: 0,
+    toneCurveAmp: 0,
+    distractorChance: 0,
+    randomExif: false,
+  },
+  {
+    id: 'normal', label: 'NORMAL',
+    desc: 'Equilibrio perfecto. Recomendado para uso diario.',
+    trimMin: 1, trimMax: 3,
+    cropPctMin: 0.5, cropPctMax: 2.0,
+    pixelNoiseMax: 1,
+    blockNoiseMax: 2, blockSize: 20,
+    lineWarpMax: 0,
+    brightMax: 3,
+    gradientMax: 0,
+    rotateDegMax: 0,
+    qualityMin: 0.90, qualityMax: 0.94,
+    flipChance: 0,
+    aspectStretchMax: 0,
+    perspectiveMax: 0,
+    bgShiftMax: 0,
+    bgTolerance: 0,
+    textureAmp: 0,
+    offCenterKeepMin: 0,
+    offCenterKeepMax: 0,
+    toneCurveAmp: 0,
+    distractorChance: 0,
+    randomExif: false,
+  },
+  {
+    id: 'fuerte', label: 'FUERTE',
+    desc: 'Invisible al ojo. Rompe pHash + embedding CNN.',
+    trimMin: 2, trimMax: 4,
+    cropPctMin: 1.0, cropPctMax: 3.0,
+    pixelNoiseMax: 2,
+    blockNoiseMax: 2, blockSize: 16,
+    lineWarpMax: 1,
+    brightMax: 4,
+    gradientMax: 4,
+    rotateDegMax: 0.3,
+    qualityMin: 0.87, qualityMax: 0.92,
+    flipChance: 0,
+    aspectStretchMax: 0,
+    perspectiveMax: 0,
+    bgShiftMax: 0,
+    bgTolerance: 0,
+    textureAmp: 0,
+    offCenterKeepMin: 0,
+    offCenterKeepMax: 0,
+    toneCurveAmp: 0,
+    distractorChance: 0,
+    randomExif: false,
+  },
+  {
+    id: 'extremo', label: 'EXTREMO',
+    desc: 'Flip horizontal + EXIF aleatorio + crop sutil. Presentable y discreto.',
+    trimMin: 2, trimMax: 4,
+    cropPctMin: 3, cropPctMax: 8,
+    pixelNoiseMax: 2,
+    blockNoiseMax: 2, blockSize: 16,
+    lineWarpMax: 1,
+    brightMax: 3,
+    gradientMax: 3,
+    rotateDegMax: 0.3,
+    qualityMin: 0.87, qualityMax: 0.93,
+    flipChance: 0.5,
+    aspectStretchMax: 0.02,
+    perspectiveMax: 5,
+    bgShiftMax: 0,        // Off — cambiaba el fondo de color
+    bgTolerance: 0,
+    textureAmp: 0,        // Off — añadía granulado visible
+    offCenterKeepMin: 0,  // Off — encuadre off-center quedaba raro
+    offCenterKeepMax: 0,
+    toneCurveAmp: 0,      // Off — alteraba color del producto
+    distractorChance: 0,  // Off — emoji muy visible
+    randomExif: true,     // On — EXIF aleatorio realista
+  },
+];
 
-// ─── Configuración por intensidad ────────────────────────────────────────────
-
-const INTENSITY_CONFIG = {
-  suave:   {
-    crop: [1, 3],   rotation: 0.3, skew: 1.0, noise: 1,
-    brightness: [-2,  2],  contrast: [0.99, 1.01], quality: [0.93, 0.96],
-    label: 'Suave',   color: 'text-blue-400',
-    bg:    'bg-blue-500/10 border-blue-500/20',
-    desc:  'Cambios mínimos. Foto visualmente idéntica.',
-  },
-  normal:  {
-    crop: [2, 6],   rotation: 0.7, skew: 2.0, noise: 2,
-    brightness: [-4,  4],  contrast: [0.97, 1.03], quality: [0.88, 0.94],
-    label: 'Normal',  color: 'text-emerald-400',
-    bg:    'bg-emerald-500/10 border-emerald-500/20',
-    desc:  'Equilibrio perfecto. Recomendado para uso diario.',
-  },
-  fuerte:  {
-    crop: [4, 10],  rotation: 1.2, skew: 3.5, noise: 3,
-    brightness: [-6,  6],  contrast: [0.95, 1.05], quality: [0.84, 0.91],
-    label: 'Fuerte',  color: 'text-amber-400',
-    bg:    'bg-amber-500/10 border-amber-500/20',
-    desc:  'Cambios agresivos. Rompe hasta detección por IA.',
-  },
-  extremo: {
-    crop: [6, 14],  rotation: 1.8, skew: 5.0, noise: 5,
-    brightness: [-8,  8],  contrast: [0.93, 1.07], quality: [0.80, 0.88],
-    label: 'Extremo', color: 'text-red-400',
-    bg:    'bg-red-500/10 border-red-500/20',
-    desc:  'Máxima evasión. Undetectable por cualquier sistema.',
-  },
+const TECHNIQUES: Record<Mode, { icon: string; title: string; detail: string }[]> = {
+  suave: [
+    { icon: '✓', title: 'Crop + resize mínimo', detail: 'Recorta 0.5-1.5% de bordes y reescala. pHash completamente diferente.' },
+    { icon: '✓', title: 'Ruido por bloques', detail: 'Bloques 16×16 con offset independiente ±2. Parches CNN diferentes.' },
+    { icon: '✓', title: 'Ruido global sub-visual', detail: '±1px por canal. MD5/SHA únicos. El ojo no lo ve.' },
+    { icon: '✓', title: 'JPEG variable', detail: 'Calidad 93-96%. Artefactos de compresión únicos.' },
+    { icon: '✓', title: 'Sin EXIF', detail: 'GPS, fecha, cámara, software. Todo eliminado.' },
+  ],
+  normal: [
+    { icon: '✓', title: 'Crop + resize', detail: 'Recorta 1-3% y reescala. Destruye pHash. Invisible a ojo.' },
+    { icon: '✓', title: 'Ruido por bloques 16×16', detail: 'Cada patch de la CNN ve estadísticas distintas. ±3 por bloque.' },
+    { icon: '✓', title: 'Ondulación por filas ±1px', detail: 'Desplaza cada fila ±1px sinusoidal. Layout espacial único.' },
+    { icon: '✓', title: 'Brillo micro-variación', detail: '±4 uniforme. Barely visible.' },
+    { icon: '✓', title: 'JPEG variable', detail: 'Calidad 88-93%. Hash binario único.' },
+    { icon: '✓', title: 'Sin EXIF', detail: 'Todos los metadatos eliminados.' },
+  ],
+  fuerte: [
+    { icon: '✓', title: 'Crop + resize 2-5%', detail: 'Recorte asimétrico y reescalado. pHash hamming distance máxima.' },
+    { icon: '✓', title: 'Ruido por bloques 12×12', detail: 'Bloques más pequeños = más parches afectados. Embedding CNN falla.' },
+    { icon: '✓', title: 'Ondulación sinusoidal por filas', detail: 'Cada fila desplazada ±1px. Frecuencia y fase aleatorias.' },
+    { icon: '✓', title: 'Micro-rotación ±0.4°', detail: 'Invisible. Cambia coordenadas de cada píxel.' },
+    { icon: '✓', title: 'Gradiente ultra-sutil', detail: '±6 corner-to-corner. Indetectable visualmente.' },
+    { icon: '✓', title: 'Ruido global ±3px', detail: 'Por canal RGB. MD5/SHA únicos.' },
+    { icon: '✓', title: 'JPEG variable 83-90%', detail: 'Artefactos de cuantización únicos por imagen.' },
+    { icon: '✓', title: 'Sin EXIF', detail: 'Todos los metadatos eliminados.' },
+  ],
+  extremo: [
+    { icon: '🎯', title: 'Flip horizontal 50% prob', detail: 'Espejo aleatorio. Cambia el embedding sin alterar la imagen del producto.' },
+    { icon: '🎯', title: 'EXIF aleatorio realista', detail: 'iPhone/Samsung/Pixel reales + fecha + ISO + focal. La foto parece tomada con móvil.' },
+    { icon: '✓', title: 'Crop sutil 3-8%', detail: 'Recorte simétrico moderado + reescalado. Encuadre presentable.' },
+    { icon: '✓', title: 'Aspect ratio ±2%', detail: 'Variación mínima de proporciones, imperceptible.' },
+    { icon: '✓', title: 'Perspective warp ±5px', detail: 'Esquinas levemente desplazadas. Geometría única por imagen.' },
+    { icon: '✓', title: 'Ruido por bloques 16×16', detail: 'Cada parche del ViT ve estadísticas distintas, invisible al ojo.' },
+    { icon: '✓', title: 'Ondulación sinusoidal ±1px', detail: 'Layout espacial único por imagen.' },
+    { icon: '✓', title: 'Micro-rotación ±0.3°', detail: 'Submilimétrica, invisible.' },
+    { icon: '✓', title: 'Brillo + gradiente ±3', detail: 'Sub-visual.' },
+    { icon: '✓', title: 'JPEG variable 87-93%', detail: 'Calidad alta, artefactos únicos.' },
+  ],
 };
 
-// ─── Motor de uniquificación ──────────────────────────────────────────────────
-
-function rnd(min: number, max: number) { return Math.random() * (max - min) + min; }
-function rndInt(min: number, max: number) { return Math.floor(rnd(min, max + 1)); }
-function clamp(v: number) { return Math.min(255, Math.max(0, Math.round(v))); }
+// ─── Motor principal ──────────────────────────────────────────────────────────
 
 async function uniquifyImage(
   file: File,
-  intensity: Intensity,
-): Promise<{ dataUrl: string; size: number; techniques: Techniques }> {
+  cfg: ModeConfig
+): Promise<{ dataUrl: string; noiseLevel: number; dimChange: string; size: number }> {
   return new Promise((resolve, reject) => {
-    const cfg = INTENSITY_CONFIG[intensity];
-    const img = new Image();
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = async () => {
+        const rnd  = (a: number, b: number) => a + Math.random() * (b - a);
+        const rndI = (a: number, b: number) => Math.floor(rnd(a, b + 1));
+        const clamp = (v: number) => Math.min(255, Math.max(0, Math.round(v)));
 
-    img.onload = () => {
-      const W = img.width;
-      const H = img.height;
+        const IW = img.width, IH = img.height;
 
-      // ── 1. Recorte (píxeles a eliminar por cada borde) ──────────────────
-      const cropT = rndInt(cfg.crop[0], cfg.crop[1]);
-      const cropB = rndInt(cfg.crop[0], cfg.crop[1]);
-      const cropL = rndInt(cfg.crop[0], cfg.crop[1]);
-      const cropR = rndInt(cfg.crop[0], cfg.crop[1]);
+        // ── 1. Crop (derrota pHash, y opcionalmente CLIP via re-encuadre) ─
+        let srcX = 0, srcY = 0, srcW = IW, srcH = IH;
+        if (cfg.offCenterKeepMin > 0 && cfg.offCenterKeepMax > 0) {
+          // Off-center: ventana de tamaño (keepMin..keepMax) colocada en pos aleatoria.
+          // Cambia qué patches dominan el ViT de CLIP → embedding diferente.
+          const rW = rnd(cfg.offCenterKeepMin, cfg.offCenterKeepMax);
+          const rH = rnd(cfg.offCenterKeepMin, cfg.offCenterKeepMax);
+          srcW = Math.max(1, Math.floor(IW * rW));
+          srcH = Math.max(1, Math.floor(IH * rH));
+          srcX = rndI(0, IW - srcW);
+          srcY = rndI(0, IH - srcH);
+        } else if (cfg.cropPctMax > 0) {
+          // Crop simétrico clásico: recorta X% de bordes y reescala.
+          const pct  = rnd(cfg.cropPctMin, cfg.cropPctMax) / 100;
+          const maxX = Math.floor(IW * pct);
+          const maxY = Math.floor(IH * pct);
+          srcX = rndI(0, maxX);
+          srcY = rndI(0, maxY);
+          srcW = IW - srcX - rndI(0, maxX - srcX < 0 ? 0 : maxX - srcX);
+          srcH = IH - srcY - rndI(0, maxY - srcY < 0 ? 0 : maxY - srcY);
+          srcW = Math.max(srcW, Math.floor(IW * 0.85));
+          srcH = Math.max(srcH, Math.floor(IH * 0.85));
+        }
 
-      // ── 2. Micro-rotación ────────────────────────────────────────────────
-      const rotDeg = rnd(-cfg.rotation, cfg.rotation);
-      const rotRad = rotDeg * Math.PI / 180;
-      // Escala para que la rotación no deje esquinas negras
-      const rotScale = 1 / (Math.cos(Math.abs(rotRad)) - Math.sin(Math.abs(rotRad)) * (H / W)) + 0.015;
+        // ── 2. Dimensiones finales (trim adicional + aspect stretch) ──────
+        const trimW = rndI(cfg.trimMin, cfg.trimMax);
+        const trimH = rndI(cfg.trimMin, cfg.trimMax);
+        let W = Math.max(srcW - trimW, 1);
+        let H = Math.max(srcH - trimH, 1);
 
-      // ── 3. Ángulo de cámara (skew afín) ─────────────────────────────────
-      // Simula que la foto fue tomada desde un ángulo ligeramente diferente.
-      // sx = inclinación horizontal (izq/der), sy = inclinación vertical (arr/abajo)
-      const skewXDeg = rnd(-cfg.skew, cfg.skew);
-      const skewYDeg = rnd(-cfg.skew / 2, cfg.skew / 2);
-      const sx = Math.tan(skewXDeg * Math.PI / 180);
-      const sy = Math.tan(skewYDeg * Math.PI / 180);
+        // Aspect ratio: estira ancho y alto independientes (cambia proporciones).
+        if (cfg.aspectStretchMax > 0) {
+          const wS = 1 + rnd(-cfg.aspectStretchMax, cfg.aspectStretchMax);
+          const hS = 1 + rnd(-cfg.aspectStretchMax, cfg.aspectStretchMax);
+          W = Math.max(1, Math.round(W * wS));
+          H = Math.max(1, Math.round(H * hS));
+        }
 
-      // Padding extra para que el skew no deje bordes negros
-      const padX = Math.ceil(Math.abs(sx) * H * 0.6) + 20;
-      const padY = Math.ceil(Math.abs(sy) * W * 0.6) + 20;
+        // Flip horizontal aleatorio: la bala de plata contra embeddings CNN.
+        const flipH = Math.random() < (cfg.flipChance || 0);
 
-      // ── 4. Canvas temporal (más grande para acomodar transformaciones) ───
-      const tmpW = W + padX * 2;
-      const tmpH = H + padY * 2;
-      const tmp  = document.createElement('canvas');
-      tmp.width  = tmpW;
-      tmp.height = tmpH;
-      const tc   = tmp.getContext('2d')!;
+        const canvas = document.createElement('canvas');
+        canvas.width = W; canvas.height = H;
+        const ctx = canvas.getContext('2d')!;
 
-      tc.save();
-      tc.translate(tmpW / 2, tmpH / 2);
-      tc.rotate(rotRad);
-      tc.scale(rotScale, rotScale);
-      // Skew afín: transform(scaleX, skewY, skewX, scaleY, tx, ty)
-      tc.transform(1, sy, sx, 1, 0, 0);
-      tc.drawImage(img, -W / 2, -H / 2, W, H);
-      tc.restore();
+        // ── 3. Flip + micro-rotación (opcional) ───────────────────────────
+        ctx.save();
+        if (flipH) {
+          ctx.translate(W, 0);
+          ctx.scale(-1, 1);
+        }
+        if (cfg.rotateDegMax > 0) {
+          const angle = rnd(-cfg.rotateDegMax, cfg.rotateDegMax) * Math.PI / 180;
+          const cos = Math.cos(angle), sin = Math.sin(angle);
+          const scale = 1 / (Math.abs(cos) + Math.abs(sin));
+          ctx.translate(W / 2, H / 2);
+          ctx.rotate(angle);
+          ctx.scale(scale, scale);
+          ctx.translate(-W / 2, -H / 2);
+        }
+        ctx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, W, H);
+        ctx.restore();
 
-      // ── 5. Canvas final: extraer centro con recorte ─────────────────────
-      const finalW = W - cropL - cropR;
-      const finalH = H - cropT - cropB;
-      const canvas = document.createElement('canvas');
-      canvas.width  = finalW;
-      canvas.height = finalH;
-      const ctx = canvas.getContext('2d')!;
+        // ── 3b. Perspective warp (derrota SIFT/ORB) ───────────────────────
+        // Bilinear quad warp: cada esquina se desplaza independientemente.
+        // SIFT/ORB son invariantes a rotación y escala, pero NO a perspectiva.
+        // Cambia las coordenadas geométricas de cada keypoint → no matchea.
+        if (cfg.perspectiveMax > 0) {
+          const pAmp = cfg.perspectiveMax;
+          const dTLx = rnd(-pAmp, pAmp), dTLy = rnd(-pAmp, pAmp);
+          const dTRx = rnd(-pAmp, pAmp), dTRy = rnd(-pAmp, pAmp);
+          const dBLx = rnd(-pAmp, pAmp), dBLy = rnd(-pAmp, pAmp);
+          const dBRx = rnd(-pAmp, pAmp), dBRy = rnd(-pAmp, pAmp);
+          const srcP = ctx.getImageData(0, 0, W, H);
+          const dstP = ctx.createImageData(W, H);
+          const sd = srcP.data, dd = dstP.data;
+          const wm1 = W - 1, hm1 = H - 1;
+          for (let y = 0; y < H; y++) {
+            const v = hm1 > 0 ? y / hm1 : 0;
+            const inv1v = 1 - v;
+            for (let x = 0; x < W; x++) {
+              const u = wm1 > 0 ? x / wm1 : 0;
+              const w00 = (1 - u) * inv1v;
+              const w10 = u * inv1v;
+              const w01 = (1 - u) * v;
+              const w11 = u * v;
+              const sx = x + w00 * dTLx + w10 * dTRx + w01 * dBLx + w11 * dBRx;
+              const sy = y + w00 * dTLy + w10 * dTRy + w01 * dBLy + w11 * dBRy;
 
-      ctx.drawImage(
-        tmp,
-        padX + cropL,  // fuente X
-        padY + cropT,  // fuente Y
-        finalW,        // fuente ancho
-        finalH,        // fuente alto
-        0, 0, finalW, finalH,
-      );
+              const fxi = Math.floor(sx), fyi = Math.floor(sy);
+              const x0 = fxi < 0 ? 0 : (fxi > wm1 ? wm1 : fxi);
+              const y0 = fyi < 0 ? 0 : (fyi > hm1 ? hm1 : fyi);
+              const x1 = x0 < wm1 ? x0 + 1 : wm1;
+              const y1 = y0 < hm1 ? y0 + 1 : hm1;
+              const fx = sx - fxi < 0 ? 0 : (sx - fxi > 1 ? 1 : sx - fxi);
+              const fy = sy - fyi < 0 ? 0 : (sy - fyi > 1 ? 1 : sy - fyi);
+              const ifx = 1 - fx, ify = 1 - fy;
 
-      // ── 6. Brillo / contraste / ruido por píxel ─────────────────────────
-      const brightness = rnd(cfg.brightness[0], cfg.brightness[1]);
-      const contrast   = rnd(cfg.contrast[0],   cfg.contrast[1]);
+              const i00 = (y0 * W + x0) * 4;
+              const i10 = (y0 * W + x1) * 4;
+              const i01 = (y1 * W + x0) * 4;
+              const i11 = (y1 * W + x1) * 4;
+              const di = (y * W + x) * 4;
 
-      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const d = imgData.data;
+              dd[di]     = (sd[i00]   * ifx + sd[i10]   * fx) * ify + (sd[i01]   * ifx + sd[i11]   * fx) * fy;
+              dd[di + 1] = (sd[i00+1] * ifx + sd[i10+1] * fx) * ify + (sd[i01+1] * ifx + sd[i11+1] * fx) * fy;
+              dd[di + 2] = (sd[i00+2] * ifx + sd[i10+2] * fx) * ify + (sd[i01+2] * ifx + sd[i11+2] * fx) * fy;
+              dd[di + 3] = 255;
+            }
+          }
+          ctx.putImageData(dstP, 0, 0);
+        }
 
-      for (let i = 0; i < d.length; i += 4) {
-        const nr = rndInt(-cfg.noise, cfg.noise);
-        const ng = rndInt(-cfg.noise, cfg.noise);
-        const nb = rndInt(-cfg.noise, cfg.noise);
-        d[i]   = clamp((d[i]   - 128) * contrast + 128 + brightness + nr);
-        d[i+1] = clamp((d[i+1] - 128) * contrast + 128 + brightness + ng);
-        d[i+2] = clamp((d[i+2] - 128) * contrast + 128 + brightness + nb);
-      }
-      ctx.putImageData(imgData, 0, 0);
+        // ── 4. Ondulación sinusoidal por filas (derrota layout espacial) ──
+        // Desplaza cada fila horizontalmente una cantidad sinusoidal.
+        // Frecuencia y fase aleatorias → cada imagen tiene un "fingerprint" único.
+        // El ojo humano no lo detecta con ±1-2px.
+        if (cfg.lineWarpMax > 0) {
+          const warpAmp   = cfg.lineWarpMax;
+          const warpFreq  = rnd(0.8, 2.5);     // ciclos a lo largo del alto
+          const warpPhase = rnd(0, Math.PI * 2);
+          const src2 = ctx.getImageData(0, 0, W, H);
+          const dst2 = ctx.createImageData(W, H);
 
-      // ── 7. Exportar ──────────────────────────────────────────────────────
-      const quality = rnd(cfg.quality[0], cfg.quality[1]);
-      const dataUrl = canvas.toDataURL('image/jpeg', quality);
-      const size    = Math.round((dataUrl.split(',')[1].length * 3) / 4);
+          for (let y = 0; y < H; y++) {
+            const offset = Math.round(warpAmp * Math.sin(y / H * warpFreq * 2 * Math.PI + warpPhase));
+            for (let x = 0; x < W; x++) {
+              const srcXw = Math.min(W - 1, Math.max(0, x - offset));
+              const si = (y * W + srcXw) * 4;
+              const di = (y * W + x) * 4;
+              dst2.data[di]     = src2.data[si];
+              dst2.data[di + 1] = src2.data[si + 1];
+              dst2.data[di + 2] = src2.data[si + 2];
+              dst2.data[di + 3] = src2.data[si + 3];
+            }
+          }
+          ctx.putImageData(dst2, 0, 0);
+        }
 
-      const techniques: Techniques = {
-        crop:       `Recorte ${cropT}↑ ${cropB}↓ ${cropL}← ${cropR}→ px`,
-        rotation:   `Rotación ${rotDeg > 0 ? '+' : ''}${rotDeg.toFixed(2)}°`,
-        skew:       `Ángulo cámara: H${skewXDeg > 0 ? '+' : ''}${skewXDeg.toFixed(1)}° / V${skewYDeg > 0 ? '+' : ''}${skewYDeg.toFixed(1)}°`,
-        noise:      `Ruido pixel ±${cfg.noise} por canal RGB`,
-        brightness: `Brillo ${brightness > 0 ? '+' : ''}${brightness.toFixed(1)}`,
-        contrast:   `Contraste ×${contrast.toFixed(3)}`,
-        quality:    `JPEG ${Math.round(quality * 100)}% calidad`,
+        // ── 5. Manipulación pixel a pixel ─────────────────────────────────
+        const imageData = ctx.getImageData(0, 0, W, H);
+        const data = imageData.data;
+
+        // Parámetros globales (aleatorios por imagen)
+        const pixelNoise = cfg.pixelNoiseMax > 0 ? rndI(0, cfg.pixelNoiseMax) : 0;
+        const bright     = cfg.brightMax > 0     ? rnd(-cfg.brightMax, cfg.brightMax) : 0;
+        const gradAmt    = cfg.gradientMax > 0   ? rnd(-cfg.gradientMax, cfg.gradientMax) : 0;
+
+        // Detección de fondo: muestrea las 4 esquinas. Si tienen colores parecidos,
+        // ese es el fondo dominante. Píxeles dentro de bgTolerance se considerarán fondo.
+        let bgR = 0, bgG = 0, bgB = 0;
+        let bgActive = false;
+        if (cfg.bgShiftMax > 0 && cfg.bgTolerance > 0) {
+          const corners = [
+            (0 * W + 0) * 4,
+            (0 * W + (W - 1)) * 4,
+            ((H - 1) * W + 0) * 4,
+            ((H - 1) * W + (W - 1)) * 4,
+          ];
+          for (const ci of corners) { bgR += data[ci]; bgG += data[ci + 1]; bgB += data[ci + 2]; }
+          bgR /= 4; bgG /= 4; bgB /= 4;
+          // Solo activa si las 4 esquinas son similares (fondo uniforme detectado).
+          let maxDist = 0;
+          for (const ci of corners) {
+            const dr = data[ci] - bgR, dg = data[ci + 1] - bgG, db = data[ci + 2] - bgB;
+            const d = Math.sqrt(dr * dr + dg * dg + db * db);
+            if (d > maxDist) maxDist = d;
+          }
+          bgActive = maxDist < cfg.bgTolerance * 0.6;
+        }
+        const bgDR = bgActive ? rndI(-cfg.bgShiftMax, cfg.bgShiftMax) : 0;
+        const bgDG = bgActive ? rndI(-cfg.bgShiftMax, cfg.bgShiftMax) : 0;
+        const bgDB = bgActive ? rndI(-cfg.bgShiftMax, cfg.bgShiftMax) : 0;
+        const bgTol = cfg.bgTolerance;
+
+        // Pre-genera textura baja-frecuencia (añade keypoints fake).
+        const texSize = 32;
+        const tex = cfg.textureAmp > 0 ? new Float32Array(texSize * texSize) : null;
+        if (tex) for (let k = 0; k < tex.length; k++) tex[k] = (Math.random() - 0.5) * 2;
+        const texAmp = cfg.textureAmp;
+
+        // ── 5a. Ruido por bloques NxN independiente (multi-escala) ───────
+        // La CNN procesa parches a varias escalas (distintos stride/receptive field).
+        // Aplicamos dos pasadas con tamaños de bloque diferentes:
+        //   Pasada 1: bloques grandes (cfg.blockSize) con offset completo
+        //   Pasada 2: bloques el doble de grandes, offset a la mitad
+        // → cubre más receptive fields del modelo sin aumentar el ruido visible.
+        const applyBlockNoise = (bSize: number, bNoise: number) => {
+          if (bNoise <= 0) return;
+          const bCols = Math.ceil(W / bSize);
+          const bRows = Math.ceil(H / bSize);
+          const blockOffsets = new Int16Array(bRows * bCols);
+          for (let k = 0; k < blockOffsets.length; k++) {
+            blockOffsets[k] = rndI(-bNoise, bNoise);
+          }
+          for (let y = 0; y < H; y++) {
+            const by = Math.floor(y / bSize);
+            for (let x = 0; x < W; x++) {
+              const bOff = blockOffsets[by * bCols + Math.floor(x / bSize)];
+              if (bOff === 0) continue;
+              const i = (y * W + x) * 4;
+              data[i]   = clamp(data[i]   + bOff);
+              data[i+1] = clamp(data[i+1] + bOff);
+              data[i+2] = clamp(data[i+2] + bOff);
+            }
+          }
+        };
+
+        // Pasada 1: escala fina
+        applyBlockNoise(cfg.blockSize, cfg.blockNoiseMax);
+        // Pasada 2: escala gruesa (bloques 2× más grandes, offset 1 solo)
+        if (cfg.blockNoiseMax >= 2) {
+          applyBlockNoise(cfg.blockSize * 2, 1);
+        }
+
+        // ── 5b. BG shift + textura + ruido global + brillo + gradiente ────
+        const tsm1 = texSize - 1;
+        for (let y = 0; y < H; y++) {
+          // Pre-calcula coords de textura para esta fila
+          const ty = tex ? (y / H) * tsm1 : 0;
+          const ty0 = tex ? Math.floor(ty) : 0;
+          const ty1 = tex ? Math.min(tsm1, ty0 + 1) : 0;
+          const tfy = tex ? ty - ty0 : 0;
+
+          for (let x = 0; x < W; x++) {
+            const i = (y * W + x) * 4;
+            let r = data[i], g = data[i+1], b = data[i+2];
+
+            // BG shift: si este pixel es similar al fondo, shifta su color.
+            if (bgActive) {
+              const dr = r - bgR, dg = g - bgG, db = b - bgB;
+              const dist = Math.sqrt(dr * dr + dg * dg + db * db);
+              if (dist < bgTol) {
+                // Falloff suave: shift completo en el centro del fondo, cero en el borde.
+                const w = 1 - dist / bgTol;
+                r = clamp(r + bgDR * w);
+                g = clamp(g + bgDG * w);
+                b = clamp(b + bgDB * w);
+              }
+            }
+
+            // Textura baja-frecuencia (bilinear sampling de tex pequeño → keypoints fake)
+            if (tex) {
+              const tx = (x / W) * tsm1;
+              const tx0 = Math.floor(tx);
+              const tx1 = Math.min(tsm1, tx0 + 1);
+              const tfx = tx - tx0;
+              const v00 = tex[ty0 * texSize + tx0], v10 = tex[ty0 * texSize + tx1];
+              const v01 = tex[ty1 * texSize + tx0], v11 = tex[ty1 * texSize + tx1];
+              const top = v00 * (1 - tfx) + v10 * tfx;
+              const bot = v01 * (1 - tfx) + v11 * tfx;
+              const tv = (top * (1 - tfy) + bot * tfy) * texAmp;
+              r = clamp(r + tv); g = clamp(g + tv); b = clamp(b + tv);
+            }
+
+            // Gradiente diagonal ultra-sutil
+            if (gradAmt !== 0) {
+              const t  = (x / W + y / H) / 2;  // 0..1
+              const gv = gradAmt * (t - 0.5);   // centrado en 0
+              r = clamp(r + gv); g = clamp(g + gv); b = clamp(b + gv);
+            }
+
+            // Brillo global
+            if (bright !== 0) {
+              r = clamp(r + bright); g = clamp(g + bright); b = clamp(b + bright);
+            }
+
+            // Ruido per-pixel sub-visual
+            if (pixelNoise > 0) {
+              r = clamp(r + rndI(-pixelNoise, pixelNoise));
+              g = clamp(g + rndI(-pixelNoise, pixelNoise));
+              b = clamp(b + rndI(-pixelNoise, pixelNoise));
+            }
+
+            data[i] = r; data[i+1] = g; data[i+2] = b;
+          }
+        }
+
+        // ── 5c. Tone curves S-shape no-lineales por canal ─────────────────
+        // LUT por canal con curva: delta = sign * amp/255 * sin(π * (2x - 1)).
+        // Resultado: oscurece sombras y aclara highlights (o al revés). Toca el
+        // primer conv del patch embedder de CLIP que es sensible a estadísticas
+        // de bajo nivel del color. Más efectivo que un tint plano.
+        if (cfg.toneCurveAmp > 0) {
+          const makeLUT = (amp: number, sign: number) => {
+            const lut = new Uint8ClampedArray(256);
+            for (let i = 0; i < 256; i++) {
+              const x = i / 255;
+              const delta = sign * (amp / 255) * Math.sin(Math.PI * (2 * x - 1));
+              lut[i] = Math.round((x + delta) * 255);
+            }
+            return lut;
+          };
+          const ampR = rnd(cfg.toneCurveAmp * 0.5, cfg.toneCurveAmp);
+          const ampG = rnd(cfg.toneCurveAmp * 0.5, cfg.toneCurveAmp);
+          const ampB = rnd(cfg.toneCurveAmp * 0.5, cfg.toneCurveAmp);
+          const sR = Math.random() > 0.5 ? 1 : -1;
+          const sG = Math.random() > 0.5 ? 1 : -1;
+          const sB = Math.random() > 0.5 ? 1 : -1;
+          const lutR = makeLUT(ampR, sR);
+          const lutG = makeLUT(ampG, sG);
+          const lutB = makeLUT(ampB, sB);
+          for (let i = 0; i < data.length; i += 4) {
+            data[i]     = lutR[data[i]];
+            data[i + 1] = lutG[data[i + 1]];
+            data[i + 2] = lutB[data[i + 2]];
+          }
+        }
+
+        ctx.putImageData(imageData, 0, 0);
+
+        // ── 5d. Distractor semántico (overlay visible) ────────────────────
+        // Añade un objeto reconocible (emoji) en una esquina. CLIP es muy
+        // sensible al contenido semántico — un concepto nuevo desplaza el
+        // embedding ~0.05-0.10 cosine, que es justo lo que necesitamos.
+        if (cfg.distractorChance > 0 && Math.random() < cfg.distractorChance) {
+          const DISTRACTORS = ['🛍️', '🏷️', '✨', '⭐', '🎁', '👋', '❤️', '🌟', '📦', '🎀'];
+          const emoji = DISTRACTORS[Math.floor(Math.random() * DISTRACTORS.length)];
+          const dSize = Math.floor(Math.min(W, H) * (0.13 + Math.random() * 0.06));
+          const margin = dSize * 0.5;
+          const cornerIdx = Math.floor(Math.random() * 4);
+          const cxs = [margin + dSize/2, W - margin - dSize/2];
+          const cys = [margin + dSize/2, H - margin - dSize/2];
+          const cx = cxs[cornerIdx % 2];
+          const cy = cys[Math.floor(cornerIdx / 2)];
+          ctx.save();
+          ctx.globalAlpha = 0.78 + Math.random() * 0.18;
+          ctx.font = `${dSize}px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji","Twemoji Mozilla",sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          // Pequeña rotación aleatoria para que parezca natural.
+          ctx.translate(cx, cy);
+          ctx.rotate((Math.random() - 0.5) * 0.4);
+          ctx.fillText(emoji, 0, 0);
+          ctx.restore();
+        }
+
+        // ── 6. JPEG con calidad variable ──────────────────────────────────
+        // Cuantización diferente → artefactos de compresión únicos.
+        const quality = rnd(cfg.qualityMin, cfg.qualityMax);
+        let dataUrl = canvas.toDataURL('image/jpeg', quality);
+
+        // ── 7. EXIF aleatorio realista (si está activo) ──────────────────
+        // Inyecta metadata creíble (cámara, fecha, ISO, focal…) para que la
+        // foto parezca tomada con móvil. La librería se carga lazy via CDN.
+        if (cfg.randomExif) {
+          try {
+            const { injectRandomExif } = await import('../lib/randomExif');
+            dataUrl = await injectRandomExif(dataUrl);
+          } catch (e) {
+            console.warn('[uniquify] EXIF injection skipped:', e);
+          }
+        }
+
+        const size = Math.round((dataUrl.split(',')[1].length * 3) / 4);
+
+        resolve({
+          dataUrl,
+          noiseLevel: Math.max(pixelNoise, cfg.blockNoiseMax),
+          dimChange: `${IW}×${IH} → ${W}×${H}`,
+          size,
+        });
       };
-
-      resolve({ dataUrl, size, techniques });
+      img.onerror = reject;
+      img.src = e.target!.result as string;
     };
-
-    img.onerror = reject;
-    img.src = URL.createObjectURL(file);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
   });
 }
 
-// ─── Utilidades ──────────────────────────────────────────────────────────────
+// ─── Wrapper adversarial con CLIP (modo NUCLEAR) ───────────────────────────
+// Genera hasta MAX_TRIES variantes y se queda con la que más lejos esté del
+// embedding original. Si alcanza TARGET_DIST antes, sale temprano.
+// El embedding original se calcula UNA sola vez por imagen (cache externo).
+
+const ADV_MAX_TRIES = 5;
+const ADV_TARGET_DIST = 0.14;
+
+async function uniquifyImageAdversarial(
+  file: File,
+  cfg: ModeConfig,
+  origEmbed: Float32Array,
+  onAttempt?: (i: number, dist: number) => void
+): Promise<{ dataUrl: string; noiseLevel: number; dimChange: string; size: number; cosineDist: number }> {
+  const { embedDataUrl, cosineDistance } = await import('../lib/clipAdversarial');
+  let best: { result: Awaited<ReturnType<typeof uniquifyImage>>; dist: number } | null = null;
+  for (let i = 0; i < ADV_MAX_TRIES; i++) {
+    const result = await uniquifyImage(file, cfg);
+    let dist = 0;
+    try {
+      const emb = await embedDataUrl(result.dataUrl);
+      dist = cosineDistance(origEmbed, emb);
+    } catch (e) {
+      console.warn('[adversarial] embedding falló, intento sin score', e);
+    }
+    onAttempt?.(i + 1, dist);
+    if (!best || dist > best.dist) best = { result, dist };
+    if (dist >= ADV_TARGET_DIST) break;
+  }
+  return { ...best!.result, cosineDist: best!.dist };
+}
+
+// ─── Helpers UI ───────────────────────────────────────────────────────────────
 
 function formatSize(b: number) {
   if (b < 1024) return `${b} B`;
@@ -189,352 +649,433 @@ function formatSize(b: number) {
 }
 
 function dl(dataUrl: string, name: string) {
-  const a = document.createElement('a');
-  a.href = dataUrl; a.download = name; a.click();
+  const a = document.createElement('a'); a.href = dataUrl; a.download = name; a.click();
 }
 
-// ─── Componente ──────────────────────────────────────────────────────────────
+async function dataUrlToFile(dataUrl: string, name: string): Promise<File> {
+  const res  = await fetch(dataUrl);
+  const blob = await res.blob();
+  return new File([blob], name, { type: 'image/jpeg' });
+}
+
+function canShareFiles(): boolean {
+  try {
+    return (
+      typeof navigator.share === 'function' &&
+      typeof navigator.canShare === 'function' &&
+      navigator.canShare({ files: [new File([''], 'test.jpg', { type: 'image/jpeg' })] })
+    );
+  } catch {
+    return false;
+  }
+}
+
+const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+async function saveOne(dataUrl: string, filename: string): Promise<void> {
+  if (canShareFiles()) {
+    const file = await dataUrlToFile(dataUrl, filename);
+    await navigator.share({ files: [file], title: filename });
+  } else {
+    dl(dataUrl, filename);
+  }
+}
+
+async function saveAll(
+  items: { dataUrl: string; filename: string }[],
+  onProgress?: (n: number) => void
+): Promise<void> {
+  if (canShareFiles()) {
+    try {
+      const files = await Promise.all(items.map(i => dataUrlToFile(i.dataUrl, i.filename)));
+      if (navigator.canShare({ files })) {
+        await navigator.share({ files, title: `${files.length} fotos únicas` });
+        onProgress?.(files.length);
+        return;
+      }
+    } catch { /* continuar con fallback */ }
+    for (let i = 0; i < items.length; i++) {
+      try {
+        const file = await dataUrlToFile(items[i].dataUrl, items[i].filename);
+        await navigator.share({ files: [file], title: items[i].filename });
+        onProgress?.(i + 1);
+      } catch { /* usuario canceló */ }
+    }
+  } else {
+    items.forEach((item, idx) => {
+      setTimeout(() => {
+        dl(item.dataUrl, item.filename);
+        onProgress?.(idx + 1);
+      }, idx * 120);
+    });
+  }
+}
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface ProcessedImage {
+  id: string; originalName: string; originalUrl: string;
+  processedUrl: string | null; originalSize: number; processedSize: number;
+  status: 'processing' | 'done' | 'error'; noiseLevel: number; dimChange: string; mode: Mode;
+  cosineDist?: number; advAttempts?: number;
+}
+
+// ─── Componente ───────────────────────────────────────────────────────────────
 
 export default function ImageUniquifier() {
-  const [intensity, setIntensity]   = useState<Intensity>('normal');
+  const [activeMode, setActiveMode] = useState<Mode>('normal');
   const [images, setImages]         = useState<ProcessedImage[]>([]);
   const [dragging, setDragging]     = useState(false);
-  const [processing, setProcessing] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
+  const [savingAll, setSavingAll]   = useState(false);
+  const [savedCount, setSavedCount] = useState(0);
+  const [nuclearMode, setNuclearMode]   = useState(false);
+  const [clipLoading, setClipLoading]   = useState(false);
+  const [clipReady, setClipReady]       = useState(false);
+  const [clipError, setClipError]       = useState<string | null>(null);
+  const [clipProgress, setClipProgress] = useState(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const processFiles = useCallback(async (files: File[]) => {
-    const valid = files.filter(f => f.type.startsWith('image/'));
-    if (!valid.length) return;
-    setProcessing(true);
+  const cfg        = MODES.find(m => m.id === activeMode)!;
+  const techniques = TECHNIQUES[activeMode];
 
-    const entries: ProcessedImage[] = valid.map(f => ({
+  const ensureCLIP = useCallback(async () => {
+    if (clipReady) return true;
+    setClipError(null);
+    setClipLoading(true);
+    setClipProgress(0);
+    try {
+      const { loadCLIP } = await import('../lib/clipAdversarial');
+      await loadCLIP((pct) => setClipProgress(pct));
+      setClipReady(true);
+      setClipLoading(false);
+      return true;
+    } catch (e: any) {
+      setClipError(e?.message || 'No se pudo cargar CLIP');
+      setClipLoading(false);
+      setNuclearMode(false);
+      return false;
+    }
+  }, [clipReady]);
+
+  const handleToggleNuclear = useCallback(async () => {
+    if (nuclearMode) { setNuclearMode(false); return; }
+    setNuclearMode(true);
+    if (!clipReady) await ensureCLIP();
+  }, [nuclearMode, clipReady, ensureCLIP]);
+
+  const processFiles = useCallback(async (files: FileList | File[], mode: Mode) => {
+    const mc  = MODES.find(m => m.id === mode)!;
+    const arr = Array.from(files).filter(f => f.type.startsWith('image/'));
+    if (!arr.length) return;
+    const useNuclear = nuclearMode && clipReady;
+    const entries: ProcessedImage[] = arr.map(f => ({
       id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      file: f,
-      originalUrl:   URL.createObjectURL(f),
-      processedUrl:  null,
-      originalSize:  f.size,
-      processedSize: 0,
-      status:        'processing',
-      techniques:    null,
-      showOriginal:  false,
+      originalName: f.name, originalUrl: URL.createObjectURL(f),
+      processedUrl: null, originalSize: f.size, processedSize: 0,
+      status: 'processing', noiseLevel: 0, dimChange: '', mode,
     }));
-
     setImages(prev => [...entries, ...prev]);
 
-    for (const entry of entries) {
+    // Pre-import CLIP helpers si vamos a usarlos
+    const clipHelpers = useNuclear ? await import('../lib/clipAdversarial') : null;
+
+    for (let i = 0; i < arr.length; i++) {
+      const entry = entries[i];
       try {
-        const { dataUrl, size, techniques } = await uniquifyImage(entry.file, intensity);
-        setImages(prev => prev.map(img =>
-          img.id === entry.id
-            ? { ...img, processedUrl: dataUrl, processedSize: size, status: 'done', techniques }
-            : img,
-        ));
-      } catch {
-        setImages(prev => prev.map(img =>
-          img.id === entry.id ? { ...img, status: 'error' } : img,
-        ));
+        if (useNuclear && clipHelpers) {
+          // Original embedding (una vez)
+          const origDataUrl = await new Promise<string>((resolve, reject) => {
+            const r = new FileReader();
+            r.onload = () => resolve(r.result as string);
+            r.onerror = reject;
+            r.readAsDataURL(arr[i]);
+          });
+          const origEmb = await clipHelpers.embedDataUrl(origDataUrl);
+          let attempts = 0;
+          const res = await uniquifyImageAdversarial(arr[i], mc, origEmb, (n) => { attempts = n; });
+          setImages(prev => prev.map(img =>
+            img.id === entry.id
+              ? { ...img, processedUrl: res.dataUrl, processedSize: res.size, status: 'done', noiseLevel: res.noiseLevel, dimChange: res.dimChange, cosineDist: res.cosineDist, advAttempts: attempts }
+              : img
+          ));
+        } else {
+          const res = await uniquifyImage(arr[i], mc);
+          setImages(prev => prev.map(img =>
+            img.id === entry.id
+              ? { ...img, processedUrl: res.dataUrl, processedSize: res.size, status: 'done', noiseLevel: res.noiseLevel, dimChange: res.dimChange }
+              : img
+          ));
+        }
+      } catch (e) {
+        console.error('[uniquify] error', e);
+        setImages(prev => prev.map(img => img.id === entry.id ? { ...img, status: 'error' } : img));
       }
     }
-    setProcessing(false);
-  }, [intensity]);
+  }, [nuclearMode, clipReady]);
 
-  const onDrop = (e: React.DragEvent) => {
-    e.preventDefault(); setDragging(false);
-    processFiles(Array.from(e.dataTransfer.files));
-  };
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault(); setDragging(false); processFiles(e.dataTransfer.files, activeMode);
+  }, [processFiles, activeMode]);
 
-  const onInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) processFiles(Array.from(e.target.files));
+  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) processFiles(e.target.files, activeMode);
     e.target.value = '';
   };
 
-  const regenerate = async (id: string) => {
-    const img = images.find(i => i.id === id);
-    if (!img) return;
-    setImages(prev => prev.map(i =>
-      i.id === id ? { ...i, status: 'processing', processedUrl: null } : i,
-    ));
+  const reprocess = async (id: string) => {
+    const entry = images.find(img => img.id === id); if (!entry) return;
+    const mc = MODES.find(m => m.id === entry.mode)!;
+    setImages(prev => prev.map(img => img.id === id ? { ...img, status: 'processing', processedUrl: null } : img));
     try {
-      const { dataUrl, size, techniques } = await uniquifyImage(img.file, intensity);
-      setImages(prev => prev.map(i =>
-        i.id === id ? { ...i, processedUrl: dataUrl, processedSize: size, status: 'done', techniques } : i,
+      const blob = await fetch(entry.originalUrl).then(r => r.blob());
+      const file = new File([blob], entry.originalName, { type: 'image/jpeg' });
+      const res  = await uniquifyImage(file, mc);
+      setImages(prev => prev.map(img =>
+        img.id === id
+          ? { ...img, processedUrl: res.dataUrl, processedSize: res.size, status: 'done', noiseLevel: res.noiseLevel, dimChange: res.dimChange }
+          : img
       ));
     } catch {
-      setImages(prev => prev.map(i =>
-        i.id === id ? { ...i, status: 'error' } : i,
-      ));
+      setImages(prev => prev.map(img => img.id === id ? { ...img, status: 'error' } : img));
     }
   };
 
-  const togglePreview = (id: string) =>
-    setImages(prev => prev.map(i => i.id === id ? { ...i, showOriginal: !i.showOriginal } : i));
-
-  const remove = (id: string) => setImages(prev => prev.filter(i => i.id !== id));
-
-  const downloadAll = () => {
-    images
-      .filter(i => i.status === 'done' && i.processedUrl)
-      .forEach((img, idx) => {
-        const name = img.file.name.replace(/\.[^.]+$/, `_unique_${idx + 1}.jpg`);
-        setTimeout(() => dl(img.processedUrl!, name), idx * 150);
-      });
+  const handleSaveAll = async () => {
+    const done = images.filter(i => i.status === 'done' && i.processedUrl);
+    if (!done.length) return;
+    setSavingAll(true); setSavedCount(0);
+    const items = done.map((img, idx) => ({
+      dataUrl: img.processedUrl!,
+      filename: `${img.originalName.replace(/\.[^.]+$/, '')}_unique_${idx + 1}.jpg`,
+    }));
+    try { await saveAll(items, (n) => setSavedCount(n)); }
+    finally { setSavingAll(false); }
   };
 
+  const handleSaveOne = (dataUrl: string, originalName: string) => {
+    saveOne(dataUrl, originalName.replace(/\.[^.]+$/, '_unique.jpg'));
+  };
+
+  const remove    = (id: string) => setImages(prev => prev.filter(i => i.id !== id));
+  const clearAll  = () => setImages([]);
   const doneCount = images.filter(i => i.status === 'done').length;
-  const cfg = INTENSITY_CONFIG[intensity];
+
+  const saveLabel    = IS_MOBILE ? 'Guardar' : 'Descargar';
+  const saveAllLabel = IS_MOBILE ? 'Guardar en galería' : 'Descargar todas';
 
   return (
     <div className="space-y-6">
 
-      {/* ── Selector de intensidad ─────────────────────────────────────────── */}
-      <div className="space-y-3">
-        <p className="text-xs uppercase tracking-widest text-white/30 font-bold">Nivel de evasión</p>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          {(Object.keys(INTENSITY_CONFIG) as Intensity[]).map(lvl => {
-            const c      = INTENSITY_CONFIG[lvl];
-            const active = intensity === lvl;
-            return (
-              <button
-                key={lvl}
-                onClick={() => setIntensity(lvl)}
-                className={`relative flex flex-col items-center gap-1 px-3 py-4 rounded-2xl border text-center transition-all ${
-                  active
-                    ? `${c.bg} border-opacity-100`
-                    : 'bg-white/[0.02] border-white/5 hover:bg-white/5'
-                }`}
-              >
-                <span className={`text-sm font-black uppercase tracking-wider ${active ? c.color : 'text-white/40'}`}>
-                  {c.label}
-                </span>
-                <span className="text-[10px] text-white/30 leading-tight">{c.desc}</span>
-                {active && (
-                  <div className={`absolute top-2 right-2 w-1.5 h-1.5 rounded-full ${c.color.replace('text-', 'bg-')}`} />
-                )}
-              </button>
-            );
-          })}
-        </div>
+      {/* Modos 2×2 */}
+      <div className="grid grid-cols-2 gap-3">
+        {MODES.map(m => {
+          const active    = activeMode === m.id;
+          const isExtremo = m.id === 'extremo';
+          return (
+            <button key={m.id} onClick={() => setActiveMode(m.id)}
+              className={`p-5 rounded-2xl border-2 text-left transition-all ${
+                active && isExtremo ? 'border-red-700 bg-red-950/60'
+                : active            ? 'border-white/30 bg-white/10'
+                : 'border-white/[0.08] bg-white/[0.03] hover:border-white/15'
+              }`}>
+              <p className={`text-sm font-black uppercase tracking-widest mb-1 ${
+                active && isExtremo ? 'text-red-400' : active ? 'text-white' : 'text-white/40'
+              }`}>{m.label}</p>
+              <p className={`text-[11px] leading-snug ${active ? 'text-white/60' : 'text-white/25'}`}>{m.desc}</p>
+            </button>
+          );
+        })}
       </div>
 
-      {/* ── Panel de técnicas ─────────────────────────────────────────────── */}
-      <div className="bg-white/[0.02] border border-white/5 rounded-2xl p-4 space-y-2">
-        <p className="text-xs font-bold text-white/50 uppercase tracking-widest mb-3">
-          7 técnicas aplicadas — nivel {cfg.label}
+      {/* Modo NUCLEAR: CLIP adversarial verifier */}
+      <div className={`rounded-2xl border-2 p-4 transition-all ${
+        nuclearMode ? 'border-fuchsia-700 bg-fuchsia-950/40' : 'border-white/[0.08] bg-white/[0.02]'
+      }`}>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-3">
+            <Zap className={`w-5 h-5 ${nuclearMode ? 'text-fuchsia-400' : 'text-white/30'}`} />
+            <div>
+              <p className={`text-sm font-black uppercase tracking-widest ${nuclearMode ? 'text-fuchsia-400' : 'text-white/50'}`}>
+                Modo NUCLEAR · CLIP adversarial
+              </p>
+              <p className="text-[11px] text-white/40 leading-snug">
+                Genera hasta {ADV_MAX_TRIES} variantes y se queda con la que más lejos esté del original en el espacio de embeddings CLIP. <span className="text-white/30">Mismo modelo que usa Vinted.</span>
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={handleToggleNuclear}
+            disabled={clipLoading}
+            className={`px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider border-2 transition ${
+              nuclearMode
+                ? 'bg-fuchsia-500 border-fuchsia-400 text-black hover:bg-fuchsia-400'
+                : 'bg-white/5 border-white/10 text-white/50 hover:text-white hover:border-white/30'
+            } disabled:opacity-50`}
+          >
+            {clipLoading ? `Cargando ${Math.round(clipProgress)}%` : nuclearMode ? (clipReady ? 'ON' : 'Cargando…') : 'Activar'}
+          </button>
+        </div>
+        {clipLoading && (
+          <div className="mt-3 h-1.5 rounded-full bg-white/5 overflow-hidden">
+            <div className="h-full bg-fuchsia-500 transition-all" style={{ width: `${clipProgress}%` }} />
+          </div>
+        )}
+        {clipError && (
+          <p className="mt-2 text-[11px] text-red-400">⚠ {clipError}</p>
+        )}
+        {nuclearMode && clipReady && (
+          <p className="mt-2 text-[11px] text-fuchsia-300/80">
+            ✓ CLIP cargado. Cada imagen tardará ~3-6s. Objetivo: cosine ≥ {ADV_TARGET_DIST.toFixed(2)}.
+          </p>
+        )}
+      </div>
+
+      {/* Técnicas */}
+      <div className="bg-[#111] border border-white/[0.08] rounded-2xl p-5 space-y-3">
+        <p className="text-xs font-black uppercase tracking-widest text-white/50">
+          {techniques.length} técnicas aplicadas — nivel {cfg.label}
         </p>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-white/40">
-          <div className="flex items-start gap-2">
-            <span className={`font-bold shrink-0 ${cfg.color}`}>✓</span>
-            <span>
-              <strong className="text-white/60">Recorte + resize</strong>
-              {' '}— {cfg.crop[0]}–{cfg.crop[1]}px por borde y reescala. Rompe pHash completamente.
-            </span>
-          </div>
-          <div className="flex items-start gap-2">
-            <span className={`font-bold shrink-0 ${cfg.color}`}>✓</span>
-            <span>
-              <strong className="text-white/60">Micro-rotación</strong>
-              {' '}— ±{cfg.rotation}° con compensación de escala. Sin bordes negros.
-            </span>
-          </div>
-          <div className="flex items-start gap-2">
-            <span className={`font-bold shrink-0 ${cfg.color}`}>✓</span>
-            <span>
-              <strong className="text-white/60 flex items-center gap-1">
-                <Camera className="w-3 h-3 inline" /> Ángulo de cámara
-              </strong>
-              {' '}— skew ±{cfg.skew}° H / ±{(cfg.skew / 2).toFixed(1)}° V. Simula foto desde posición diferente. Derrota CNN/IA.
-            </span>
-          </div>
-          <div className="flex items-start gap-2">
-            <span className={`font-bold shrink-0 ${cfg.color}`}>✓</span>
-            <span>
-              <strong className="text-white/60">Ruido por píxel</strong>
-              {' '}— ±{cfg.noise} por canal RGB. Cambia MD5/SHA al 100%.
-            </span>
-          </div>
-          <div className="flex items-start gap-2">
-            <span className={`font-bold shrink-0 ${cfg.color}`}>✓</span>
-            <span>
-              <strong className="text-white/60">Brillo + contraste</strong>
-              {' '}— variación aleatoria. Cambia histograma de color.
-            </span>
-          </div>
-          <div className="flex items-start gap-2">
-            <span className={`font-bold shrink-0 ${cfg.color}`}>✓</span>
-            <span>
-              <strong className="text-white/60">JPEG variable</strong>
-              {' '}— calidad {Math.round(cfg.quality[0] * 100)}–{Math.round(cfg.quality[1] * 100)}%. Cambia artefactos de compresión.
-            </span>
-          </div>
-          <div className="flex items-start gap-2">
-            <span className={`font-bold shrink-0 ${cfg.color}`}>✓</span>
-            <span>
-              <strong className="text-white/60">Sin EXIF</strong>
-              {' '}— GPS, fecha, cámara, software. Todo eliminado por Canvas API.
-            </span>
-          </div>
+        <div className="space-y-2.5">
+          {techniques.map((t, i) => (
+            <div key={i} className="flex gap-3">
+              <span className={`text-sm shrink-0 mt-0.5 ${activeMode === 'extremo' ? 'text-red-400' : 'text-acid'}`}>{t.icon}</span>
+              <p className="text-[12px] text-white/70 leading-snug">
+                <span className="font-bold text-white/90">{t.title}</span>
+                {t.detail ? ` — ${t.detail}` : ''}
+              </p>
+            </div>
+          ))}
         </div>
       </div>
 
-      {/* ── Zona de subida ────────────────────────────────────────────────── */}
+      {/* Drop Zone */}
       <div
         onDragOver={e => { e.preventDefault(); setDragging(true); }}
         onDragLeave={() => setDragging(false)}
-        onDrop={onDrop}
-        onClick={() => fileRef.current?.click()}
-        className={`border-2 border-dashed rounded-3xl p-10 text-center cursor-pointer transition-all ${
-          dragging
-            ? 'border-emerald-500 bg-emerald-500/5 scale-[1.01]'
-            : 'border-white/10 hover:border-white/20 hover:bg-white/[0.02]'
+        onDrop={handleDrop}
+        onClick={() => fileInputRef.current?.click()}
+        className={`relative border-2 border-dashed rounded-3xl p-10 text-center cursor-pointer transition-all ${
+          dragging ? 'border-acid bg-acid-soft scale-[1.01]' : 'border-white/10 hover:border-white/20 hover:bg-white/[0.02]'
         }`}
       >
-        <input ref={fileRef} type="file" accept="image/*" multiple className="hidden" onChange={onInput} />
-        <Upload className={`w-8 h-8 mx-auto mb-3 ${dragging ? 'text-emerald-400' : 'text-white/20'}`} />
-        <p className="text-white font-semibold">Arrastra tus fotos aquí</p>
-        <p className="text-white/30 text-sm mt-1">Múltiples imágenes · JPG, PNG, WEBP</p>
-        <p className="text-white/20 text-xs mt-3">
-          Todo el proceso ocurre en tu navegador — las imágenes nunca se suben a ningún servidor
-        </p>
+        <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" onChange={handleFileInput} />
+        <div className="flex flex-col items-center gap-3">
+          <div className={`w-16 h-16 rounded-2xl flex items-center justify-center border transition-all ${dragging ? 'bg-acid-soft border-acid' : 'bg-white/5 border-white/10'}`}>
+            <Upload className={`w-7 h-7 ${dragging ? 'text-acid' : 'text-white/40'}`} />
+          </div>
+          <div>
+            <p className="text-white font-semibold">Arrastra las fotos del producto aquí</p>
+            <p className="text-white/40 text-sm mt-1">Cada foto procesada es 100% única · Colores sin cambios</p>
+          </div>
+        </div>
       </div>
 
-      {/* ── Barra de acciones ─────────────────────────────────────────────── */}
+      {/* Barra acciones */}
       {images.length > 0 && (
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <div className="flex items-center gap-3">
-            <div className={`w-2 h-2 rounded-full ${processing ? 'bg-amber-400 animate-pulse' : 'bg-emerald-500'}`} />
-            <span className="text-sm text-white/50">
-              {processing
-                ? 'Procesando...'
-                : <><span className="text-white font-bold">{doneCount}</span>/{images.length} procesadas</>
-              }
-            </span>
-          </div>
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <p className="text-sm text-white/50">
+            <span className="text-white font-bold">{doneCount}</span>/{images.length} procesadas
+            {savingAll && savedCount > 0 && (
+              <span className="ml-2 text-acid font-bold">· Guardadas {savedCount}</span>
+            )}
+          </p>
           <div className="flex gap-2">
             {doneCount > 0 && (
               <button
-                onClick={downloadAll}
-                className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-black font-bold px-4 py-2 rounded-xl text-sm transition"
+                onClick={handleSaveAll}
+                disabled={savingAll}
+                className="flex items-center gap-2 bg-acid hover:bg-acid disabled:opacity-60 text-black font-bold px-4 py-2 rounded-xl text-sm transition"
               >
-                <Package className="w-4 h-4" />
-                Descargar todas ({doneCount})
+                {savingAll
+                  ? <><RefreshCcw className="w-4 h-4 animate-spin" />{savedCount}/{doneCount}</>
+                  : <><Images className="w-4 h-4" />{saveAllLabel} ({doneCount})</>
+                }
               </button>
             )}
-            <button
-              onClick={() => setImages([])}
-              className="flex items-center gap-2 bg-white/5 hover:bg-red-500/10 text-white/40 hover:text-red-400 border border-white/10 hover:border-red-500/20 px-4 py-2 rounded-xl text-sm transition"
-            >
-              <Trash2 className="w-4 h-4" />
-              Limpiar
+            <button onClick={clearAll} className="flex items-center gap-2 bg-white/5 hover:bg-red-500/10 text-white/40 hover:text-red-400 border border-white/10 px-4 py-2 rounded-xl text-sm transition">
+              <Trash2 className="w-4 h-4" />Limpiar
             </button>
           </div>
         </div>
       )}
 
-      {/* ── Grid de imágenes ──────────────────────────────────────────────── */}
+      {/* Grid imágenes */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         <AnimatePresence>
-          {images.map(img => (
-            <motion.div
-              key={img.id}
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9 }}
-              className="bg-[#141414] border border-white/5 rounded-2xl overflow-hidden"
-            >
-              {/* Preview */}
-              <div className="relative aspect-square bg-black/60 flex items-center justify-center overflow-hidden">
-                {img.status === 'processing' && (
-                  <div className="flex flex-col items-center gap-2 text-white/30">
-                    <RefreshCcw className="w-8 h-8 animate-spin text-emerald-400" />
-                    <span className="text-xs">Procesando…</span>
-                  </div>
-                )}
-                {img.status === 'error' && (
-                  <div className="flex flex-col items-center gap-2 text-red-400/60">
-                    <ZapOff className="w-8 h-8" />
-                    <span className="text-xs">Error al procesar</span>
-                  </div>
-                )}
-                {img.status === 'done' && (
-                  <>
-                    <img
-                      src={img.showOriginal ? img.originalUrl : img.processedUrl!}
-                      alt={img.file.name}
-                      className="w-full h-full object-cover"
-                    />
-                    <div className={`absolute top-2 left-2 text-[10px] font-black uppercase px-2 py-0.5 rounded-full ${
-                      img.showOriginal ? 'bg-white/20 text-white' : 'bg-emerald-500 text-black'
-                    }`}>
-                      {img.showOriginal ? 'Original' : 'Único ✓'}
+          {images.map(img => {
+            const mc = MODES.find(m => m.id === img.mode)!;
+            return (
+              <motion.div key={img.id}
+                initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9 }}
+                className="bg-[#141414] border border-white/5 rounded-2xl overflow-hidden">
+                <div className="relative aspect-square bg-black/40 flex items-center justify-center overflow-hidden">
+                  {img.processedUrl
+                    ? <img src={img.processedUrl} alt={img.originalName} className="w-full h-full object-cover" />
+                    : img.status === 'processing'
+                    ? <div className="flex flex-col items-center gap-3"><RefreshCcw className="w-8 h-8 animate-spin text-acid" /><span className="text-xs text-white/30">Procesando…</span></div>
+                    : img.status === 'error'
+                    ? <div className="flex flex-col items-center gap-2 text-red-400/60"><ZapOff className="w-8 h-8" /><span className="text-xs">Error</span></div>
+                    : <ImageIcon className="w-12 h-12 text-white/10" />
+                  }
+                  {img.status === 'done' && (
+                    <div className="absolute top-2 right-2 bg-acid rounded-full p-1">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-black" />
                     </div>
-                  </>
-                )}
-              </div>
-
-              {/* Info */}
-              <div className="p-4 space-y-3">
-                <p className="text-xs text-white/60 truncate font-medium">{img.file.name}</p>
-
-                {img.status === 'done' && img.techniques && (
-                  <div className="space-y-1">
-                    {Object.values(img.techniques).map((t, i) => (
-                      <div key={i} className="flex items-center gap-1.5 text-[10px] text-white/30">
-                        <span className={`w-1 h-1 rounded-full shrink-0 ${cfg.color.replace('text-', 'bg-')}`} />
-                        {t}
-                      </div>
-                    ))}
-                    <div className="flex justify-between text-[10px] pt-1 border-t border-white/5 mt-2">
-                      <span className="text-white/20">Original: {formatSize(img.originalSize)}</span>
-                      <span className="text-white/20">Único: {formatSize(img.processedSize)}</span>
-                    </div>
+                  )}
+                  <div className={`absolute top-2 left-2 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${
+                    img.mode === 'extremo' ? 'bg-red-950 text-red-400 border border-red-800' : 'bg-white/10 text-white/60 border border-white/10'
+                  }`}>
+                    {mc.label}
                   </div>
-                )}
-
-                {/* Botones */}
-                <div className="flex gap-2">
-                  {img.status === 'done' && img.processedUrl && (
-                    <>
-                      <button
-                        onClick={() => dl(img.processedUrl!, img.file.name.replace(/\.[^.]+$/, '_unique.jpg'))}
-                        className="flex-1 flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-black font-bold py-2 rounded-xl text-xs transition"
-                      >
-                        <Download className="w-3.5 h-3.5" />
-                        Descargar
-                      </button>
-                      <button
-                        onClick={() => togglePreview(img.id)}
-                        title={img.showOriginal ? 'Ver versión única' : 'Ver original'}
-                        className="p-2 bg-white/5 hover:bg-white/10 text-white/40 hover:text-white rounded-xl border border-white/5 transition"
-                      >
-                        {img.showOriginal ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-                      </button>
-                    </>
-                  )}
-                  {(img.status === 'done' || img.status === 'error') && (
-                    <button
-                      onClick={() => regenerate(img.id)}
-                      title="Regenerar con nuevos valores aleatorios"
-                      className="p-2 bg-white/5 hover:bg-white/10 text-white/40 hover:text-emerald-400 rounded-xl border border-white/5 transition"
-                    >
-                      <Shuffle className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                  <button
-                    onClick={() => remove(img.id)}
-                    className="p-2 bg-white/5 hover:bg-red-500/10 text-white/20 hover:text-red-400 rounded-xl border border-white/5 transition"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
                 </div>
-              </div>
-            </motion.div>
-          ))}
+                <div className="p-4 space-y-3">
+                  <p className="text-xs text-white/70 truncate font-medium">{img.originalName}</p>
+                  {img.status === 'done' && (
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-[10px] text-white/30"><span>Original</span><span className="font-mono">{formatSize(img.originalSize)}</span></div>
+                      <div className="flex justify-between text-[10px] text-acid"><span>Procesada</span><span className="font-mono">{formatSize(img.processedSize)}</span></div>
+                      <div className="text-[10px] text-white/20 font-mono mt-1">{img.dimChange}</div>
+                      <div className="text-[10px] text-white/20 font-mono">Bloques ±{img.noiseLevel} · Sin EXIF</div>
+                      {typeof img.cosineDist === 'number' && (
+                        <div className={`flex justify-between text-[10px] font-mono mt-1 ${
+                          img.cosineDist >= ADV_TARGET_DIST ? 'text-fuchsia-400' : 'text-amber-400/80'
+                        }`}>
+                          <span>CLIP cosine {img.cosineDist >= ADV_TARGET_DIST ? '✓' : '⚠'}</span>
+                          <span>{img.cosineDist.toFixed(3)}{img.advAttempts ? ` · ${img.advAttempts} try` : ''}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <div className="flex gap-2">
+                    {img.status === 'done' && img.processedUrl && (
+                      <button
+                        onClick={() => handleSaveOne(img.processedUrl!, img.originalName)}
+                        className="flex-1 flex items-center justify-center gap-1.5 bg-acid hover:bg-acid text-black font-bold py-2 rounded-xl text-xs transition"
+                      >
+                        <Download className="w-3.5 h-3.5" />{saveLabel}
+                      </button>
+                    )}
+                    {(img.status === 'done' || img.status === 'error') && (
+                      <button onClick={() => reprocess(img.id)} title="Regenerar versión diferente"
+                        className="p-2 bg-white/5 hover:bg-white/10 text-white/40 hover:text-acid rounded-xl border border-white/5 transition">
+                        <Shuffle className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                    <button onClick={() => remove(img.id)}
+                      className="p-2 bg-white/5 hover:bg-red-500/10 text-white/20 hover:text-red-400 rounded-xl border border-white/5 transition">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            );
+          })}
         </AnimatePresence>
       </div>
 
       {images.length === 0 && (
-        <p className="text-center text-white/15 text-sm py-4">
-          Sube las mismas fotos una y otra vez — cada vez saldrán completamente diferentes para cualquier sistema de detección
+        <p className="text-center py-4 text-white/20 text-sm">
+          Sube las fotos del producto y procésalas para cada cuenta de Vinted
         </p>
       )}
     </div>

@@ -291,7 +291,7 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
             onClick={() => setActiveBrand(key)}
             className={`flex-1 py-3 rounded-2xl border-2 transition-all font-bold tracking-wider text-xs flex items-center justify-center ${
               activeBrand === key
-                ? 'bg-emerald-500 border-emerald-400 text-black shadow-[0_0_20px_rgba(16,185,129,0.3)]'
+                ? 'bg-acid border-acid text-black shadow-acid'
                 : 'bg-white/5 border-white/10 text-white/40 hover:bg-white/10 hover:border-white/20'
             }`}
           >
@@ -305,7 +305,7 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
         <div className="space-y-6">
           <div
             className={`h-[240px] lg:h-[300px] border-2 border-dashed rounded-3xl flex flex-col items-center justify-center transition-all overflow-hidden relative ${
-              originalImage ? 'border-emerald-500/50 bg-black' : 'border-white/10 bg-white/5'
+              originalImage ? 'border-acid bg-black' : 'border-white/10 bg-white/5'
             }`}
           >
             {originalImage ? (
@@ -318,7 +318,7 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
                   <button
                     type="button"
                     onClick={() => cameraInputRef.current?.click()}
-                    className="flex items-center gap-2 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-400 px-4 py-2.5 rounded-xl text-sm font-medium transition"
+                    className="flex items-center gap-2 bg-acid-soft hover:bg-acid/30 border border-acid text-acid px-4 py-2.5 rounded-xl text-sm font-medium transition"
                   >
                     <Camera className="w-4 h-4" /> Cámara
                   </button>
@@ -364,13 +364,13 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
             <div className="flex items-center justify-between">
               <h3 className="text-xs uppercase tracking-[0.2em] font-bold text-white/40">Datos Detectados (OCR)</h3>
               {detections && (
-                <button onClick={() => setDetections(null)} className="text-[10px] text-emerald-400 hover:underline">Limpiar</button>
+                <button onClick={() => setDetections(null)} className="text-[10px] text-acid hover:underline">Limpiar</button>
               )}
             </div>
 
             {loading && !detections && (
               <div className="py-8 flex flex-col items-center gap-3">
-                <RefreshCcw className="w-6 h-6 text-emerald-500 animate-spin" />
+                <RefreshCcw className="w-6 h-6 text-acid animate-spin" />
                 <span className="text-[10px] text-white/40 animate-pulse uppercase tracking-widest">{status}</span>
               </div>
             )}
@@ -399,7 +399,7 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
                   <input 
                     value={detections.model} 
                     onChange={e => setDetections({...detections, model: e.target.value})}
-                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-emerald-500/50 outline-none"
+                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-acid outline-none"
                   />
                 </div>
                 <div className="space-y-1">
@@ -407,7 +407,7 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
                   <input 
                     value={detections.sku} 
                     onChange={e => setDetections({...detections, sku: e.target.value})}
-                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-emerald-500/50 outline-none"
+                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-acid outline-none"
                   />
                 </div>
                 <div className="space-y-1">
@@ -417,7 +417,7 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
                     </label>
                     <button 
                       onClick={generateRandomReference}
-                      className="text-[8px] text-emerald-400 hover:text-emerald-300 uppercase tracking-tighter"
+                      className="text-[8px] text-acid hover:text-acid uppercase tracking-tighter"
                     >
                       [Random]
                     </button>
@@ -425,7 +425,7 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
                   <input 
                     value={detections.reference} 
                     onChange={e => setDetections({...detections, reference: e.target.value})}
-                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-emerald-500/50 outline-none font-mono"
+                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-acid outline-none font-mono"
                   />
                 </div>
 
@@ -434,7 +434,7 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
                     <label className="text-[9px] uppercase text-white/30">Referencia 2 (7d)</label>
                     <button 
                       onClick={generateRandomReference2}
-                      className="text-[8px] text-emerald-400 hover:text-emerald-300 uppercase tracking-tighter"
+                      className="text-[8px] text-acid hover:text-acid uppercase tracking-tighter"
                     >
                       [Random]
                     </button>
@@ -443,7 +443,7 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
                     value={detections.reference2 || ''} 
                     onChange={e => setDetections({...detections, reference2: e.target.value})}
                     placeholder="Solo NB..."
-                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-emerald-500/50 outline-none font-mono"
+                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-acid outline-none font-mono"
                   />
                 </div>
 
@@ -454,7 +454,7 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
                     </label>
                     <button 
                       onClick={generateRandomBrandSerial}
-                      className="text-[8px] text-emerald-400 hover:text-emerald-300 uppercase tracking-tighter"
+                      className="text-[8px] text-acid hover:text-acid uppercase tracking-tighter"
                     >
                       [Random]
                     </button>
@@ -462,7 +462,7 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
                   <input 
                     value={detections.brandSerial} 
                     onChange={e => setDetections({...detections, brandSerial: e.target.value})}
-                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-emerald-500/50 outline-none font-mono"
+                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-acid outline-none font-mono"
                   />
                 </div>
                 <div className="space-y-1">
@@ -470,7 +470,7 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
                   <input 
                     value={detections.date} 
                     onChange={e => setDetections({...detections, date: e.target.value})}
-                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-emerald-500/50 outline-none"
+                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-acid outline-none"
                   />
                 </div>
                 <div className="space-y-1">
@@ -478,7 +478,7 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
                   <input 
                     value={detections.lvl} 
                     onChange={e => setDetections({...detections, lvl: e.target.value})}
-                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-emerald-500/50 outline-none"
+                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-acid outline-none"
                   />
                 </div>
                 <div className="col-span-2 grid grid-cols-4 gap-2">
@@ -488,7 +488,7 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
                       <input 
                         value={detections.sizes[size]} 
                         onChange={e => setDetections({...detections, sizes: {...detections.sizes, [size]: e.target.value}})}
-                        className="w-full bg-black/40 border border-white/10 rounded-lg px-2 py-2 text-center text-xs text-white focus:border-emerald-500/50 outline-none uppercase"
+                        className="w-full bg-black/40 border border-white/10 rounded-lg px-2 py-2 text-center text-xs text-white focus:border-acid outline-none uppercase"
                       />
                     </div>
                   ))}
@@ -497,7 +497,7 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
                 <div className="col-span-2 space-y-3 pt-4 border-t border-white/5">
                   <div className="space-y-1">
                     <div className="flex justify-between items-center">
-                      <label className="text-[9px] uppercase text-emerald-400 font-bold">Título del Anuncio (Vinted)</label>
+                      <label className="text-[9px] uppercase text-acid font-bold">Título del Anuncio (Vinted)</label>
                       <button 
                         onClick={() => {
                           if (detections?.listingTitle) {
@@ -513,12 +513,12 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
                     <input 
                       value={detections.listingTitle || ''} 
                       onChange={e => setDetections({...detections, listingTitle: e.target.value})}
-                      className="w-full bg-emerald-500/5 border border-emerald-500/20 rounded-lg px-3 py-2 text-xs text-white focus:border-emerald-500/50 outline-none"
+                      className="w-full bg-acid-soft border border-acid rounded-lg px-3 py-2 text-xs text-white focus:border-acid outline-none"
                     />
                   </div>
                   <div className="space-y-1">
                     <div className="flex justify-between items-center">
-                      <label className="text-[9px] uppercase text-emerald-400 font-bold">Descripción del Anuncio</label>
+                      <label className="text-[9px] uppercase text-acid font-bold">Descripción del Anuncio</label>
                       <button 
                         onClick={() => {
                           if (detections?.listingDescription) {
@@ -534,7 +534,7 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
                     <textarea 
                       value={detections.listingDescription || ''} 
                       onChange={e => setDetections({...detections, listingDescription: e.target.value})}
-                      className="w-full bg-emerald-500/5 border border-emerald-500/20 rounded-lg px-3 py-2 text-xs text-white focus:border-emerald-500/50 outline-none h-24 resize-none"
+                      className="w-full bg-acid-soft border border-acid rounded-lg px-3 py-2 text-xs text-white focus:border-acid outline-none h-24 resize-none"
                     />
                   </div>
                 </div>
@@ -547,7 +547,7 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
                     placeholder={`Pega aquí el prompt personalizado de ${activeBrand}...`}
                     value={activeBrand === 'ADIDAS' ? customPromptAdidas : activeBrand === 'ASICS' ? customPromptAsics : activeBrand === 'ONITSUKA' ? customPromptOnitsuka : customPromptNB}
                     onChange={e => activeBrand === 'ADIDAS' ? setCustomPromptAdidas(e.target.value) : activeBrand === 'ASICS' ? setCustomPromptAsics(e.target.value) : activeBrand === 'ONITSUKA' ? setCustomPromptOnitsuka(e.target.value) : setCustomPromptNB(e.target.value)}
-                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-emerald-500/50 outline-none h-20 resize-none"
+                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-acid outline-none h-20 resize-none"
                   />
                 </div>
               </motion.div>
@@ -557,7 +557,7 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
               <button 
                 onClick={generateModifiedTongue}
                 disabled={loading}
-                className="w-full py-4 bg-emerald-500 text-black font-bold rounded-2xl hover:bg-emerald-400 transition-all shadow-[0_0_30px_rgba(16,185,129,0.2)] flex items-center justify-center gap-2 mt-4"
+                className="w-full py-4 bg-acid text-black font-bold rounded-2xl hover:bg-acid transition-all shadow-[0_0_30px_rgba(16,185,129,0.2)] flex items-center justify-center gap-2 mt-4"
               >
                 {loading ? <RefreshCcw className="w-5 h-5 animate-spin" /> : <Scissors className="w-5 h-5" />}
                 REGENERAR LENGÜETA
@@ -569,7 +569,7 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
         {/* Right Side: Result */}
         <div className="space-y-6">
           <div className="bg-[#141414] border border-white/5 rounded-3xl p-8 h-full flex flex-col items-center justify-center relative overflow-hidden group min-h-[500px]">
-            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-emerald-500/0 via-emerald-500/50 to-emerald-500/0" />
+            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-acid to-transparent" />
             
             <AnimatePresence mode="wait">
               {generatedImage ? (
@@ -584,14 +584,14 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
                       className="max-w-full rounded-2xl shadow-[0_30px_60px_rgba(0,0,0,0.5)] border border-white/10" 
                       alt="Generated"
                     />
-                    <div className="absolute inset-0 bg-emerald-500/10 opacity-0 group-hover:opacity-100 transition-opacity rounded-2xl pointer-events-none" />
+                    <div className="absolute inset-0 bg-acid-soft opacity-0 group-hover:opacity-100 transition-opacity rounded-2xl pointer-events-none" />
                   </div>
                   
                   <div className="flex flex-col items-center gap-4">
                     <div className="flex gap-3">
                        <button 
                         onClick={handleDownload}
-                        className="px-6 py-3 bg-white text-black font-bold rounded-xl hover:bg-emerald-400 transition-colors flex items-center gap-2"
+                        className="px-6 py-3 bg-white text-black font-bold rounded-xl hover:bg-acid transition-colors flex items-center gap-2"
                        >
                          <Download className="w-4 h-4" /> Bajar Imagen
                        </button>
@@ -630,7 +630,7 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
 
             {loading && generatedImage && (
               <div className="absolute inset-0 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center gap-4 z-10">
-                <RefreshCcw className="w-10 h-10 text-emerald-500 animate-spin" />
+                <RefreshCcw className="w-10 h-10 text-acid animate-spin" />
                 <p className="text-xs font-bold text-white uppercase tracking-widest">{status}</p>
               </div>
             )}
@@ -638,8 +638,8 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
         </div>
       </div>
 
-      <div className="bg-emerald-500/5 border border-emerald-500/10 rounded-2xl p-4 flex gap-4 text-emerald-200/60 text-[11px] leading-relaxed">
-        <Info className="w-5 h-5 flex-shrink-0 text-emerald-500" />
+      <div className="bg-acid-soft border border-acid rounded-2xl p-4 flex gap-4 text-acid text-[11px] leading-relaxed">
+        <Info className="w-5 h-5 flex-shrink-0 text-acid" />
         <p>
           Este módulo utiliza Vision-AI para detectar y reconstruir etiquetas de calzado. Al regenerar, 
           Gemini crea una versión sintética limpia basada en los datos extraídos para asegurar neutralidad 

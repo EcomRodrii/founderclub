@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "lamineresell-web",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["serve", "/Users/marcosrocarodriguez/Desktop/lamineresell-web", "--listen", "3333", "--no-clipboard"],
+      "port": 3333
+    }
+  ]
+}

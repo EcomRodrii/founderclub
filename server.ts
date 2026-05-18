@@ -1,5 +1,6 @@
 import express, { Request, Response, NextFunction } from "express";
 import axios from "axios";
+import https from "https";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import * as cheerio from "cheerio";
@@ -53,6 +54,14 @@ function requireLicense(req: AuthRequest, res: Response, next: NextFunction) {
   });
 }
 
+function requireWorkerSecret(req: Request, res: Response, next: NextFunction) {
+  const provided = req.headers['x-worker-secret'];
+  const expected = process.env.BAZOOKA_WORKER_SECRET;
+  if (!expected) return res.status(503).json({ ok: false, error: 'worker_secret_not_configured' });
+  if (provided !== expected) return res.status(401).json({ ok: false, error: 'invalid_worker_secret' });
+  next();
+}
+
 // ─── Helper: generate license key ────────────────────────────────────────────
 
 function generateLicenseKey(): string {
@@ -63,8 +72,39 @@ function generateLicenseKey(): string {
 
 // ─── Main Server ──────────────────────────────────────────────────────────────
 
+async function seedAdminUser() {
+  const adminEmail = process.env.ADMIN_EMAIL;
+  if (!adminEmail) return;
+  try {
+    await pool.query("UPDATE users SET is_admin = TRUE WHERE email = $1", [adminEmail]);
+    console.log(`[seed] is_admin=true para ${adminEmail}`);
+  } catch (e: any) {
+    console.warn("[seed] No se pudo marcar admin:", e.message);
+  }
+}
+
 async function startServer() {
   await initDB();
+  await seedAdminUser();
+
+  // ── Report Jobs Table ────────────────────────────────────────────────────────
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS report_jobs (
+      id SERIAL PRIMARY KEY,
+      item_url TEXT NOT NULL,
+      item_id TEXT,
+      title TEXT,
+      status TEXT DEFAULT 'pending',
+      submitted_by INTEGER REFERENCES users(id),
+      assigned_to INTEGER REFERENCES users(id),
+      assigned_at TIMESTAMP,
+      completed_at TIMESTAMP,
+      error_message TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_report_jobs_status ON report_jobs(status);
+  `);
 
   const app = express();
 
@@ -72,34 +112,44 @@ async function startServer() {
   app.use(helmet({ contentSecurityPolicy: false })); // cabeceras HTTP de seguridad
   app.set("trust proxy", 1); // necesario para rate limit detrás de Railway
 
-  // ── CORS — permite peticiones desde la extensión de Chrome ────────────────
+  // ── CORS — permite chrome-extension://, localhost y el propio dominio ──────
   app.use((req: Request, res: Response, next: NextFunction) => {
     const origin = req.headers.origin || "";
-    const allowed = /^chrome-extension:\/\/|^https?:\/\/localhost|^https?:\/\/founderclub-production\.up\.railway\.app/.test(origin);
-    if (allowed || !origin) {
+    const allowed =
+      /^chrome-extension:\/\//.test(origin) ||
+      /^https?:\/\/localhost/.test(origin) ||
+      /^https?:\/\/founderclub-production\.up\.railway\.app/.test(origin) ||
+      !origin;
+    if (allowed) {
       res.setHeader("Access-Control-Allow-Origin", origin || "*");
       res.setHeader("Access-Control-Allow-Credentials", "true");
       res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
-      res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,x-csrf-token");
+      res.setHeader(
+        "Access-Control-Allow-Headers",
+        "Content-Type,Authorization,x-csrf-token"
+      );
     }
-    if (req.method === "OPTIONS") { res.sendStatus(204); return; }
+    if (req.method === "OPTIONS") {
+      res.sendStatus(204);
+      return;
+    }
     next();
   });
 
   // Rate limit general: 200 peticiones por IP cada 15 minutos
   app.use(rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 200,
+    max: 2000,
     standardHeaders: true,
     legacyHeaders: false,
-    message: { error: "Demasiadas peticiones. Espera unos minutos." }
+    message: { error: "Límite general superado. Espera unos minutos." }
   }));
 
-  // Rate limit estricto para login/registro: 10 intentos cada 15 minutos
+  // Rate limit para login/registro
   const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 10,
-    message: { error: "Demasiados intentos. Espera 15 minutos." }
+    max: 200,
+    message: { error: "Límite de auth superado. Espera unos minutos." }
   });
 
   // Rate limit para Gemini: 20 llamadas por IP cada 10 minutos
@@ -113,6 +163,63 @@ async function startServer() {
   const PORT = parseInt(process.env.PORT || "3000");
 
   // ── Auth Routes ─────────────────────────────────────────────────────────────
+
+  // ── Compat aliases para la extensión Chrome (formato antiguo del servidor) ───
+  // La extensión llama a /auth/login y /auth/register (sin /api/) y espera:
+  //   { ok: true, token, user: { email, role }, license: { status } }
+  // Estos aliases adaptan el nuevo servidor al formato que espera login.js
+  app.post("/auth/register", authLimiter, async (req, res) => {
+    const { email, password, hwid, device } = req.body;
+    if (!email || !password)
+      return res.status(400).json({ ok: false, error: "email_and_password_required" });
+    if (password.length < 8)
+      return res.status(400).json({ ok: false, error: "password_too_short" });
+    try {
+      const username = email.split("@")[0].replace(/[^a-zA-Z0-9_]/g, "").slice(0, 20) || "user";
+      const hash = await bcrypt.hash(password, 12);
+      const result = await pool.query(
+        "INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING id, username, email, is_admin",
+        [username, email.trim().toLowerCase(), hash]
+      );
+      const user = result.rows[0];
+      const token = jwt.sign({ id: user.id }, JWT_SECRET, { expiresIn: "30d" });
+      res.json({
+        ok: true, token,
+        user: { id: user.id, email: user.email, role: user.is_admin ? "admin" : "user" },
+        license: { status: "inactive" },
+      });
+    } catch (err: any) {
+      if (err.code === "23505") return res.status(409).json({ ok: false, error: "email_already_registered" });
+      res.status(500).json({ ok: false, error: "server_error" });
+    }
+  });
+
+  app.post("/auth/login", authLimiter, async (req, res) => {
+    const { email, password } = req.body;
+    if (!email || !password)
+      return res.status(400).json({ ok: false, error: "email_and_password_required" });
+    try {
+      const result = await pool.query("SELECT * FROM users WHERE email = $1", [email.trim().toLowerCase()]);
+      const user = result.rows[0];
+      if (!user || !(await bcrypt.compare(password, user.password_hash)))
+        return res.status(401).json({ ok: false, error: "invalid_credentials" });
+      const token = jwt.sign({ id: user.id }, JWT_SECRET, { expiresIn: "30d" });
+      // Verificar si tiene licencia activa
+      const licRes = await pool.query(
+        "SELECT type, expires_at FROM licenses WHERE user_id=$1 AND is_active=TRUE AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1",
+        [user.id]
+      );
+      const lic = licRes.rows[0];
+      const licenseStatus = (lic || user.is_admin) ? "active" : "inactive";
+      res.json({
+        ok: true, token,
+        user: { id: user.id, email: user.email, username: user.username, role: user.is_admin ? "admin" : "user" },
+        license: { status: licenseStatus, type: lic?.type || (user.is_admin ? "admin" : null) },
+      });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: "server_error" });
+    }
+  });
 
   app.post("/api/auth/register", authLimiter, async (req, res) => {
     const { username, email, password } = req.body;
@@ -152,6 +259,29 @@ async function startServer() {
     res.json({
       token,
       user: { id: user.id, username: user.username, email: user.email, is_admin: user.is_admin },
+    });
+  });
+
+  // ── /license/verify — compatibilidad con la extensión Chrome ─────────────────
+  // La extensión llama a GET /license/verify con Bearer token para comprobar si
+  // la licencia sigue activa. Reutiliza requireLicense y devuelve el mismo token
+  // para que la extensión pueda guardarlo como lamine_auth_token.
+  app.get("/license/verify", requireLicense as any, async (req: AuthRequest, res) => {
+    const user = req.user!;
+    const licResult = await pool.query(
+      "SELECT type, expires_at FROM licenses WHERE user_id = $1 AND is_active = TRUE AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1",
+      [user.id]
+    );
+    const lic = licResult.rows[0];
+    if (!lic && !user.is_admin) return res.status(403).json({ valid: false, error: "Licencia requerida o expirada" });
+    res.json({
+      ok:      true,
+      valid:   true,
+      allowed: true,
+      status:  'active',
+      role:    user.is_admin ? 'admin' : 'user',
+      user:    { id: user.id, username: user.username, email: user.email, is_admin: user.is_admin },
+      license: lic ? { type: lic.type, expires_at: lic.expires_at } : { type: 'admin', expires_at: null },
     });
   });
 
@@ -405,6 +535,43 @@ async function startServer() {
     return { headers, domain };
   };
 
+  // ── Proxy helper ─────────────────────────────────────────────────────────────
+  // Usa el proxy configurado en PROXY_URL (iProyal Unblocker).
+  // NO usamos https-proxy-agent ni NODE_TLS_REJECT_UNAUTHORIZED global porque
+  // afecta a TODAS las conexiones TLS del proceso y rompe hasta los requests
+  // directos a Vinted (ERR_SSL_WRONG_VERSION_NUMBER).
+  // Usamos axios proxy nativo + httpsAgent con rejectUnauthorized:false SOLO
+  // para las conexiones a través del proxy.
+  const buildAxiosVinted = () => {
+    const proxyUrl = process.env.PROXY_URL;
+    if (!proxyUrl) {
+      console.log("[proxy] Sin proxy configurado — requests directos a Vinted");
+      return axios;
+    }
+    try {
+      const u = new URL(proxyUrl);
+      const cfg = axios.create({
+        proxy: {
+          protocol: "http",
+          host: u.hostname,
+          port: parseInt(u.port) || 12323,
+          auth: u.username
+            ? { username: decodeURIComponent(u.username), password: decodeURIComponent(u.password) }
+            : undefined,
+        },
+        // rejectUnauthorized:false SOLO en este agente (no globalmente)
+        // iProyal actúa como MITM y presenta su propio certificado
+        httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+      });
+      console.log(`[proxy] iProyal Unblocker activo ✓ → ${u.hostname}:${u.port}`);
+      return cfg;
+    } catch (e: any) {
+      console.warn("[proxy] Error parseando PROXY_URL:", e.message, "— usando requests directos");
+      return axios;
+    }
+  };
+  const axiosVinted = buildAxiosVinted();
+
   // ── Vinted Routes (public) ──────────────────────────────────────────────────
 
   app.get("/api/vinted/resolve-user", async (req, res) => {
@@ -413,7 +580,7 @@ async function startServer() {
     try {
       const m = url.match(/\/member\/(\d+)(?:-|$)/);
       if (m) return res.json({ userId: m[1] });
-      const response = await axios.get(url, { headers: { "User-Agent": "Mozilla/5.0" }, timeout: 10000 });
+      const response = await axiosVinted.get(url, { headers: { "User-Agent": "Mozilla/5.0" }, timeout: 10000 });
       const $ = cheerio.load(response.data);
       let userId = "";
       for (const s of $("script").toArray()) {
@@ -435,7 +602,7 @@ async function startServer() {
     const domainMatch = url.match(/vinted\.([a-z.]+)/);
     const domain = domainMatch ? domainMatch[1] : "es";
     try {
-      const response = await axios.get(url, { headers: { "User-Agent": "Mozilla/5.0" } });
+      const response = await axiosVinted.get(url, { headers: { "User-Agent": "Mozilla/5.0" } });
       const $ = cheerio.load(response.data);
       let itemId = url.match(/\/(\d+)-/)?.[1] || "";
       let title = "";
@@ -459,13 +626,66 @@ async function startServer() {
     const { itemId, domain = "es" } = req.query;
     if (!itemId) return res.status(400).json({ error: "Item ID is required" });
     try {
-      const response = await axios.get(`https://www.vinted.${domain}/items/${itemId}`, {
+      const response = await axiosVinted.get(`https://www.vinted.${domain}/items/${itemId}`, {
         headers: { "User-Agent": "Mozilla/5.0" }, validateStatus: () => true,
       });
       res.json({ visible: response.status === 200, status: response.status });
     } catch (error: any) {
       res.json({ visible: false, status: 500 });
     }
+  });
+
+  // ── Debug: ver qué devuelve exactamente Vinted con la cookie del usuario ──────
+  app.post("/api/debug/vinted-item", requireLicense as any, async (req: AuthRequest, res) => {
+    const { cookie, itemId } = req.body;
+    if (!cookie || !itemId) return res.status(400).json({ error: "cookie e itemId requeridos" });
+    // Auto-detect domain from cookie
+    let domain = req.body.domain || "es";
+    if (cookie.includes("_vinted_fr_session")) domain = "fr";
+    else if (cookie.includes("_vinted_es_session")) domain = "es";
+    else if (cookie.includes("_vinted_it_session")) domain = "it";
+    else if (cookie.includes("_vinted_de_session")) domain = "de";
+    else if (cookie.includes("_vinted_pl_session")) domain = "pl";
+
+    // Decodificar JWT para ver si está caducado
+    let tokenInfo: any = { extracted: false };
+    try {
+      const raw = cookie.trim().startsWith("ey") ? cookie.trim()
+        : cookie.match(/access_token_web[:=]\s*([a-zA-Z0-9._-]+)/i)?.[1] || "";
+      if (raw) {
+        const payload = JSON.parse(Buffer.from(raw.split(".")[1], "base64url").toString());
+        const now = Math.floor(Date.now() / 1000);
+        tokenInfo = {
+          extracted: true,
+          userId: payload.sub || payload.id || payload.uid,
+          exp: payload.exp,
+          expiresAt: payload.exp ? new Date(payload.exp * 1000).toISOString() : "no exp",
+          expired: payload.exp ? now > payload.exp : null,
+          expiresInMin: payload.exp ? Math.round((payload.exp - now) / 60) : null,
+        };
+      }
+    } catch (e: any) { tokenInfo.parseError = e.message; }
+
+    const { headers } = getVintedHeaders(cookie as string, domain as string);
+
+    const results: any = {};
+    for (const [label, client] of [["direct", axios], ["proxy", axiosVinted]] as const) {
+      try {
+        const r = await (client as any).get(
+          `https://www.vinted.${domain}/api/v2/items/${itemId}`,
+          { headers, timeout: 8000, validateStatus: () => true }
+        );
+        results[label] = {
+          status: r.status,
+          body: typeof r.data === "string" ? r.data.slice(0, 300) : JSON.stringify(r.data).slice(0, 300),
+          isDataDome: typeof r.data === "string" && r.data.toLowerCase().includes("datadome"),
+          hasItem: r.status === 200 && !!(r.data?.item?.id || r.data?.id),
+        };
+      } catch (e: any) {
+        results[label] = { error: e.code || e.message };
+      }
+    }
+    res.json({ tokenInfo, results, authHeaderSent: !!headers["Authorization"] });
   });
 
   // ── Vinted Routes (require license) ────────────────────────────────────────
@@ -475,7 +695,7 @@ async function startServer() {
     if (!cookie) return res.status(400).json({ error: "Cookie is required" });
     try {
       const { headers, domain: activeDomain } = getVintedHeaders(cookie, domain);
-      const response = await axios.get(`https://www.vinted.${activeDomain}/api/v2/users/current`, { headers, timeout: 10000, validateStatus: () => true });
+      const response = await axiosVinted.get(`https://www.vinted.${activeDomain}/api/v2/users/current`, { headers, timeout: 10000, validateStatus: () => true });
       if (response.status === 200) return res.json({ valid: true, user: response.data.user || response.data });
       res.json({ valid: false, status: response.status, error: response.data?.message || "Session rejected" });
     } catch (error: any) {
@@ -502,7 +722,7 @@ async function startServer() {
       const { headers } = getVintedHeaders(cookieStr, d);
       for (const p of [`/api/v2/users/${userId}/items?per_page=100`, `/api/v2/items?user_id=${userId}&per_page=100`]) {
         try {
-          const response = await axios.get(`https://www.vinted.${d}${p}`, { headers, timeout: 8000, validateStatus: s => s === 200 });
+          const response = await axiosVinted.get(`https://www.vinted.${d}${p}`, { headers, timeout: 8000, validateStatus: s => s === 200 });
           const items = response.data.items || response.data.user_items;
           if (items && Array.isArray(items)) return res.json({ ...response.data, items });
         } catch (error: any) {
@@ -519,7 +739,7 @@ async function startServer() {
     if (!cookie || !itemId) return res.status(400).json({ error: "Cookie and Item ID are required" });
     try {
       const { headers, domain: activeDomain } = getVintedHeaders(cookie, domain);
-      const response = await axios.post(`https://www.vinted.${activeDomain}/api/v2/items/${itemId}/hide`, {}, { headers });
+      const response = await axiosVinted.post(`https://www.vinted.${activeDomain}/api/v2/items/${itemId}/hide`, {}, { headers });
       res.json({ success: true, data: response.data });
     } catch (error: any) {
       res.status(error.response?.status || 500).json({ error: "Failed to hide item", details: error.response?.data || error.message });
@@ -531,300 +751,734 @@ async function startServer() {
     if (!cookie || !itemId) return res.status(400).json({ error: "Cookie and Item ID are required" });
     try {
       const { headers, domain: activeDomain } = getVintedHeaders(cookie, domain);
-      const response = await axios.post(`https://www.vinted.${activeDomain}/api/v2/items/${itemId}/reveal`, {}, { headers });
+      const response = await axiosVinted.post(`https://www.vinted.${activeDomain}/api/v2/items/${itemId}/reveal`, {}, { headers });
       res.json({ success: true, data: response.data });
     } catch (error: any) {
       res.status(error.response?.status || 500).json({ error: "Failed to reveal item", details: error.response?.data || error.message });
     }
   });
 
-  // ── Vinted Report v2 — multi-reason · multi-account · parallel ─────────────
   app.post("/api/vinted/report", requireLicense as any, async (req: AuthRequest, res) => {
     const { cookie, itemId, reasonId, description, domain = "es" } = req.body;
     if (!cookie || !itemId) return res.status(400).json({ error: "Cookie and Item ID are required" });
 
-    const uuid = () => "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
-      const r = Math.random() * 16 | 0, v = c === "x" ? r : (r & 0x3 | 0x8); return v.toString(16);
-    });
+    const cookieStr = cookie as string;
 
-    // ── Parse multi-account cookies (one per line or comma-separated) ────────
-    const rawCookie = cookie as string;
-    const allCookies: string[] = rawCookie.includes("\n")
-      ? rawCookie.split("\n").map(c => c.trim()).filter(c => c.length > 10)
-      : [rawCookie.trim()];
+    // Detectar dominio primario desde la cookie (el que definitivamente tiene sesión)
+    let primaryDomain = domain as string;
+    if (cookieStr.includes("_vinted_fr_session")) primaryDomain = "fr";
+    else if (cookieStr.includes("_vinted_es_session")) primaryDomain = "es";
+    else if (cookieStr.includes("_vinted_it_session")) primaryDomain = "it";
+    else if (cookieStr.includes("_vinted_de_session")) primaryDomain = "de";
+    else if (cookieStr.includes("_vinted_pl_session")) primaryDomain = "pl";
+    else if (cookieStr.includes("_vinted_nl_session")) primaryDomain = "nl";
 
-    // ── Determine domains to target for each cookie ──────────────────────────
-    const getDomainsForCookie = (ck: string): string[] => {
-      const d: string[] = [];
-      if (ck.includes("_vinted_fr_session")) d.push("fr");
-      if (ck.includes("_vinted_es_session")) d.push("es");
-      if (ck.includes("_vinted_it_session")) d.push("it");
-      if (ck.includes("_vinted_de_session")) d.push("de");
-      if (ck.includes("_vinted_pl_session")) d.push("pl");
-      if (!d.includes(domain)) d.push(domain);
-      // Spread to all domains — cross-domain reports go to global moderation queue
-      ["fr", "es", "it", "de", "pl", "be", "nl"].forEach(x => { if (!d.includes(x)) d.push(x); });
-      return d;
-    };
+    // Dominio primario primero, luego el resto
+    const reportDomains = [primaryDomain, ...["fr","es","it","be","pl","de","nl"].filter(d => d !== primaryDomain)];
+    const _repUid = String(req.user!.id);
+    opsEmit(_repUid, "sys", "SYS", `→ REPORTE AI · item_id:${itemId} · reason:${reasonId} · dom:${primaryDomain}`);
 
-    // ── Reason configs — hit MULTIPLE moderation queues simultaneously ───────
-    // Each reason_id routes to a different internal team at Vinted:
-    //   1 = Counterfeit/IP (legal team, fastest automated action)
-    //   2 = Item not as described (quality team)
-    //   4 = Prohibited/illegal item (safety team, automated removal)
-    //  11 = Spam/duplicate listing (anti-spam bot, instant flag)
-    const primaryReason = parseInt(reasonId || "1");
+    const mkIdempotency = () =>
+      "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0, v = c === "x" ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+      });
 
-    const REASON_PAYLOADS = [
-      // Primary reason (user-selected or default counterfeit)
-      {
-        reason_id: primaryReason,
-        description: description || "This item is a non-authentic replica. It uses copyrighted brand imagery and serial numbers known to be associated with counterfeit batches. This violates Vinted Integrity Policy and applicable IP law.",
-        suspected_counterfeit: primaryReason === 1,
-        ...(primaryReason === 1 ? { brand_name: "unknown" } : {}),
-      },
-      // Prohibited item — parallel queue
-      {
-        reason_id: 4,
-        description: "Article belongs to prohibited items list. Poses transaction risk. Requires immediate automated quarantine per platform safety policy.",
-      },
-      // Spam/duplicate — anti-spam bot queue (near-instant processing)
-      {
-        reason_id: 11,
-        description: "Duplicate listing. Same item posted multiple times across different accounts to manipulate search visibility.",
-      },
-    ].filter((p, i) => i === 0 || p.reason_id !== primaryReason); // skip dupes
+    const payloads = [
+      { complaint: { item_id: parseInt(itemId), reason_id: parseInt(String(reasonId || "1")), description: description || "Este artículo es una falsificación." } },
+      { complaint: { entity_id: parseInt(itemId), entity_type: "Item", reason_id: parseInt(String(reasonId || "1")), description: description || "Counterfeit item." } },
+    ];
 
-    // ── Fire a single complaint (one cookie, one domain, one reason) ─────────
-    const fireOne = async (ck: string, dom: string, reasonPayload: any): Promise<{ ok: boolean; status: number; dom: string; reason: number }> => {
-      const { headers } = getVintedHeaders(ck, dom);
-      headers["Referer"] = `https://www.vinted.${dom}/items/${itemId}`;
-      headers["Origin"] = `https://www.vinted.${dom}`;
-      headers["X-Vinted-Idempotency-Key"] = uuid();
+    // Variantes de headers — la clave es probar mobile-agent y pure-cookie porque
+    // DataDome y el WAF de Vinted son más permisivos con requests que parecen app nativa
+    const variants: Array<{ name: string; patch: (h: any) => void }> = [
+      { name: "mobile-app",   patch: h => { h["User-Agent"] = "Vinted/24.5.0 (iPhone; iOS 17.5; Scale/3.00)"; h["X-Vinted-Client"] = "ios"; delete h["Sec-Ch-Ua"]; delete h["Sec-Ch-Ua-Mobile"]; delete h["Sec-Ch-Ua-Platform"]; } },
+      { name: "pure-cookie",  patch: h => { delete h["Authorization"]; delete h["X-Vinted-Access-Token"]; h["X-Vinted-Auth-Method"] = "session"; } },
+      { name: "standard",     patch: () => {} },
+      { name: "legacy-raw",   patch: h => { h["Cookie"] = cookieStr.trim(); delete h["Authorization"]; } },
+      { name: "android-app",  patch: h => { h["User-Agent"] = "Vinted/24.5.0 (Linux; Android 14; Pixel 8)"; h["X-Vinted-Client"] = "android"; delete h["Sec-Ch-Ua"]; } },
+    ];
 
-      const id = parseInt(itemId);
-      const payload = { complaint: { item_id: id, ...reasonPayload } };
-      const payload2 = { complaint: { entity_id: id, entity_type: "Item", ...reasonPayload } };
+    let finalError: any = null;
+    let primaryTotal401 = 0;
 
-      for (const body of [payload, payload2]) {
-        try {
-          const r = await axios.post(
-            `https://www.vinted.${dom}/api/v2/complaints`,
-            body,
-            { headers, timeout: 8000, maxRedirects: 0, validateStatus: s => s < 500 }
-          );
-          if (r.status === 401) return { ok: false, status: 401, dom, reason: reasonPayload.reason_id };
-          if (r.status < 300) return { ok: true, status: r.status, dom, reason: reasonPayload.reason_id };
-        } catch {}
-      }
-      return { ok: false, status: 0, dom, reason: reasonPayload.reason_id };
-    };
+    for (const activeDom of reportDomains) {
+      let domainGot401 = 0;
 
-    try {
-      // ── Build all tasks: every cookie × primary domain × every reason ──────
-      const tasks: Promise<{ ok: boolean; status: number; dom: string; reason: number }>[] = [];
-
-      for (const ck of allCookies) {
-        const domains = getDomainsForCookie(ck);
-        const primaryDom = domains[0]; // best domain for this cookie
-
-        // Fire all reasons on the primary domain (parallel)
-        for (const rp of REASON_PAYLOADS) {
-          tasks.push(fireOne(ck, primaryDom, rp));
-        }
-
-        // Also fire primary reason on all other domains (parallel, for cross-domain pressure)
-        for (const dom of domains.slice(1, 5)) {
-          tasks.push(fireOne(ck, dom, REASON_PAYLOADS[0]));
+      for (const { name: variant, patch } of variants) {
+        await new Promise(r => setTimeout(r, 120 + Math.random() * 180));
+        for (const payload of payloads) {
+          try {
+            const { headers } = getVintedHeaders(cookieStr, activeDom);
+            patch(headers);
+            headers["Referer"] = `https://www.vinted.${activeDom}/items/${itemId}`;
+            headers["Origin"]  = `https://www.vinted.${activeDom}`;
+            headers["X-Vinted-Idempotency-Key"] = mkIdempotency();
+            const response = await axiosVinted.post(
+              `https://www.vinted.${activeDom}/api/v2/complaints`,
+              payload,
+              { headers, timeout: 12000, maxRedirects: 0, validateStatus: s => s >= 200 && s < 303 }
+            );
+            return res.json({ success: true, data: response.data, domainUsed: activeDom, variantUsed: variant });
+          } catch (err: any) {
+            finalError = err;
+            if (err.response?.status === 401) domainGot401++;
+          }
         }
       }
 
-      console.log(`[report] Firing ${tasks.length} parallel complaint requests for item ${itemId}`);
-      const results = await Promise.all(tasks);
-
-      // 401 on primary = bad session
-      if (results[0]?.status === 401) return res.status(401).json({ error: "Sesión inválida o expirada." });
-
-      const hits = results.filter(r => r.ok);
-      const byReason: Record<number, number> = {};
-      hits.forEach(r => { byReason[r.reason] = (byReason[r.reason] || 0) + 1; });
-
-      if (hits.length > 0) {
-        return res.json({
-          success: true,
-          total: results.length,
-          hits: hits.length,
-          byReason,
-          accounts: allCookies.length,
-          message: `${hits.length}/${results.length} reportes enviados desde ${allCookies.length} cuenta(s).`,
-        });
+      // Si el dominio PRIMARIO rechaza todas las variantes con 401, la sesión está muerta
+      if (activeDom === primaryDomain && domainGot401 === variants.length * payloads.length) {
+        primaryTotal401 = domainGot401;
+        break; // no tiene sentido intentar otros dominios con la misma cookie muerta
       }
-
-      const lastStatus = results.find(r => r.status > 0)?.status || 500;
-      res.status(lastStatus).json({ error: "Todos los reportes fallaron.", total: results.length, hits: 0 });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
     }
+
+    if (primaryTotal401 > 0) {
+      return res.status(401).json({
+        error: "Sesión expirada. Copia una cookie fresca desde Vinted (F12 → Application → Cookies → copia la línea completa).",
+        hint: "La cookie access_token_web tiene una vida útil corta. Recárgala desde el navegador."
+      });
+    }
+
+    res.status(finalError?.response?.status || 500).json({ error: "No se pudo enviar el reporte", details: finalError?.message });
   });
 
-  // ── Vinted Nuke — sustained multi-reason pressure over N seconds ───────────
   app.post("/api/vinted/spam-checkout", requireLicense as any, async (req: AuthRequest, res) => {
     const { cookie, itemId, domain = "es" } = req.body;
     if (!cookie || !itemId) return res.status(400).json({ error: "Cookie and Item ID are required" });
 
-    const uuid = () => "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
-      const r = Math.random() * 16 | 0, v = c === "x" ? r : (r & 0x3 | 0x8); return v.toString(16);
-    });
-
     const rawCookie = cookie as string;
     const cookies = rawCookie.includes("\n")
-      ? rawCookie.split("\n").map(c => c.trim()).filter(c => c.length > 10)
-      : [rawCookie.trim()];
+      ? rawCookie.split("\n").map(c => c.trim()).filter(c => c.length > 5)
+      : rawCookie.split(",").map(c => c.trim()).filter(c => c.length > 5);
 
-    const id = parseInt(itemId.toString());
+    const id = itemId.toString();
+    const _bombUid = String(req.user!.id);
+    opsEmit(_bombUid, "sys", "SYS", `→ BOMBARDEO · item_id:${id} · domain:${domain} · flood:120s`);
     const activeDomains = [...new Set([domain, "fr", "es", "it", "pl", "be", "de", "nl"])];
-
-    // Reason rotation: counterfeit → prohibited → spam → repeat
-    // Each wave hits a different internal queue
-    const reasons = [
-      { reason_id: 1, suspected_counterfeit: true, description: "Non-authentic item. Counterfeit batch serial. IP violation." },
-      { reason_id: 4, description: "Prohibited item. Safety risk. Requires automated quarantine." },
-      { reason_id: 11, description: "Spam listing. Duplicate across multiple seller accounts." },
-      { reason_id: 2, description: "Item not as described. Misleading photos and description." },
-    ];
-
     let totalSuccess = 0;
-    let wave = 0;
-    const endTime = Date.now() + 90_000; // 90 seconds
 
+    await Promise.all(cookies.map(token =>
+      Promise.all(activeDomains.slice(0, 8).map(async dom => {
+        try {
+          const { headers } = getVintedHeaders(token, dom);
+          await axiosVinted.post(`https://www.vinted.${dom}/api/v2/items/${id}/view`, {}, { headers, timeout: 4000, validateStatus: () => true });
+        } catch {}
+      }))
+    ));
+
+    const iid = parseInt(id, 10);
+    const endTime = Date.now() + 120 * 1000;
     while (Date.now() < endTime) {
-      const reason = reasons[wave % reasons.length];
-      wave++;
-
-      await Promise.all(cookies.flatMap(ck =>
-        activeDomains.map(async dom => {
-          try {
-            const { headers } = getVintedHeaders(ck, dom);
-            headers["Referer"] = `https://www.vinted.${dom}/items/${id}`;
-            headers["Origin"] = `https://www.vinted.${dom}`;
-            headers["X-Vinted-Idempotency-Key"] = uuid();
-
-            const body = { complaint: { item_id: id, ...reason } };
-            const r = await axios.post(
-              `https://www.vinted.${dom}/api/v2/complaints`,
-              body,
-              { headers, timeout: 5000, validateStatus: () => true }
-            );
-            if (r.status < 300) totalSuccess++;
-          } catch {}
-        })
+      await Promise.all(cookies.map(token =>
+        Promise.all(activeDomains.map(async dom => {
+          const { headers } = getVintedHeaders(token, dom);
+          const ikey = () => `brd_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+          const calls: Array<{ url: string; body: any }> = [
+            // Conversación de compra — mismo flujo que el sniper, paso 1
+            { url: `https://www.vinted.${dom}/api/v2/conversations`,
+              body: { initiator: "buy", item_id: String(id), opposite_user_id: "0" } },
+            // Favourite toggle (confirmado en background.js de Blackstock)
+            { url: `https://www.vinted.${dom}/api/v2/user_favourites/toggle`,
+              body: { type: "item", user_favourites: [iid] } },
+            // Complaint
+            { url: `https://www.vinted.${dom}/api/v2/complaints`,
+              body: { complaint: { item_id: iid, reason_id: 1, description: "Counterfeit item violating platform rules." } } },
+          ];
+          await Promise.all(calls.map(async ({ url: ep, body }) => {
+            try {
+              const r = await axiosVinted.post(ep, body, {
+                headers: { ...headers, "X-Vinted-Idempotency-Key": ikey() },
+                timeout: 5000, validateStatus: () => true,
+              });
+              if (r.status < 400) totalSuccess++;
+            } catch {}
+          }));
+        }))
       ));
-
       await new Promise(r => setTimeout(r, 800));
     }
 
+    opsEmit(_bombUid, "ok", "BOMBARDEO", `✓ completado · ${totalSuccess} impactos · 120s`);
+    res.json({ success: true, count: totalSuccess, message: `BOMBARDEO FINALIZADO. ${totalSuccess} impactos en 2 minutos.` });
+  });
+
+  // ── Seller public items (no auth) ────────────────────────────────────────────
+  app.get("/api/vinted/seller-items", async (req, res) => {
+    const { url, domain: qDomain = "es" } = req.query as Record<string, string>;
+    if (!url) return res.status(400).json({ error: "url requerida" });
+    let sellerId: string | null = null;
+    const mId = url.match(/\/member\/(\d+)/);
+    if (mId) sellerId = mId[1];
+    const domMatch = url.match(/vinted\.([a-z.]+)/);
+    const dom = domMatch ? domMatch[1] : qDomain;
+    if (!sellerId) {
+      try {
+        const r = await axiosVinted.get(url, { headers: { "User-Agent": "Mozilla/5.0" }, timeout: 8000 });
+        const m = r.data.match(/"id":(\d+),"username":/);
+        if (m) sellerId = m[1];
+      } catch {}
+    }
+    if (!sellerId) return res.status(404).json({ error: "No se pudo resolver el vendedor" });
+    try {
+      const r = await axiosVinted.get(
+        `https://www.vinted.${dom}/api/v2/users/${sellerId}/items?page=1&per_page=96&status[]=active`,
+        { headers: { "User-Agent": "Mozilla/5.0", Accept: "application/json" }, timeout: 10000 }
+      );
+      const items = r.data.items || [];
+      res.json({ sellerId, domain: dom, items, total: items.length });
+    } catch (err: any) {
+      res.status(500).json({ error: "No se pudieron obtener los artículos", details: err.message });
+    }
+  });
+
+  // ── Sniper Bazooka (flujo real Blackstock) ────────────────────────────────────
+  // Flujo exacto interceptado de api.blackstock.es:
+  //   1. GET  /api/v2/items/{id}                              → sellerId + title
+  //   2. POST /api/v2/conversations                           → transactionId
+  //      body: { initiator:'buy', item_id, opposite_user_id:sellerId }
+  //   3. POST /api/v2/purchases/checkout/build                → item reservado
+  //      body: { purchase_items:[{id:transactionId,type:'transaction'}] }
+  // ─────────────────────────────────────────────────────────────────────────────
+  app.post("/api/sniper/fire", requireLicense as any, async (req: AuthRequest, res) => {
+    try {
+      const { url, cookies, workers: numWorkers = 3 } = req.body;
+      if (!url || !cookies) return res.status(400).json({ error: "url y cookies requeridos" });
+
+      // ── Extraer dominio e itemId ─────────────────────────────────────────────
+      const domMatch = url.match(/vinted\.([a-z]+(?:\.[a-z]+)?)/);
+      const domain = domMatch ? domMatch[1] : "es";
+
+      const itemId: string | null =
+        url.match(/\/items\/(\d+)/i)?.[1] ||   // /items/123456 (formato Blackstock)
+        url.match(/\/(\d{5,})-/)?.[1] ||        // /123456-slug
+        url.match(/\/(\d{5,})\/?(?:[?#]|$)/)?.[1] || // /123456 bare
+        null;
+
+      if (!itemId) {
+        return res.status(400).json({ error: "URL inválida. Usa el formato: https://www.vinted.es/items/123456-titulo" });
+      }
+
+      // ── Parsear cookies ──────────────────────────────────────────────────────
+      const cookieList: string[] = Array.isArray(cookies)
+        ? cookies.map((c: string) => c.trim()).filter((c: string) => c.length > 5)
+        : cookies.split("\n").map((c: string) => c.trim()).filter((c: string) => c.length > 5);
+      if (cookieList.length === 0) return res.status(400).json({ error: "Cookie inválida o vacía" });
+
+      const workerCount = Math.min(Number(numWorkers) || 3, Math.max(cookieList.length, 1), 5);
+      const globalStart = Date.now();
+
+      // ── Detectar dominio real del usuario desde la cookie ────────────────────
+      // La cuenta del usuario puede ser de vinted.fr aunque el ítem sea de vinted.es.
+      // Las llamadas autenticadas (conversations, checkout/build) DEBEN ir al dominio
+      // donde está la cuenta, no al dominio del ítem.
+      const detectUserDomain = (ck: string): string => {
+        if (ck.includes("_vinted_fr_session")) return "fr";
+        if (ck.includes("_vinted_es_session")) return "es";
+        if (ck.includes("_vinted_it_session")) return "it";
+        if (ck.includes("_vinted_de_session")) return "de";
+        if (ck.includes("_vinted_pl_session")) return "pl";
+        if (ck.includes("_vinted_nl_session")) return "nl";
+        if (ck.includes("_vinted_be_session")) return "be";
+        if (ck.includes("_vinted_pt_session")) return "pt";
+        if (ck.includes("_vinted_cz_session")) return "cz";
+        // Fallback: intentar decodificar el JWT audience
+        try {
+          const raw = ck.trim().startsWith("ey") ? ck.trim()
+            : ck.match(/access_token_web[:=]\s*([a-zA-Z0-9._-]+)/i)?.[1] || "";
+          if (raw && raw.includes(".")) {
+            const payload = JSON.parse(Buffer.from(raw.split(".")[1], "base64url").toString());
+            const aud: string = Array.isArray(payload.aud) ? payload.aud[0] : (payload.aud || "");
+            const audDom = aud.match(/^([a-z]+)\.core\.api/)?.[1];
+            if (audDom) return audDom;
+          }
+        } catch {}
+        return domain; // fallback al dominio del ítem
+      };
+      const userDomain = detectUserDomain(cookieList[0]);
+      console.log(`[sniper] itemDomain=${domain} userDomain=${userDomain}`);
+
+      // ── Un worker: flujo Blackstock completo ─────────────────────────────────
+      const runWorker = async (idx: number) => {
+        const cookie = cookieList[idx % cookieList.length];
+        // Detectar dominio de este cookie concreto (puede diferir entre workers)
+        const wUserDomain = detectUserDomain(cookie);
+        const { headers } = getVintedHeaders(cookie, wUserDomain);
+        const wStart = Date.now();
+        // Las llamadas autenticadas van al dominio del usuario (fr, es, etc.)
+        const base = `https://www.vinted.${wUserDomain}`;
+
+        // Paso 1 — Obtener sellerId + título
+        // El ítem puede estar en un dominio diferente al del usuario.
+        // Probamos primero el dominio del ítem, luego el del usuario.
+        let sellerId = "";
+        let itemTitle = "";
+        {
+          let ir: any = null;
+          let lastErr = "";
+          // Dominios a probar: el del item primero, luego el del usuario
+          const domainsToTry = [...new Set([domain, wUserDomain])];
+          for (const tryDom of domainsToTry) {
+            for (const client of [axiosVinted, axios]) {
+              try {
+                const { headers: h } = getVintedHeaders(cookie, tryDom);
+                const r = await client.get(`https://www.vinted.${tryDom}/api/v2/items/${itemId}`, {
+                  headers: h, timeout: 8000, validateStatus: () => true,
+                });
+                console.log(`[sniper] items/${itemId} via ${client === axios ? "direct" : "proxy"} dom=${tryDom} → ${r.status}`);
+                if (r.status === 200) { ir = r; break; }
+                lastErr = `HTTP ${r.status} (${tryDom})`;
+              } catch (e: any) {
+                lastErr = `${e.code || e.message} (${tryDom})`;
+              }
+            }
+            if (ir) break;
+          }
+          if (!ir) {
+            return { worker: idx + 1, success: false, sellerId: "", itemTitle: "", transactionId: "", purchaseId: "",
+              error: `items/${itemId} → ${lastErr}`, durationMs: Date.now() - wStart };
+          }
+          const it = ir.data.item || ir.data;
+          itemTitle = it.title || "";
+          sellerId  = String(it.user_id || it.user?.id || "");
+        }
+
+        if (!sellerId) {
+          return { worker: idx + 1, success: false, sellerId: "", itemTitle, transactionId: "", purchaseId: "",
+            error: "seller_id_not_found", durationMs: Date.now() - wStart };
+        }
+
+        // Paso 2 — Crear conversación de compra (obtiene transactionId)
+        let transactionId = "";
+        try {
+          console.log(`[sniper W${idx+1}] POST ${base}/api/v2/conversations item=${itemId} seller=${sellerId}`);
+          const convR = await axiosVinted.post(`${base}/api/v2/conversations`, {
+            initiator: "buy",
+            item_id: String(itemId),
+            opposite_user_id: String(sellerId),
+          }, { headers, timeout: 10000, validateStatus: () => true });
+
+          console.log(`[sniper W${idx+1}] conversations → HTTP ${convR.status} tx=${convR.data?.conversation?.transaction?.id}`);
+          if (!convR.data?.conversation?.transaction?.id) {
+            return { worker: idx + 1, success: false, sellerId, itemTitle, transactionId: "", purchaseId: "",
+              error: `conversations → HTTP ${convR.status} (sin transaction_id)`, durationMs: Date.now() - wStart };
+          }
+          transactionId = String(convR.data.conversation.transaction.id);
+        } catch (e: any) {
+          return { worker: idx + 1, success: false, sellerId, itemTitle, transactionId: "", purchaseId: "",
+            error: `conversations → ${e.code || e.message}`, durationMs: Date.now() - wStart };
+        }
+
+        // Paso 3 — Checkout build (RESERVA el ítem — lo saca de búsqueda)
+        try {
+          console.log(`[sniper W${idx+1}] POST ${base}/api/v2/purchases/checkout/build tx=${transactionId}`);
+          const buildR = await axiosVinted.post(`${base}/api/v2/purchases/checkout/build`, {
+            purchase_items: [{ id: transactionId, type: "transaction" }],
+          }, { headers, timeout: 10000, validateStatus: () => true });
+
+          const purchaseId = String(
+            buildR.data?.checkout?.purchase_id || buildR.data?.purchase_id || transactionId
+          );
+
+          if (buildR.status >= 200 && buildR.status < 300) {
+            return { worker: idx + 1, success: true, sellerId, itemTitle, transactionId, purchaseId,
+              error: "", durationMs: Date.now() - wStart };
+          }
+          return { worker: idx + 1, success: false, sellerId, itemTitle, transactionId, purchaseId: "",
+            error: `checkout/build → HTTP ${buildR.status}`, durationMs: Date.now() - wStart };
+        } catch (e: any) {
+          return { worker: idx + 1, success: false, sellerId, itemTitle, transactionId, purchaseId: "",
+            error: `checkout/build → ${e.code || e.message}`, durationMs: Date.now() - wStart };
+        }
+      };
+
+      // ── Lanzar N workers en paralelo ─────────────────────────────────────────
+      const results = await Promise.all(
+        Array.from({ length: workerCount }, (_, i) => runWorker(i))
+      );
+      const winner    = results.find(r => r.success) || null;
+      const fastestMs = winner?.durationMs ?? (Date.now() - globalStart);
+      const itemTitle = results.find(r => r.itemTitle)?.itemTitle || "";
+      const sellerId  = results.find(r => r.sellerId)?.sellerId  || "";
+
+      // ── Emitir al ops-terminal ───────────────────────────────────────────────
+      const _sniperUid = String(req.user!.id);
+      opsEmit(_sniperUid, "sys", "SYS", `→ SNIPER · item_id:${itemId} · seller:${sellerId || "?"} · workers:${workerCount}`);
+      for (const r of results) {
+        opsEmit(_sniperUid, r.success ? "worker" : "err", `W${r.worker}`,
+          r.success
+            ? `✓ checkout OK · ${r.durationMs}ms · tx:${(r as any).transactionId || "?"}`
+            : `✗ ${((r as any).error || "rechazado").slice(0, 80)}`);
+      }
+      if (winner) {
+        opsEmit(_sniperUid, "ok", "SNIPER",
+          `🏆 GANADOR W${winner.worker} · ${fastestMs}ms · tx:${winner.transactionId} · purchase:${winner.purchaseId}`);
+      } else {
+        opsEmit(_sniperUid, "err", "SNIPER",
+          `FALLIDO · ${results.map((r: any) => `W${r.worker}:${r.error || "fail"}`).join(" · ")}`);
+      }
+
+      // ── Persistir (non-blocking) ─────────────────────────────────────────────
+      pool.query(
+        `INSERT INTO sniper_history(user_id,item_id,item_url,item_title,seller_id,success,winner_worker,transaction_id,purchase_id,fastest_ms,workers_total,workers_ok)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [req.user!.id, itemId, url, itemTitle, sellerId || null, !!winner,
+         winner?.worker ?? null, winner?.transactionId ?? null, winner?.purchaseId ?? null,
+         fastestMs, workerCount, results.filter(r => r.success).length]
+      ).catch(() => {});
+
+      res.json({
+        ok: !!winner,
+        itemId, sellerId, title: itemTitle,
+        workers: workerCount,
+        winner,
+        results,
+        fastestMs,
+      });
+
+    } catch (err: any) {
+      console.error("[sniper] unhandled error:", err);
+      res.status(500).json({ error: "Error interno: " + (err.message || String(err)) });
+    }
+  });
+
+  // ── Bazooka Queue ─────────────────────────────────────────────────────────────
+  app.get("/api/bazooka/jobs", requireLicense as any, async (req: AuthRequest, res) => {
+    const r = await pool.query(
+      "SELECT id,url,title,item_id,status,note,error_message,created_at FROM bazooka_jobs WHERE user_id=$1 ORDER BY created_at DESC LIMIT 50",
+      [req.user!.id]
+    );
+    res.json(r.rows);
+  });
+
+  app.post("/api/bazooka/enqueue", requireLicense as any, async (req: AuthRequest, res) => {
+    const { url, title, cookies } = req.body;
+    if (!url || !cookies) return res.status(400).json({ error: "url y cookies requeridos" });
+    const itemId = url.match(/\/(\d{5,})-/)?.[1] || null;
+    const r = await pool.query(
+      "INSERT INTO bazooka_jobs(user_id,url,title,item_id,status,vinted_cookies) VALUES($1,$2,$3,$4,'pending',$5) RETURNING *",
+      [req.user!.id, url, title || "", itemId, cookies]
+    );
+    const job = r.rows[0];
+    // Attempt async processing
+    (async () => {
+      const dom = url.match(/vinted\.([a-z.]+)/)?.[1] || "es";
+      const cookieStr = cookies.split("\n")[0].trim() || cookies;
+      const { headers } = getVintedHeaders(cookieStr, dom);
+      try {
+        await pool.query("UPDATE bazooka_jobs SET status='processing',updated_at=NOW() WHERE id=$1", [job.id]);
+        const cr = await axiosVinted.post(
+          `https://www.vinted.${dom}/api/v2/items/${itemId}/checkout`, {},
+          { headers: { ...headers, "X-Vinted-Idempotency-Key": `bz_${job.id}_${Date.now()}` }, timeout: 10000, validateStatus: () => true }
+        );
+        if (cr.status >= 200 && cr.status < 300) {
+          const txId = cr.data?.transaction?.id ?? cr.data?.id ?? "";
+          await pool.query("UPDATE bazooka_jobs SET status='done',note=$1,updated_at=NOW() WHERE id=$2", [`Reservado tx:${txId}`, job.id]);
+        } else {
+          await pool.query("UPDATE bazooka_jobs SET status='failed',error_message=$1,updated_at=NOW() WHERE id=$2", [`HTTP ${cr.status}`, job.id]);
+        }
+      } catch (e: any) {
+        await pool.query("UPDATE bazooka_jobs SET status='failed',error_message=$1,updated_at=NOW() WHERE id=$2", [e.message?.slice(0, 100) || "error", job.id]).catch(() => {});
+      }
+    })().catch(() => {});
+    res.json([job]);
+  });
+
+  app.delete("/api/bazooka/jobs/clear", requireLicense as any, async (req: AuthRequest, res) => {
+    await pool.query("DELETE FROM bazooka_jobs WHERE user_id=$1 AND status IN ('done','failed')", [req.user!.id]);
+    res.json({ ok: true });
+  });
+
+  app.post("/api/bazooka/goolazo-bridge", requireLicense as any, async (req: AuthRequest, res) => {
+    const { url, title } = req.body;
+    if (!url) return res.status(400).json({ error: "url requerida" });
+    const dom = url.match(/vinted\.([a-z.]+)/)?.[1] || "es";
+    let itemId: string | null = url.match(/\/(\d{5,})-/)?.[1] || null;
+    if (!itemId) {
+      try {
+        const p = await axiosVinted.get(url, { headers: { "User-Agent": "Mozilla/5.0" }, timeout: 8000 });
+        const m = p.data.match(/"id":(\d+),"title":/);
+        if (m) itemId = m[1];
+      } catch {}
+    }
+    if (!itemId) return res.status(400).json({ error: "No se pudo resolver el ID" });
+    // Store as pending job (workers will pick up via enqueue flow)
+    try {
+      await pool.query(
+        "INSERT INTO bazooka_jobs(user_id,url,title,item_id,status,vinted_cookies) VALUES($1,$2,$3,$4,'pending','goolazo')",
+        [req.user!.id, url, title || "", itemId]
+      );
+    } catch {}
+    res.json({ ok: true, itemId, accountName: "Goolazo Worker" });
+  });
+
+  app.post("/api/bazooka/goolazo-login", requireLicense as any, async (_req: AuthRequest, res) => {
+    res.status(503).json({ error: "Goolazo externo no disponible. Usa Sniper Bazooka directo con tu cookie de Vinted." });
+  });
+
+  // ── Bazooka Client API — usada por la extensión Chrome ──────────────────────
+  // Auth: Bearer JWT (mismo token que el hub). No se usan cookies ni CSRF.
+
+  // GET /api/bazooka/client/csrf — noop, compatibilidad con código legacy
+  app.get("/api/bazooka/client/csrf", (_req, res) => {
+    res.json({ ok: true, csrfToken: "noop" });
+  });
+
+  // POST /api/bazooka/client/login — login con email+password, devuelve JWT
+  app.post("/api/bazooka/client/login", authLimiter, async (req, res) => {
+    const { email, password } = req.body;
+    if (!email || !password)
+      return res.status(400).json({ ok: false, error: "email_and_password_required" });
+    try {
+      const result = await pool.query("SELECT * FROM users WHERE email = $1", [email.trim().toLowerCase()]);
+      const user = result.rows[0];
+      if (!user || !(await bcrypt.compare(password, user.password_hash)))
+        return res.status(401).json({ ok: false, error: "invalid_credentials" });
+      const licRes = await pool.query(
+        "SELECT is_active, expires_at FROM licenses WHERE user_id=$1 AND is_active=TRUE AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1",
+        [user.id]
+      );
+      const lic = licRes.rows[0];
+      if (!lic && !user.is_admin)
+        return res.status(403).json({ ok: false, error: "license_not_active" });
+      const token = jwt.sign({ id: user.id }, JWT_SECRET, { expiresIn: "30d" });
+      res.json({
+        ok: true, token,
+        account: { email: user.email, status: "active", createdAt: user.created_at },
+        summary: { total: 1, active: 1, expired: 0, onlineInstalls: 1 },
+        licenses: [],
+        remote: {},
+        links: { extension: "https://founderclub-production.up.railway.app", guide: "https://founderclub-production.up.railway.app/#funciones", billing: "https://founderclub-production.up.railway.app", discord: null },
+      });
+    } catch {
+      res.status(500).json({ ok: false, error: "server_error" });
+    }
+  });
+
+  // POST /api/bazooka/client/register — registro con email+password+licencia
+  app.post("/api/bazooka/client/register", authLimiter, async (req, res) => {
+    const { email, password, license } = req.body;
+    if (!email || !password)
+      return res.status(400).json({ ok: false, error: "email_invalid" });
+    if (!password || password.length < 6)
+      return res.status(400).json({ ok: false, error: "password_invalid" });
+    try {
+      const existing = await pool.query("SELECT id FROM users WHERE email=$1", [email.trim().toLowerCase()]);
+      if (existing.rows[0]) return res.status(409).json({ ok: false, error: "email_exists" });
+      const hash = await bcrypt.hash(password, 10);
+      const newUser = await pool.query(
+        "INSERT INTO users(email,username,password_hash) VALUES($1,$2,$3) RETURNING *",
+        [email.trim().toLowerCase(), email.split("@")[0], hash]
+      );
+      const user = newUser.rows[0];
+      // Link license if provided
+      if (license) {
+        const lic = await pool.query(
+          "SELECT * FROM licenses WHERE key=$1 AND is_active=TRUE AND user_id IS NULL LIMIT 1",
+          [String(license).trim().toUpperCase()]
+        );
+        if (lic.rows[0]) {
+          await pool.query("UPDATE licenses SET user_id=$1 WHERE id=$2", [user.id, lic.rows[0].id]);
+        }
+      }
+      const token = jwt.sign({ id: user.id }, JWT_SECRET, { expiresIn: "30d" });
+      res.json({ ok: true, token, account: { email: user.email, status: "active", createdAt: user.created_at } });
+    } catch {
+      res.status(500).json({ ok: false, error: "server_error" });
+    }
+  });
+
+  // GET /api/bazooka/client/me — devuelve info de cuenta (requiere license activa)
+  app.get("/api/bazooka/client/me", requireLicense as any, async (req: AuthRequest, res) => {
+    const user = req.user!;
+    const licRes = await pool.query(
+      "SELECT type, expires_at FROM licenses WHERE user_id=$1 AND is_active=TRUE LIMIT 1", [user.id]
+    );
+    const lic = licRes.rows[0];
     res.json({
-      success: totalSuccess > 0,
-      count: totalSuccess,
-      waves: wave,
-      accounts: cookies.length,
-      message: `NUKE COMPLETADO. ${totalSuccess} impactos en ${wave} oleadas desde ${cookies.length} cuenta(s).`,
+      ok: true,
+      account: { email: user.email, status: "active", createdAt: (user as any).created_at },
+      summary: { total: 1, active: 1, expired: 0, onlineInstalls: 1 },
+      licenses: lic ? [{ license: { keyMasked: "****-****", plan: lic.type || "month", status: "active", expiresAt: lic.expires_at, maxInstalls: 3 }, usage: { installsCount: 1, onlineCount: 1 }, activity: { lastHeartbeat: new Date().toISOString() }, installs: [] }] : [],
+      remote: {},
+      links: { extension: "https://founderclub-production.up.railway.app", guide: "https://founderclub-production.up.railway.app/#funciones", billing: "https://founderclub-production.up.railway.app", discord: null },
     });
   });
 
-  // ── Vinted Like+Offer — replicates Blackstock's worker action ──────────────
-  // Blackstock workers: open tab → click heart → open offer dialog → submit offer
-  // We replicate the underlying API calls: favourite + offer at minimum price
-  app.post("/api/vinted/like-offer", requireLicense as any, async (req: AuthRequest, res) => {
-    const { cookie, itemId, domain = "es" } = req.body;
-    if (!cookie || !itemId) return res.status(400).json({ error: "Cookie and itemId required" });
+  // POST /api/bazooka/client/logout — noop (JWT stateless)
+  app.post("/api/bazooka/client/logout", (_req, res) => {
+    res.json({ ok: true });
+  });
 
-    const uuid = () => "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
-      const r = Math.random() * 16 | 0, v = c === "x" ? r : (r & 0x3 | 0x8); return v.toString(16);
-    });
+  // POST /api/bazooka/client/jobs          → registrar job
+  // POST /api/bazooka/client/jobs/:id/result → reportar resultado
+  // GET  /api/bazooka/client/dashboard     → estado de la cola
 
-    const rawCookie = cookie as string;
-    const allCookies: string[] = rawCookie.includes("\n")
-      ? rawCookie.split("\n").map(c => c.trim()).filter(c => c.length > 10)
-      : [rawCookie.trim()];
+  app.post("/api/bazooka/client/jobs", requireLicense as any, async (req: AuthRequest, res) => {
+    const { url, title, accountName, accountMemberId, accountUrl } = req.body;
+    if (!url) return res.status(400).json({ error: "url requerida" });
 
-    const id = parseInt(itemId.toString());
+    const itemId = url.match(/\/items\/(\d+)/i)?.[1]
+      || url.match(/\/(\d{5,})-/)?.[1]
+      || null;
 
-    // Step 1: fetch item details to get price
-    let itemPrice: number | null = null;
-    let currency = "EUR";
-    let sellerId: number | null = null;
-    try {
-      const { headers } = getVintedHeaders(allCookies[0], domain);
-      const itemRes = await axios.get(
-        `https://www.vinted.${domain}/api/v2/items/${id}`,
-        { headers, timeout: 8000, validateStatus: () => true }
+    // Detectar duplicado (mismo item pendiente/procesando en los últimos 10 min)
+    if (itemId) {
+      const dup = await pool.query(
+        `SELECT id FROM bazooka_jobs WHERE user_id=$1 AND item_id=$2
+         AND status IN ('pending','processing','done')
+         AND created_at > NOW() - INTERVAL '10 minutes' LIMIT 1`,
+        [req.user!.id, itemId]
       );
-      if (itemRes.status === 200 && itemRes.data?.item) {
-        const item = itemRes.data.item;
-        itemPrice = parseFloat(item.price_numeric || item.price || "0");
-        currency = item.currency || "EUR";
-        sellerId = item.user?.id || null;
-      }
-    } catch {}
-
-    // Minimum offer = 70% of price (Vinted minimum), rounded down to .00
-    const offerPrice = itemPrice ? Math.max(1, Math.floor(itemPrice * 0.70 * 100) / 100).toFixed(2) : null;
-
-    const results: { cookie_idx: number; favourite: boolean; offer: boolean; error?: string }[] = [];
-
-    await Promise.all(allCookies.map(async (ck, idx) => {
-      const result = { cookie_idx: idx, favourite: false, offer: false };
-      try {
-        const { headers } = getVintedHeaders(ck, domain);
-        headers["Referer"] = `https://www.vinted.${domain}/items/${id}`;
-        headers["Origin"] = `https://www.vinted.${domain}`;
-        headers["X-Vinted-Idempotency-Key"] = uuid();
-
-        // 1. Add to favourites — exact same call as clicking ❤️ button
-        const favRes = await axios.post(
-          `https://www.vinted.${domain}/api/v2/items/${id}/favourite`,
-          {},
-          { headers, timeout: 8000, validateStatus: () => true }
+      if (dup.rows[0]) {
+        const dash = await pool.query(
+          `SELECT id,url,title,item_id,status,note,error_message,created_at
+           FROM bazooka_jobs WHERE user_id=$1 ORDER BY created_at DESC LIMIT 20`,
+          [req.user!.id]
         );
-        result.favourite = favRes.status < 300;
-
-        // 2. Send offer at minimum price (buyer must differ from seller)
-        if (offerPrice && sellerId) {
-          await new Promise(r => setTimeout(r, 600 + Math.random() * 400));
-          headers["X-Vinted-Idempotency-Key"] = uuid();
-          const offerRes = await axios.post(
-            `https://www.vinted.${domain}/api/v2/offers`,
-            { offer: { item_id: id, price: offerPrice, currency_code: currency } },
-            { headers, timeout: 8000, validateStatus: () => true }
-          );
-          result.offer = offerRes.status < 300;
-        }
-      } catch (e: any) {
-        (result as any).error = e.message;
+        return res.json({ duplicate: true, job: dup.rows[0], dashboard: { jobs: dash.rows } });
       }
-      results.push(result);
-    }));
+    }
 
-    const favHits = results.filter(r => r.favourite).length;
-    const offerHits = results.filter(r => r.offer).length;
+    const r = await pool.query(
+      `INSERT INTO bazooka_jobs(user_id,url,title,item_id,status,vinted_cookies)
+       VALUES($1,$2,$3,$4,'pending','extension') RETURNING *`,
+      [req.user!.id, url, title || accountName || "", itemId]
+    );
+    const job = r.rows[0];
 
+    const dash = await pool.query(
+      `SELECT id,url,title,item_id,status,note,error_message,created_at
+       FROM bazooka_jobs WHERE user_id=$1 ORDER BY created_at DESC LIMIT 20`,
+      [req.user!.id]
+    );
+
+    opsEmit(String(req.user!.id), 'sys', 'EXT', `→ job #${job.id} encolado · item_id:${itemId || '?'} · "${(title || accountName || '').slice(0, 40)}"`);
+
+    res.json({ ok: true, duplicate: false, job, dashboard: { jobs: dash.rows } });
+  });
+
+  app.post("/api/bazooka/client/jobs/:id/result", requireLicense as any, async (req: AuthRequest, res) => {
+    const { status, note, errorMessage } = req.body;
+    const jobId = req.params.id;
+
+    // Verificar que el job pertenece al usuario
+    const job = await pool.query(
+      "SELECT id FROM bazooka_jobs WHERE id=$1 AND user_id=$2", [jobId, req.user!.id]
+    );
+    if (!job.rows[0]) return res.status(404).json({ error: "Job no encontrado" });
+
+    await pool.query(
+      `UPDATE bazooka_jobs SET status=$1, note=$2, error_message=$3, updated_at=NOW() WHERE id=$4`,
+      [status || "done", note || null, errorMessage || null, jobId]
+    );
+
+    const finalStatus = status || 'done';
+    opsEmit(String(req.user!.id), finalStatus === 'done' ? 'ok' : 'err', 'EXT',
+      `job#${jobId} → ${finalStatus.toUpperCase()}${note ? ' · ' + note : ''}${errorMessage ? ' · ERR: ' + errorMessage.slice(0, 80) : ''}`);
+
+    res.json({ ok: true });
+  });
+
+  app.get("/api/bazooka/client/dashboard", requireLicense as any, async (req: AuthRequest, res) => {
+    const user = req.user!;
+    const jobs = await pool.query(
+      `SELECT id,url,title,item_id,status,note,error_message,created_at,updated_at
+       FROM bazooka_jobs WHERE user_id=$1 ORDER BY created_at DESC LIMIT 30`,
+      [user.id]
+    );
+    const stats = await pool.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE status='done') AS done,
+         COUNT(*) FILTER (WHERE status='failed') AS failed,
+         COUNT(*) FILTER (WHERE status IN ('pending','processing')) AS pending
+       FROM bazooka_jobs WHERE user_id=$1 AND created_at > NOW() - INTERVAL '24 hours'`,
+      [user.id]
+    );
+    const licRes = await pool.query(
+      "SELECT type, expires_at FROM licenses WHERE user_id=$1 AND is_active=TRUE LIMIT 1", [user.id]
+    );
+    const lic = licRes.rows[0];
+    const s = stats.rows[0] || {};
+    const activeJob = jobs.rows.find((j: any) => j.status === 'processing') || null;
+    const pendingCount = Number(s.pending || 0);
     res.json({
-      success: favHits > 0,
-      favourites: favHits,
-      offers: offerHits,
-      accounts: allCookies.length,
-      itemPrice,
-      offerPrice,
-      message: `❤️ ${favHits} favoritos + 💬 ${offerHits} ofertas enviadas desde ${allCookies.length} cuenta(s).`,
+      ok: true,
+      jobs: jobs.rows,
+      stats: s,
+      account: { email: user.email, status: "active", createdAt: (user as any).created_at },
+      summary: { total: 1, active: 1, expired: 0, onlineInstalls: 1 },
+      licenses: lic ? [{ license: { keyMasked: "****-****", plan: lic.type || "month", status: "active", expiresAt: lic.expires_at, maxInstalls: 3 }, usage: { installsCount: 1, onlineCount: 1 }, activity: { lastHeartbeat: new Date().toISOString() }, installs: [] }] : [],
+      remote: { serverTime: new Date().toISOString(), worker: null, activeJob: activeJob ? { title: activeJob.title, url: activeJob.url, status: activeJob.status } : null, pendingCount },
+      links: { extension: "https://founderclub-production.up.railway.app", guide: "https://founderclub-production.up.railway.app/#funciones", billing: "https://founderclub-production.up.railway.app", discord: null },
     });
   });
 
   // ── Profits / Sales endpoints ────────────────────────────────────────────────
 
-  // Accounts
+  // ── Dashboard unificado — todas las cuentas ───────────────────────────────
+  app.get("/api/dashboard", requireAuth as any, async (req: AuthRequest, res) => {
+    const accounts = await pool.query(
+      "SELECT id, username, domain, balance, items_count, sold_count, last_synced_at FROM vinted_accounts WHERE user_id=$1 AND is_active=TRUE",
+      [req.user!.id]
+    );
+    const sales = await pool.query(
+      "SELECT COALESCE(SUM(sell_price - buy_price),0) as total_profit, COUNT(*) as total_sales, COALESCE(SUM(sell_price),0) as total_revenue FROM sales WHERE user_id=$1",
+      [req.user!.id]
+    );
+    const expenses = await pool.query(
+      "SELECT COALESCE(SUM(amount),0) as total FROM vinted_expenses WHERE user_id=$1",
+      [req.user!.id]
+    );
+    const inventory = await pool.query(
+      `SELECT vi.account_id, COUNT(*) as total, COUNT(*) FILTER (WHERE vi.is_hidden) as hidden, COUNT(*) FILTER (WHERE vi.status='sold') as sold
+       FROM vinted_inventory vi
+       JOIN vinted_accounts va ON va.id = vi.account_id
+       WHERE va.user_id=$1
+       GROUP BY vi.account_id`,
+      [req.user!.id]
+    );
+    const recentSales = await pool.query(
+      "SELECT * FROM sales WHERE user_id=$1 ORDER BY date DESC, created_at DESC LIMIT 10",
+      [req.user!.id]
+    );
+    const totalBalance = accounts.rows.reduce((s, a) => s + parseFloat(a.balance || 0), 0);
+    res.json({
+      accounts: accounts.rows,
+      total_balance: totalBalance,
+      profit: parseFloat(sales.rows[0].total_profit),
+      revenue: parseFloat(sales.rows[0].total_revenue),
+      total_sales: parseInt(sales.rows[0].total_sales),
+      total_expenses: parseFloat(expenses.rows[0].total),
+      net_profit: parseFloat(sales.rows[0].total_profit) - parseFloat(expenses.rows[0].total),
+      inventory_by_account: inventory.rows,
+      recent_sales: recentSales.rows,
+    });
+  });
+
+  // ── Gastos ────────────────────────────────────────────────────────────────
+  app.get("/api/expenses", requireAuth as any, async (req: AuthRequest, res) => {
+    const r = await pool.query("SELECT * FROM vinted_expenses WHERE user_id=$1 ORDER BY date DESC", [req.user!.id]);
+    res.json(r.rows);
+  });
+  app.post("/api/expenses", requireAuth as any, async (req: AuthRequest, res) => {
+    const { description, amount, category = "general", date, account_id } = req.body;
+    if (!description || !amount) return res.status(400).json({ error: "description y amount requeridos" });
+    const r = await pool.query(
+      "INSERT INTO vinted_expenses(user_id, account_id, description, amount, category, date) VALUES($1,$2,$3,$4,$5,$6) RETURNING *",
+      [req.user!.id, account_id || null, description, amount, category, date || new Date()]
+    );
+    res.json(r.rows[0]);
+  });
+  app.delete("/api/expenses/:id", requireAuth as any, async (req: AuthRequest, res) => {
+    await pool.query("DELETE FROM vinted_expenses WHERE id=$1 AND user_id=$2", [req.params.id, req.user!.id]);
+    res.json({ ok: true });
+  });
+
+  // ── Legacy profits endpoints (compatibilidad) ─────────────────────────────
   app.get("/api/profits/accounts", requireAuth as any, async (req: AuthRequest, res) => {
-    const r = await pool.query("SELECT * FROM vinted_accounts WHERE user_id=$1 ORDER BY created_at DESC", [req.user!.id]);
+    const r = await pool.query("SELECT id, username, domain, is_active, created_at FROM vinted_accounts WHERE user_id=$1 ORDER BY created_at DESC", [req.user!.id]);
     res.json(r.rows);
   });
   app.post("/api/profits/accounts", requireAuth as any, async (req: AuthRequest, res) => {
@@ -849,11 +1503,20 @@ async function startServer() {
     const rows = Array.isArray(req.body) ? req.body : [req.body];
     const inserted: any[] = [];
     for (const s of rows) {
-      const { model, buy_price, sell_price, date, vinted_account } = s;
+      const {
+        model, buy_price, sell_price, date, vinted_account, account_id, notes, platform,
+        boost_cost, shipping_cost, supplier, invoice_filename,
+      } = s;
       if (!model || buy_price == null || sell_price == null || !date) continue;
       const r = await pool.query(
-        "INSERT INTO sales(user_id,model,buy_price,sell_price,date,vinted_account) VALUES($1,$2,$3,$4,$5,$6) RETURNING *",
-        [req.user!.id, model, buy_price, sell_price, date, vinted_account || null]
+        `INSERT INTO sales(user_id,model,buy_price,sell_price,date,vinted_account,account_id,notes,platform,
+                           boost_cost,shipping_cost,supplier,invoice_filename)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+        [
+          req.user!.id, model, buy_price, sell_price, date,
+          vinted_account || null, account_id || null, notes || null, platform || "vinted",
+          boost_cost || 0, shipping_cost || 0, supplier || null, invoice_filename || null,
+        ]
       );
       inserted.push(r.rows[0]);
     }
@@ -862,6 +1525,112 @@ async function startServer() {
   app.delete("/api/profits/sales/:id", requireAuth as any, async (req: AuthRequest, res) => {
     await pool.query("DELETE FROM sales WHERE id=$1 AND user_id=$2", [req.params.id, req.user!.id]);
     res.json({ ok: true });
+  });
+  // Toggle reembolso (PATCH /api/profits/sales/:id/refund con body { refunded: true/false })
+  app.patch("/api/profits/sales/:id/refund", requireAuth as any, async (req: AuthRequest, res) => {
+    const { refunded } = req.body;
+    const isRef = refunded === true;
+    const r = await pool.query(
+      `UPDATE sales SET refunded=$1, refunded_at = CASE WHEN $1 THEN NOW() ELSE NULL END
+       WHERE id=$2 AND user_id=$3 RETURNING *`,
+      [isRef, req.params.id, req.user!.id]
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: "Venta no encontrada" });
+    res.json(r.rows[0]);
+  });
+
+  // ── Purchases (facturas de lote) ──────────────────────────────────────────
+  app.get("/api/profits/purchases", requireAuth as any, async (req: AuthRequest, res) => {
+    const r = await pool.query(
+      "SELECT * FROM purchases WHERE user_id=$1 ORDER BY date DESC, created_at DESC",
+      [req.user!.id]
+    );
+    res.json(r.rows);
+  });
+  app.post("/api/profits/purchases", requireAuth as any, async (req: AuthRequest, res) => {
+    const rows = Array.isArray(req.body) ? req.body : [req.body];
+    const inserted: any[] = [];
+    for (const p of rows) {
+      const { supplier, total_amount, units, date, invoice_filename, notes } = p;
+      if (total_amount == null || !date) continue;
+      const r = await pool.query(
+        `INSERT INTO purchases(user_id,supplier,total_amount,units,date,invoice_filename,notes)
+         VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+        [req.user!.id, supplier || null, total_amount, units || 1, date, invoice_filename || null, notes || null]
+      );
+      inserted.push(r.rows[0]);
+    }
+    res.json(inserted);
+  });
+  app.delete("/api/profits/purchases/:id", requireAuth as any, async (req: AuthRequest, res) => {
+    await pool.query("DELETE FROM purchases WHERE id=$1 AND user_id=$2", [req.params.id, req.user!.id]);
+    res.json({ ok: true });
+  });
+
+  // ── OCR de factura PDF con Gemini ─────────────────────────────────────────
+  // Recibe { pdfBase64, filename } y devuelve los datos extraídos:
+  //   { supplier, total_amount, units, date, currency, raw_summary }
+  // Usa gemini-2.5-flash que soporta PDFs nativamente (inlineData).
+  app.post("/api/profits/ocr-invoice", geminiLimiter, requireAuth as any, async (req: AuthRequest, res) => {
+    const { pdfBase64, filename } = req.body;
+    if (!pdfBase64) return res.status(400).json({ error: "pdfBase64 requerido" });
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY no configurada" });
+
+    const cleanB64 = pdfBase64.includes(",") ? pdfBase64.split(",")[1] : pdfBase64;
+    // Sanity: max ~15 MB raw → ~20 MB base64. Si pasa límite Gemini, fallar pronto.
+    if (cleanB64.length > 18 * 1024 * 1024) {
+      return res.status(413).json({ error: "PDF demasiado grande (máx ~13 MB)" });
+    }
+
+    const prompt = `Analiza esta factura de compra al por mayor (típicamente lote de zapatillas o ropa). Extrae estos datos y devuelve SOLO un JSON puro sin markdown ni comentarios:
+
+{
+  "supplier": "Nombre del vendedor/proveedor que emite la factura (Adidas, Footlocker, mayorista…)",
+  "total_amount": número decimal del TOTAL de la factura (suma de todos los items, IMPUESTOS INCLUIDOS, lo que realmente pagaste),
+  "units": número TOTAL de unidades/pares compradas en la factura (suma de cantidades de todas las líneas),
+  "currency": "EUR" | "USD" | "GBP" | etc.,
+  "date": "YYYY-MM-DD" (fecha de emisión de la factura),
+  "raw_summary": "Una línea con qué tipo de productos contiene (ej: Lote de 25 pares de zapatillas Adidas)"
+}
+
+IMPORTANTE: queremos el TOTAL del lote y el TOTAL de unidades, NO el precio unitario. Si la factura tiene varios productos diferentes, suma TODO. Si no encuentras un campo pon null. NO inventes datos. Si la factura no parece de compra de productos físicos, devuelve { "error": "No es factura de compra de producto" }.`;
+
+    const MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-preview-04-17", "gemini-2.0-flash"];
+    let lastError = "";
+    try {
+      for (const model of MODELS) {
+        const r = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ parts: [
+                { inlineData: { mimeType: "application/pdf", data: cleanB64 } },
+                { text: prompt },
+              ] }],
+              generationConfig: { temperature: 0.1 },
+            }),
+          }
+        );
+        const data = await r.json();
+        if (!r.ok) { lastError = JSON.stringify(data).slice(0, 300); console.error(`[ocr] ${model} fail:`, lastError); continue; }
+        const text = data.candidates?.[0]?.content?.parts?.find((p: any) => p.text)?.text || "";
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) { lastError = "JSON no encontrado en respuesta"; continue; }
+        try {
+          const parsed = JSON.parse(jsonMatch[0]);
+          return res.json({ ...parsed, filename: filename || null, model_used: model });
+        } catch (e: any) {
+          lastError = "JSON malformado: " + e.message;
+        }
+      }
+      res.status(422).json({ error: "Gemini no devolvió JSON parseable: " + lastError });
+    } catch (err: any) {
+      console.error("OCR invoice error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // ── Tongue / Gemini endpoints ───────────────────────────────────────────────
@@ -881,58 +1650,279 @@ async function startServer() {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY no configurada en el servidor" });
 
-    const prompt = `Analiza esta imagen de una lengueta de zapatilla ${brand}.
+    // ── PASO 1: OCR con imagen — extraer datos técnicos ────────────────────────
+    // No se puede usar googleSearch + inlineData al mismo tiempo, así que
+    // primero extraemos los códigos de la imagen, luego buscamos el nombre.
+    const ocrPrompt = `Analiza esta imagen de una lengueta de zapatilla ${brand}.
+Extrae EXACTAMENTE los datos que ves impresos. Devuelve SOLO un JSON puro sin markdown con estos campos:
+{
+  "model": "código de modelo (ej: JQ5874, MR530SG, 1204A191)",
+  "sku": "mismo que model",
+  "reference": "referencia principal (12 dígitos en NB, #XXXXXXXXX en Adidas, F seguido de 6 dígitos en Onitsuka)",
+  "reference2": "7 dígitos solo en New Balance, vacío si no aplica",
+  "brandSerial": "código alfanumérico largo (ej: LXCK1298 CLX, FGwKZ39<82143, N4VDCSSVG6CSMGH)",
+  "date": "fecha impresa (ej: 05/22)",
+  "lvl": "código de fábrica (ej: EVN 791001)",
+  "sizes": { "us": "...", "uk": "...", "fr": "...", "jp": "..." }
+}
+Si no ves algún dato, pon "". Solo el JSON, sin explicaciones.`;
 
-      1. Extrae los datos tecnicos:
-      - model (ID de modelo, ej: JQ5874 o MR530SG)
-      - sku (lo mismo que model)
-      - reference (referencia de 12 digitos en NB, o serie en Adidas ej: #123456789)
-      - reference2 (7 digitos en NB)
-      - brandSerial (ej: LXCK1298 CLX o FGwKZ39<82143)
-      - date (ej: 05/22)
-      - lvl (ej: EVN 791001)
-      - sizes (un objeto con us, uk, fr, jp)
+    // Modelos con soporte multimodal (imagen) — no soportan googleSearch
+    const OCR_MODELS = [
+      "gemini-2.5-flash-preview-05-20",
+      "gemini-2.5-flash",
+      "gemini-2.0-flash",
+      "gemini-2.0-flash-lite",
+    ];
 
-      2. Genera el JSON con estos campos adicionales:
-      - modelName: Nombre comercial real (ej: Adidas Samba Leopard)
-      - color: Color dominante en frances (ej: blanc et vert)
-      - listingTitle: Titulo para Vinted EXACTAMENTE asi: "[modelName] - Pointure [FR] [color] / [model]"
-      - listingDescription: Descripcion en frances con formato: "[Frase natural]\n\nCouleur : [color]\nModele : [model]\nTaille : [fr]"
-
-      Si no encuentras algun dato, pon "Desconocido". Solo devuelve el JSON puro sin markdown.`;
-
-    const MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-preview-04-17", "gemini-2.0-flash", "gemini-1.5-flash"];
-    try {
-      const base64Data = imageBase64.includes(",") ? imageBase64.split(",")[1] : imageBase64;
-      let lastError = "";
-      for (const model of MODELS) {
+    async function geminiCall(model: string, body: object, timeoutMs = 45000): Promise<any> {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
         const r = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              contents: [{ parts: [
-                { inlineData: { mimeType: "image/jpeg", data: base64Data } },
-                { text: prompt }
-              ]}],
-              tools: [{ googleSearch: {} }]
-            })
-          }
+          { method: "POST", headers: { "Content-Type": "application/json" }, signal: ctrl.signal, body: JSON.stringify(body) }
         );
-        const data = await r.json();
-        if (!r.ok) { lastError = JSON.stringify(data); console.error(`Model ${model} failed:`, lastError); continue; }
-        const text = data.candidates?.[0]?.content?.parts?.find((p: any) => p.text)?.text || "";
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        if (!jsonMatch) return res.status(422).json({ error: "No se pudo extraer JSON", raw: text });
-        return res.json(JSON.parse(jsonMatch[0]));
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data?.error?.message || `HTTP ${r.status}`);
+        return data;
+      } finally { clearTimeout(t); }
+    }
+
+    function extractJson(text: string): any | null {
+      const m = text.match(/```json\s*([\s\S]*?)```/) || text.match(/\{[\s\S]*\}/);
+      const raw = m ? (m[1] || m[0]) : null;
+      if (!raw) return null;
+      try { return JSON.parse(raw); } catch { return null; }
+    }
+
+    try {
+      const base64Data = imageBase64.includes(",") ? imageBase64.split(",")[1] : imageBase64;
+      let ocrResult: any = null;
+      let lastError = "";
+
+      // ── Paso 1: OCR de imagen ──────────────────────────────────────────────
+      for (const model of OCR_MODELS) {
+        try {
+          const data = await geminiCall(model, {
+            contents: [{ parts: [
+              { inlineData: { mimeType: "image/jpeg", data: base64Data } },
+              { text: ocrPrompt }
+            ]}]
+          });
+          const text = data.candidates?.[0]?.content?.parts?.find((p: any) => p.text)?.text || "";
+          ocrResult = extractJson(text);
+          if (ocrResult) { console.log(`[OCR] ${model} OK, sku=${ocrResult.model}`); break; }
+          lastError = "no_json: " + text.slice(0, 200);
+        } catch (e: any) {
+          lastError = e.message;
+          console.error(`[OCR] ${model} error:`, lastError);
+        }
       }
-      return res.status(500).json({ error: "Ningun modelo disponible: " + lastError });
+
+      if (!ocrResult) {
+        return res.status(500).json({ error: "OCR no disponible. Intenta de nuevo." });
+      }
+
+      // ── Paso 2: Búsqueda web con googleSearch para identificar el modelo ──
+      // Esta llamada es solo texto, sin imagen → compatible con googleSearch
+      const sku = ocrResult.model || ocrResult.sku || "";
+      const sizeFr = ocrResult.sizes?.fr || "";
+      let modelName = "Desconocido";
+      let color = "Desconocido";
+
+      if (sku && sku !== "Desconocido" && sku !== "") {
+        // Intentar con varios modelos que soporten google_search grounding
+        const SEARCH_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"];
+        for (const searchModel of SEARCH_MODELS) {
+          try {
+            // Construir query con toda la info disponible para máxima precisión
+            const sizeInfo = ocrResult.sizes?.fr ? `talla EU ${ocrResult.sizes.fr}` : "";
+            const searchPrompt = `Usa Google Search para identificar exactamente esta zapatilla ${brand}.
+
+Datos de la etiqueta:
+- Código de modelo / Art. No: ${sku}
+- Marca: ${brand}
+${sizeInfo ? `- Talla: ${sizeInfo}` : ""}
+${ocrResult.date ? `- Fecha: ${ocrResult.date}` : ""}
+
+TAREA: Busca "${brand} ${sku}" en Google y encuentra el nombre comercial EXACTO de este modelo (ej: "Adidas Samba OG", "New Balance 530 Grey", "Asics Gel-Kayano 14 White Blue").
+
+Devuelve SOLO este JSON sin markdown ni texto extra:
+{"modelName":"nombre comercial completo y exacto incluyendo colorway si lo encuentras","color":"color principal descrito en francés en minúsculas (ej: blanc et bleu, noir, gris et vert)"}`;
+
+            const searchData = await geminiCall(searchModel, {
+              contents: [{ parts: [{ text: searchPrompt }] }],
+              tools: [{ google_search: {} }]
+            }, 25000);
+
+            const searchText = searchData.candidates?.[0]?.content?.parts?.find((p: any) => p.text)?.text || "";
+            console.log(`[OCR] Search ${searchModel} raw:`, searchText.slice(0, 300));
+            const sr = extractJson(searchText);
+            if (sr?.modelName && sr.modelName !== "Desconocido" && sr.modelName.length > 3) {
+              modelName = sr.modelName;
+              color = sr.color || "Desconocido";
+              console.log(`[OCR] Search OK (${searchModel}): ${modelName} / ${color}`);
+              break;
+            }
+          } catch (e: any) {
+            console.warn(`[OCR] Search ${searchModel} failed:`, e.message);
+          }
+        }
+      }
+
+      // ── Ensamblar respuesta final ──────────────────────────────────────────
+      const frSize = sizeFr || ocrResult.sizes?.fr || "";
+      const listingTitle = modelName !== "Desconocido"
+        ? `${modelName} - Pointure ${frSize} ${color} / ${sku}`
+        : `${brand} ${sku} - Pointure ${frSize}`;
+      const listingDescription = modelName !== "Desconocido"
+        ? `Zapatillas ${modelName} en perfecto estado.\n\nCouleur : ${color}\nModele : ${sku}\nTaille : ${frSize}`
+        : `Zapatillas ${brand} en perfecto estado.\n\nModele : ${sku}\nTaille : ${frSize}`;
+
+      return res.json({
+        ...ocrResult,
+        modelName,
+        color,
+        listingTitle,
+        listingDescription,
+      });
     } catch (err: any) {
-      console.error("Tongue analyze error:", err.message);
+      console.error("[OCR] Analyze error:", err.message);
       res.status(500).json({ error: err.message });
     }
+
   });
+
+  // ── Helpers Tongue Generate ─────────────────────────────────────────────────
+  // Parser ligero de dimensiones JPEG (sin libs externas). Lee markers SOF0..SOF2.
+  function jpegDimsFromBase64(b64: string): { w: number; h: number } | null {
+    try {
+      const clean = b64.includes(",") ? b64.split(",")[1] : b64;
+      const buf = Buffer.from(clean, "base64");
+      if (buf.length < 4 || buf[0] !== 0xff || buf[1] !== 0xd8) return null;
+      let off = 2;
+      while (off < buf.length - 8) {
+        if (buf[off] !== 0xff) return null;
+        const marker = buf[off + 1];
+        // SOF0=0xC0, SOF1=0xC1, SOF2=0xC2 (los más comunes). Saltamos DHT/JPG/DAC/RST.
+        const isSOF = marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+        if (isSOF) {
+          const h = buf.readUInt16BE(off + 5);
+          const w = buf.readUInt16BE(off + 7);
+          return { w, h };
+        }
+        const segLen = buf.readUInt16BE(off + 2);
+        off += 2 + segLen;
+      }
+      return null;
+    } catch { return null; }
+  }
+
+  // Elige el aspect ratio soportado por Gemini más cercano al input.
+  function pickGeminiAspect(w: number, h: number): string {
+    const ratios: { label: string; v: number }[] = [
+      { label: "21:9", v: 21 / 9 },
+      { label: "16:9", v: 16 / 9 },
+      { label: "3:2", v: 3 / 2 },
+      { label: "4:3", v: 4 / 3 },
+      { label: "1:1", v: 1 },
+      { label: "3:4", v: 3 / 4 },
+      { label: "2:3", v: 2 / 3 },
+      { label: "9:16", v: 9 / 16 },
+      { label: "9:21", v: 9 / 21 },
+    ];
+    const target = w / h;
+    let best = ratios[0];
+    let bestDiff = Math.abs(Math.log(target / best.v));
+    for (const r of ratios) {
+      const d = Math.abs(Math.log(target / r.v));
+      if (d < bestDiff) { bestDiff = d; best = r; }
+    }
+    return best.label;
+  }
+
+  function buildTonguePrompt(brand: string, d: any, customPrompt: string): string {
+    const sizes = d.sizes || {};
+    // Lista de campos a PRESERVAR (cada marca tiene los suyos) y a REEMPLAZAR.
+    // Formato conversacional con mapeos explícitos viejo→nuevo. Funciona mejor
+    // que CAPS+"DO NOT CHANGE" porque Gemini lee instrucciones naturales.
+    if (brand === "ADIDAS") {
+      return [
+        `Edita la etiqueta interior de la lengüeta de la zapatilla adidas que ves en la foto.`,
+        `Mantén EXACTAMENTE la misma foto en todo: encuadre, fondo, iluminación, ángulo, grano, perspectiva, textura del tejido, costuras, sombras, doblez de la lengüeta. No reencuadres, no añadas elementos nuevos.`,
+        ``,
+        `Conserva sin tocar los siguientes textos exactamente como aparecen ahora:`,
+        `  · ART NO / SKU "${d.sku}"`,
+        `  · FECHA "${d.date}"`,
+        `  · FACTORY / LVL "${d.lvl}"`,
+        `  · Tabla de tallas: US ${sizes.us}  UK ${sizes.uk}  FR ${sizes.fr}  JP ${sizes.jp}`,
+        ``,
+        `SUSTITUYE únicamente estos dos textos por los nuevos valores indicados:`,
+        `  · Brand Serial de abajo a la izquierda → "${d.brandSerial}"`,
+        `  · Reference (la que empieza por #) → "${d.reference}"`,
+        ``,
+        `Usa la misma tipografía sans-serif bold de adidas, mismo tamaño y posición que el texto que sustituyes. Mantén el aspecto de foto cruda con cámara de móvil 12 MP — sin marcas de agua, sin texto adicional, sin firma, sin logo nuevo. Si tienes que invertir o recortar la lengüeta para verla, no lo hagas: deja la imagen idéntica al input salvo los dos textos sustituidos.`,
+        customPrompt || ""
+      ].filter(Boolean).join("\n");
+    }
+    if (brand === "ASICS") {
+      return [
+        `Edita la etiqueta interior de la lengüeta ASICS que ves en la foto.`,
+        `Mantén EXACTAMENTE la misma foto en todo: encuadre, fondo, ángulo, perspectiva, iluminación, grano, costuras y textura del tejido. No reencuadres ni añadas elementos.`,
+        ``,
+        `Preserva tal cual:`,
+        `  · SKU "${d.sku}"`,
+        `  · FECHA "${d.date}"`,
+        `  · Tabla de tallas con los separadores verticales | : US ${sizes.us} | UK ${sizes.uk} | FR ${sizes.fr} | JP ${sizes.jp}`,
+        ``,
+        `SUSTITUYE solo:`,
+        `  · Tracking code (1 letra + 6 dígitos) → "${d.reference}"`,
+        `  · Serial number (15 alfanuméricos en mayúsculas) → "${d.brandSerial}"`,
+        ``,
+        `Usa la tipografía compacta y limpia característica de ASICS, mismo tamaño y posición que los textos sustituidos. Estilo de foto macro de móvil, sin marcas de agua ni texto extra.`,
+        customPrompt || ""
+      ].filter(Boolean).join("\n");
+    }
+    if (brand === "ONITSUKA") {
+      return [
+        `Edita la etiqueta interior de la lengüeta ONITSUKA TIGER que ves en la foto.`,
+        `Mantén EXACTAMENTE la misma foto: mismo encuadre, fondo, ángulo, iluminación, grano, costuras y textura. No reencuadres ni añadas elementos.`,
+        ``,
+        `Preserva tal cual:`,
+        `  · SKU "${d.sku}"`,
+        `  · FECHA "${d.date}"`,
+        `  · Tabla de tallas: US ${sizes.us}  UK ${sizes.uk}  FR ${sizes.fr}  CM ${sizes.jp}`,
+        `  · Texto país "MADE IN INDONESIA / FABRIQUE EN INDONESIE"`,
+        ``,
+        `SUSTITUYE solo:`,
+        `  · Batch Code (formato F + 6 dígitos) → "${d.reference}"`,
+        `  · Unit Serial (15 alfanuméricos en mayúsculas) → "${d.brandSerial}"`,
+        ``,
+        `Tipografía sans-serif ultra-condensada, fondo blanco mate, impresión transfer térmico. Sin logo de tigre, sin marcas de agua, etiqueta puramente informativa.`,
+        customPrompt || ""
+      ].filter(Boolean).join("\n");
+    }
+    // NEW BALANCE (default)
+    return [
+      `Edita la etiqueta interior de la lengüeta NEW BALANCE que ves en la foto.`,
+      `Mantén EXACTAMENTE la misma foto: mismo encuadre, fondo, ángulo, iluminación, grano, costuras y textura del tejido satinado. No reencuadres ni añadas elementos nuevos.`,
+      ``,
+      `Preserva tal cual:`,
+      `  · Style / Model "${d.sku}"`,
+      `  · Fecha "${d.date}"`,
+      `  · Factory "${d.lvl}"`,
+      `  · Tabla de tallas: US ${sizes.us}  UK ${sizes.uk}  EU ${sizes.fr}  CM ${sizes.jp}`,
+      ``,
+      `SUSTITUYE exactamente estos 3 códigos:`,
+      `  · Serial 1 (12 dígitos) → "${d.reference}"`,
+      `  · Serial 2 (7 dígitos) → "${d.reference2}"`,
+      `  · Brand code → "${d.brandSerial}"`,
+      ``,
+      `Tipografía industrial pesada idéntica a la original, mismas posiciones, foto macro de móvil. Sin marcas de agua, sin firma, sin texto extra. Sustituye únicamente los 3 códigos indicados y deja todo lo demás idéntico.`,
+      customPrompt || ""
+    ].filter(Boolean).join("\n");
+  }
 
   app.post("/api/tongue/generate", geminiLimiter, requireLicense as any, async (req: AuthRequest, res) => {
     const { imageBase64, brand, detections, customPrompt } = req.body;
@@ -941,163 +1931,69 @@ async function startServer() {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY no configurada en el servidor" });
 
-    // ── Prompts ultra-específicos por marca ─────────────────────────────────
-    // Framing: "photo editor" task, not "reconstruction". Much clearer instructions.
-    let brandPrompt = "";
-
-    if (brand === "ADIDAS") {
-      brandPrompt = `You are a precise photo editor. I am giving you a photo of an Adidas shoe tongue label.
-
-YOUR TASK: Edit ONLY these two text values in the image. Change nothing else.
-
-VALUES TO UPDATE:
-- The barcode/serial number that starts with "#" → replace with: ${detections.reference}
-- The 13-character alphanumeric code at the very bottom (after the word "adidas") → replace with: ${detections.brandSerial}
-
-DO NOT TOUCH (keep pixel-perfect identical):
-- ART NO / article number: ${detections.sku}
-- Date code: ${detections.date}
-- Factory / LVL code: ${detections.lvl}
-- All size info: US ${detections.sizes?.us} / UK ${detections.sizes?.uk} / FR ${detections.sizes?.fr} / JP ${detections.sizes?.jp}
-- All graphics, logos, fonts, colors, background texture, stitching, lighting
-
-OUTPUT: A photorealistic image of a real Adidas tongue label, taken with a smartphone camera. Same angle, same lighting, same fabric texture as the input. No watermarks. No AI artifacts.
-${customPrompt ? `\nADDITIONAL RULES:\n${customPrompt}` : ""}`;
-
-    } else if (brand === "ASICS") {
-      brandPrompt = `You are a precise photo editor. I am giving you a photo of an ASICS shoe tongue label.
-
-YOUR TASK: Edit ONLY these two text values in the image. Change nothing else.
-
-VALUES TO UPDATE:
-- Tracking/batch code (format: letter + 6 digits, e.g. F960925) → replace with: ${detections.reference}
-- Unit serial number (15 uppercase alphanumeric chars) → replace with: ${detections.brandSerial}
-
-DO NOT TOUCH (keep pixel-perfect identical):
-- SKU / model code: ${detections.sku}
-- Date: ${detections.date}
-- All size info: US ${detections.sizes?.us} / UK ${detections.sizes?.uk} / FR ${detections.sizes?.fr} / JP ${detections.sizes?.jp}
-- Size table vertical dividers (|), compressed ASICS typography, all other text
-
-OUTPUT: A photorealistic macro photo of a real ASICS tongue label. Same lighting, angle, fabric texture as the input. No AI artifacts.
-${customPrompt ? `\nADDITIONAL RULES:\n${customPrompt}` : ""}`;
-
-    } else if (brand === "ONITSUKA") {
-      brandPrompt = `You are a precise photo editor. I am giving you a photo of an Onitsuka Tiger shoe tongue label.
-
-YOUR TASK: Edit ONLY these two text values in the image. Change nothing else.
-
-VALUES TO UPDATE:
-- Batch code (format: F + 6 digits) → replace with: ${detections.reference}
-- Unit serial (15 uppercase alphanumeric chars) → replace with: ${detections.brandSerial}
-
-DO NOT TOUCH (keep pixel-perfect identical):
-- Top SKU code: ${detections.sku}
-- Date: ${detections.date}
-- Size grid: CM ${detections.sizes?.jp} / EURO ${detections.sizes?.fr} / US ${detections.sizes?.us} / UK ${detections.sizes?.uk}
-- "MADE IN INDONESIA" and "FABRIQUE EN INDONESIE" text
-- All fonts, borders, background, stitching, thermal-print look
-
-OUTPUT: A photorealistic photo of a real Onitsuka Tiger tongue label. Same angle, lighting and white matte fabric texture as input. No AI artifacts.
-${customPrompt ? `\nADDITIONAL RULES:\n${customPrompt}` : ""}`;
-
-    } else {
-      // NEW BALANCE
-      brandPrompt = `You are a precise photo editor. I am giving you a photo of a New Balance shoe tongue label.
-
-YOUR TASK: Edit ONLY these three serial codes in the image. Change nothing else.
-
-VALUES TO UPDATE:
-- 12-digit barcode number → replace with: ${detections.reference}
-- 7-digit number → replace with: ${detections.reference2}
-- Brand serial code (format: 4 letters + 4 digits + space + 3 letters) → replace with: ${detections.brandSerial}
-
-DO NOT TOUCH (keep pixel-perfect identical):
-- Model / style code: ${detections.sku}
-- Date: ${detections.date}
-- Factory code: ${detections.lvl}
-- All size info: US ${detections.sizes?.us} / UK ${detections.sizes?.uk} / EU ${detections.sizes?.fr} / CM ${detections.sizes?.jp}
-- White satin fabric texture, all fonts, stitching, logo, lighting, angle
-
-OUTPUT: A photorealistic macro photo of a real New Balance tongue label taken with a smartphone. Same lighting and fabric texture as input. No watermarks, no AI artifacts.
-${customPrompt ? `\nADDITIONAL RULES:\n${customPrompt}` : ""}`;
-    }
-
-    // ── Helper: one attempt at one model ────────────────────────────────────
-    const tryGenerate = async (model: string, parts: any[]): Promise<string | null> => {
-      try {
-        const r = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              contents: [{ parts }],
-              generationConfig: {
-                responseModalities: ["TEXT", "IMAGE"],
-                // Portrait ratio — tongue labels are taller than wide
-                imageConfig: { aspectRatio: "3:4" }
-              }
-            })
-          }
-        );
-        const data = await r.json();
-        if (!r.ok) { console.error(`[tongue] ${model} HTTP error:`, JSON.stringify(data).slice(0, 200)); return null; }
-        for (const part of data.candidates?.[0]?.content?.parts || []) {
-          if (part.inlineData?.data) return `data:image/png;base64,${part.inlineData.data}`;
-        }
-        return null;
-      } catch (e: any) {
-        console.error(`[tongue] ${model} exception:`, e.message);
-        return null;
-      }
-    };
+    const brandPrompt = buildTonguePrompt(brand, detections, customPrompt || "");
 
     try {
-      const base64Data = imageBase64?.includes(",") ? imageBase64.split(",")[1] : (imageBase64 || "");
-      const parts: any[] = [];
-      if (base64Data) parts.push({ inlineData: { mimeType: "image/jpeg", data: base64Data } });
-      parts.push({ text: brandPrompt });
+      const parts: any[] = [{ text: brandPrompt }];
+      let aspectRatio: string | null = null;
+      if (imageBase64) {
+        const base64Data = imageBase64.includes(",") ? imageBase64.split(",")[1] : imageBase64;
+        parts.unshift({ inlineData: { mimeType: "image/jpeg", data: base64Data } });
+        const dims = jpegDimsFromBase64(base64Data);
+        if (dims && dims.w > 0 && dims.h > 0) aspectRatio = pickGeminiAspect(dims.w, dims.h);
+      }
 
-      // ── Strategy: fire 2 parallel attempts per model, use first success ──
       const IMG_MODELS = [
-        "gemini-2.0-flash-exp-image-generation",
-        "gemini-2.0-flash-preview-image-generation",
         "gemini-2.5-flash-image",
+        "gemini-2.0-flash-exp-image-generation",
+        "gemini-2.0-flash-preview-image-generation"
       ];
+      const MAX_RETRIES_PER_MODEL = 3;
+      let lastErr = "";
+      let lastTextResponse = "";
 
-      // Round 1: fire first two models in parallel
-      console.log(`[tongue] Starting parallel generation for ${brand}`);
-      const round1 = await Promise.allSettled([
-        tryGenerate(IMG_MODELS[0], parts),
-        tryGenerate(IMG_MODELS[1], parts),
-      ]);
-      for (const r of round1) {
-        if (r.status === "fulfilled" && r.value) {
-          console.log(`[tongue] Round 1 success`);
-          return res.json({ image: r.value });
+      for (const model of IMG_MODELS) {
+        for (let attempt = 1; attempt <= MAX_RETRIES_PER_MODEL; attempt++) {
+          const body: any = {
+            contents: [{ parts }],
+            generationConfig: {
+              responseModalities: ["TEXT", "IMAGE"],
+              // Temperature baja para consistencia. Ligero variation cada attempt.
+              temperature: 0.35 + (attempt - 1) * 0.1,
+            },
+          };
+          if (aspectRatio) body.generationConfig.imageConfig = { aspectRatio };
+
+          const r = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+            { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
+          );
+          const data = await r.json();
+          if (!r.ok) {
+            lastErr = JSON.stringify(data);
+            console.error(`[tongue] ${model} attempt ${attempt} HTTP error:`, lastErr.slice(0, 300));
+            // Si el modelo no existe (404) o es 400 mal formado, no reintentar este modelo.
+            if (r.status === 404 || r.status === 400) break;
+            continue;
+          }
+          // Busca primera parte con inlineData (la imagen).
+          const partsResp = data.candidates?.[0]?.content?.parts || [];
+          for (const p of partsResp) {
+            if (p.inlineData?.data) {
+              return res.json({ image: `data:image/png;base64,${p.inlineData.data}`, model, attempts: attempt, aspectRatio });
+            }
+            if (p.text) lastTextResponse = p.text.slice(0, 200);
+          }
+          console.warn(`[tongue] ${model} attempt ${attempt}: sin imagen, sólo texto:`, lastTextResponse);
         }
       }
 
-      // Round 2: retry with the two best models simultaneously
-      console.log(`[tongue] Round 1 failed, starting round 2`);
-      const round2 = await Promise.allSettled([
-        tryGenerate(IMG_MODELS[0], parts),
-        tryGenerate(IMG_MODELS[2], parts),
-      ]);
-      for (const r of round2) {
-        if (r.status === "fulfilled" && r.value) {
-          console.log(`[tongue] Round 2 success`);
-          return res.json({ image: r.value });
-        }
-      }
-
-      // Round 3: last resort — single attempt on most reliable model
-      console.log(`[tongue] Round 2 failed, starting round 3`);
-      const final = await tryGenerate(IMG_MODELS[0], parts);
-      if (final) return res.json({ image: final });
-
-      res.status(422).json({ error: "El modelo no devolvió imagen tras 5 intentos. Espera 30 segundos e inténtalo de nuevo." });
+      console.error("[tongue] todos los modelos fallaron. Último texto:", lastTextResponse, "Último error:", lastErr.slice(0, 300));
+      res.status(422).json({
+        error: lastTextResponse
+          ? `Gemini respondió texto en vez de imagen: ${lastTextResponse.slice(0, 120)}…`
+          : "Ningún modelo devolvió imagen tras los reintentos. Intenta de nuevo en un momento.",
+      });
     } catch (err: any) {
       console.error("Tongue generate error:", err.message);
       res.status(500).json({ error: err.message });
@@ -1134,20 +2030,1020 @@ ${customPrompt ? `\nADDITIONAL RULES:\n${customPrompt}` : ""}`;
     }
   });
 
-  // ── Lamine Anty Downloads ────────────────────────────────────────────────────
-  // Equivalent to: https://blackstock.es/downloads/blackstock-anty/Blackstock-Anty-0.3.0.dmg
-  // Usage:         https://founderclub-production.up.railway.app/downloads/lamine-anty/Lamine-Anty-0.3.0-arm64.dmg
-  const GH = "https://github.com/EcomRodrii/lamine-anty-releases/releases/download/v0.3.0";
+  // ── SSE: Ops Terminal stream ─────────────────────────────────────────────────
+  // El cliente se conecta con el token JWT en query param porque EventSource
+  // no soporta cabeceras personalizadas.
+  app.get("/api/ops-stream", async (req: any, res: Response) => {
+    const token = (req.query.token as string) || req.headers.authorization?.replace("Bearer ", "");
+    if (!token) return res.status(401).end();
+    let userId: string;
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET) as any;
+      const r = await pool.query("SELECT id FROM users WHERE id=$1", [decoded.id]);
+      if (!r.rows[0]) return res.status(401).end();
+      userId = String(r.rows[0].id);
+    } catch { return res.status(401).end(); }
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no"); // evita que nginx/Railway bufferice
+    res.flushHeaders();
+
+    if (!sseClients.has(userId)) sseClients.set(userId, new Set());
+    sseClients.get(userId)!.add(res);
+
+    // Evento de bienvenida
+    res.write(`data: ${JSON.stringify({ level: "sys", tag: "STREAM", msg: "ops-terminal conectado · live feed activo", ts: new Date().toISOString() })}\n\n`);
+
+    // Heartbeat cada 25s para que Railway no cierre la conexión idle
+    const hb = setInterval(() => {
+      try { res.write(": ping\n\n"); } catch { clearInterval(hb); sseClients.get(userId)?.delete(res); }
+    }, 25000);
+
+    req.on("close", () => {
+      clearInterval(hb);
+      sseClients.get(userId)?.delete(res);
+    });
+  });
+
+  // ── Lamine Hub Extension endpoints ──────────────────────────────────────────
+  // Health check que usa el control-center de la extensión
+  app.get("/api/up", (_req, res) => {
+    res.json({ ok: true, data: { serverTime: new Date().toISOString() } });
+  });
+
+  // Login para el módulo de análisis (usa Bearer igual que el auth principal)
+  app.post("/api/extension/login", authLimiter, async (req, res) => {
+    const { email, password } = req.body;
+    if (!email || !password)
+      return res.status(400).json({ ok: false, error: "email_and_password_required" });
+    try {
+      const result = await pool.query("SELECT * FROM users WHERE email = $1", [email.trim().toLowerCase()]);
+      const user = result.rows[0];
+      if (!user || !(await bcrypt.compare(password, user.password_hash)))
+        return res.status(401).json({ ok: false, error: "invalid_credentials" });
+      const token = jwt.sign({ id: user.id }, JWT_SECRET, { expiresIn: "30d" });
+      const licRes = await pool.query(
+        "SELECT type, expires_at FROM licenses WHERE user_id=$1 AND is_active=TRUE AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1",
+        [user.id]
+      );
+      const lic = licRes.rows[0];
+      const licenseStatus = (lic || user.is_admin) ? "active" : "inactive";
+      res.json({
+        ok: true, token,
+        user: { id: user.id, email: user.email, username: user.username, role: user.is_admin ? "admin" : "user" },
+        license: { status: licenseStatus, type: lic?.type || (user.is_admin ? "admin" : null) },
+      });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: "server_error" });
+    }
+  });
+
+  // Verify para el módulo de análisis — acepta JWT Bearer O license_key en body
+  const extensionVerifyHandler = async (req: Request, res: Response) => {
+    // Intento 1: Bearer JWT
+    const bearerToken = req.headers.authorization?.replace("Bearer ", "");
+    if (bearerToken) {
+      try {
+        const decoded = jwt.verify(bearerToken, JWT_SECRET) as any;
+        const result = await pool.query("SELECT id, username, email, is_admin FROM users WHERE id = $1", [decoded.id]);
+        if (result.rows[0]) {
+          const user = result.rows[0];
+          const licRes = await pool.query(
+            "SELECT is_active FROM licenses WHERE user_id=$1 AND is_active=TRUE AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1",
+            [user.id]
+          );
+          if (licRes.rows[0] || user.is_admin) {
+            return res.json({ ok: true, valid: true, allowed: true, status: "active",
+              user: { id: user.id, username: user.username, email: user.email, is_admin: user.is_admin },
+              config: { extensionMinVersion: null }, });
+          }
+        }
+      } catch {}
+    }
+    // Intento 2: key en body puede ser JWT (token del hub) o license key
+    const keyRaw = req.body?.key || req.body?.license_key || req.body?.licenseKey || "";
+    const keyStr = String(keyRaw).trim();
+    // Si parece JWT, verificarlo como Bearer
+    if (keyStr.startsWith("ey") && keyStr.includes(".")) {
+      try {
+        const decoded = jwt.verify(keyStr, JWT_SECRET) as any;
+        const result = await pool.query("SELECT id, username, email, is_admin FROM users WHERE id = $1", [decoded.id]);
+        if (result.rows[0]) {
+          const user = result.rows[0];
+          const licRes = await pool.query(
+            "SELECT is_active FROM licenses WHERE user_id=$1 AND is_active=TRUE AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1",
+            [user.id]
+          );
+          if (licRes.rows[0] || user.is_admin) {
+            return res.json({ ok: true, valid: true, allowed: true, status: "active",
+              user: { id: user.id, username: user.username, email: user.email },
+              config: { extensionMinVersion: null } });
+          }
+          return res.status(403).json({ ok: false, allowed: false, status: "inactive", error: "license_not_active" });
+        }
+      } catch {}
+    }
+    const licenseKey = keyStr.toUpperCase();
+    if (licenseKey) {
+      const licRes = await pool.query(
+        "SELECT l.*, u.id as uid, u.email FROM licenses l LEFT JOIN users u ON u.id=l.user_id WHERE l.key=$1 AND l.is_active=TRUE AND (l.expires_at IS NULL OR l.expires_at > NOW()) LIMIT 1",
+        [licenseKey]
+      );
+      if (licRes.rows[0]) {
+        const lic = licRes.rows[0];
+        return res.json({ ok: true, valid: true, allowed: true, status: "active",
+          user: { id: lic.uid, email: lic.email },
+          config: { extensionMinVersion: null },
+          license: { key: licenseKey, status: "active", expiresAt: lic.expires_at } });
+      }
+      return res.status(403).json({ ok: false, allowed: false, status: "inactive", error: "license_not_found" });
+    }
+    return res.status(401).json({ ok: false, allowed: false, status: "unauthorized", error: "unauthorized" });
+  };
+  app.get("/api/extension/verify", extensionVerifyHandler as any);
+  app.post("/api/extension/verify", extensionVerifyHandler as any);
+
+  // Whitelist endpoints para bazooka — PUBLIC (workers check before reporting)
+  app.get("/api/extension/whitelist-items", async (_req: Request, res: Response) => {
+    res.json({ ok: true, items: [] });
+  });
+  app.get("/api/extension/whitelist-profiles", async (_req: Request, res: Response) => {
+    res.json({ ok: true, profiles: [] });
+  });
+  app.post("/api/extension/whitelist-items", requireLicense as any, async (req: AuthRequest, res) => {
+    res.json({ ok: true });
+  });
+  app.post("/api/extension/whitelist-profiles", requireLicense as any, async (req: AuthRequest, res) => {
+    res.json({ ok: true });
+  });
+
+  // Monitor stubs — usados por el módulo analisis de la extensión
+  const monitorAuthOk = async (req: Request) => {
+    const token = req.headers.authorization?.replace("Bearer ", "");
+    const key = req.body?.key || req.body?.license_key || req.headers["x-license-key"] || (req.query as any)?.key || "";
+    if (token) {
+      try { jwt.verify(token, JWT_SECRET); return true; } catch {}
+    }
+    if (key) {
+      const r = await pool.query("SELECT id FROM licenses WHERE key=$1 AND is_active=TRUE LIMIT 1", [String(key).trim().toUpperCase()]);
+      return !!r.rows[0];
+    }
+    return false;
+  };
+
+  app.get("/api/extension/monitor/overview", async (req: Request, res: Response) => {
+    if (!await monitorAuthOk(req)) return res.status(401).json({ ok: false, error: "unauthorized" });
+    res.json({ ok: true, data: { campaigns: [], products: [], activeCount: 0, soldCount: 0, trackedCount: 0, serverTime: new Date().toISOString() } });
+  });
+
+  app.post("/api/extension/monitor/requests", async (req: Request, res: Response) => {
+    if (!await monitorAuthOk(req)) return res.status(401).json({ ok: false, error: "unauthorized" });
+    res.json({ ok: true, data: { requests: [], total: 0 } });
+  });
+
+  app.post("/api/monitor/workers/register", async (req: Request, res: Response) => {
+    if (!await monitorAuthOk(req)) return res.status(401).json({ ok: false, error: "unauthorized" });
+    res.json({ ok: true, workerId: "worker-" + Date.now(), status: "registered" });
+  });
+
+  app.post("/api/monitor/workers/heartbeat", async (req: Request, res: Response) => {
+    if (!await monitorAuthOk(req)) return res.status(401).json({ ok: false, error: "unauthorized" });
+    res.json({ ok: true, status: "alive" });
+  });
+
+  app.post("/api/monitor/tasks/claim", async (req: Request, res: Response) => {
+    if (!await monitorAuthOk(req)) return res.status(401).json({ ok: false, error: "unauthorized" });
+    res.json({ ok: true, task: null });
+  });
+
+  app.get("/api/monitor/tasks/:id", async (req: Request, res: Response) => {
+    if (!await monitorAuthOk(req)) return res.status(401).json({ ok: false, error: "unauthorized" });
+    res.json({ ok: true, task: null });
+  });
+
+  app.post("/api/monitor/tasks/:id", async (req: Request, res: Response) => {
+    if (!await monitorAuthOk(req)) return res.status(401).json({ ok: false, error: "unauthorized" });
+    res.json({ ok: true });
+  });
+
+  // Lista de módulos/features que muestra el control-center
+  app.get("/api/extension/features", (_req, res) => {
+    res.json({
+      ok: true,
+      data: {
+        modules: [
+          { id: "relist_engine", title: "Republicar anuncios", status: "ready", sourceState: "confirmado",
+            summary: "Cola de republicacion y repost de artículos.", improvement: "Colas controladas y textos seguros.", source: "Vinted API" },
+          { id: "auto_messages", title: "Mensajes automáticos", status: "ready", sourceState: "confirmado",
+            summary: "Respuestas automáticas a likes y conversaciones.", improvement: "Separación por cuenta y scoring.", source: "Vinted API" },
+          { id: "closet_panel", title: "Panel de vestuario", status: "ready", sourceState: "confirmado",
+            summary: "Gestión masiva de artículos.", improvement: "Panel limpio y edición masiva.", source: "Vinted API" },
+          { id: "smart_agent", title: "Agente inteligente", status: "ready", sourceState: "confirmado",
+            summary: "IA para respuestas y negociaciones.", improvement: "Memoria por cliente.", source: "Vinted API + IA" },
+          { id: "restocker", title: "Reabastecedor", status: "ready", sourceState: "confirmado",
+            summary: "Restock automático de inventario.", improvement: "Colas por prioridad.", source: "Vinted API" },
+          { id: "bazooka", title: "Bazooka", status: "ready", sourceState: "confirmado",
+            summary: "Control de mercado y eliminación de competencia.", improvement: "Coordinado con Railway.", source: "/api/bazooka/*" },
+          { id: "smart_offers", title: "Ofertas inteligentes", status: "ready", sourceState: "confirmado",
+            summary: "Aceptación y contraoferta automática.", improvement: "Reglas por margen y stock.", source: "Vinted API" },
+          { id: "analisis", title: "Análisis de mercado", status: "ready", sourceState: "confirmado",
+            summary: "Métricas de ventas y rendimiento.", improvement: "Conectado con dashboard Founderclub.", source: "/api/dashboard" },
+          { id: "orders", title: "Gestión de pedidos", status: "base", sourceState: "parcial",
+            summary: "Pedidos y etiquetas.", improvement: "Tablero completo próximamente.", source: "Vinted API" },
+        ]
+      }
+    });
+  });
+
+  // ── Vinted Entitlements — called by hub-addon.js background ────────────────
+  app.get("/api/vinted/entitlements", requireLicense as any, async (req: AuthRequest, res: Response) => {
+    const plan = String((req.user as any)?.plan || "lamine").toLowerCase();
+    res.json({
+      ok: true,
+      data: {
+        plan,
+        status: "active",
+        is_duplicate: false,
+        can_reposts: true,
+        can_auto_messages: true,
+        can_smart_offers: true,
+        can_restocker: true,
+        can_monitor: true,
+        can_ai_messages: true,
+        can_bazooka: true,
+        enforced_limits: {
+          ai_reposts: true,
+          auto_messages: true,
+          smart_offers: true,
+          smart_agents: true,
+          restocker: true,
+          orders: true,
+          inventory: true,
+          bazooka: true,
+          max_accounts: 10,
+        },
+      },
+    });
+  });
+
+  // ── Extension Runtime ────────────────────────────────────────────────────────
+  app.get("/api/extension/runtime", requireLicense as any, async (req: AuthRequest, res: Response) => {
+    const email = String((req.user as any)?.email || "").toLowerCase();
+    res.json({
+      ok: true,
+      data: {
+        productCode: "automatizacion",
+        automationEnabled: true,
+        plan: "lamine",
+        featureFlags: {
+          restocker: true,
+          autoMessages: true,
+          smartOffers: true,
+          aiMessages: true,
+          smartAgent: true,
+          ordersSync: true,
+          bazooka: true,
+          monitor: true,
+          inventory: true,
+        },
+        modulesVisible: {
+          restocker: true,
+          autoMessages: true,
+          smartOffers: true,
+          smartAgent: true,
+          orders: true,
+          bazooka: true,
+          monitor: true,
+          inventory: true,
+        },
+      },
+      config: { heartbeatIntervalSec: 60, workerPollIntervalSec: 60, camuflajePeriodMin: 30 },
+      flags: { workerEnabled: true, reportEnabled: true },
+      serverTime: new Date().toISOString(),
+    });
+  });
+
+  // ── Worker Endpoints (Distributed Bazooka) ───────────────────────────────────
+
+  app.get("/api/worker/ping", requireLicense as any, async (_req: AuthRequest, res: Response) => {
+    res.json({ ok: true, status: "online", serverTime: new Date().toISOString() });
+  });
+
+  app.get("/api/worker/overview", requireLicense as any, async (_req: AuthRequest, res: Response) => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const result = await pool.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE status = 'pending')                        AS pending,
+        COUNT(*) FILTER (WHERE status = 'assigned')                       AS assigned,
+        COUNT(*) FILTER (WHERE status = 'done'   AND completed_at >= $1)  AS done_today,
+        COUNT(*) FILTER (WHERE status = 'failed' AND completed_at >= $1)  AS failed_today
+      FROM report_jobs
+    `, [today]);
+    const row = result.rows[0] || {};
+    res.json({
+      ok: true,
+      pending:    parseInt(row.pending    || "0"),
+      assigned:   parseInt(row.assigned   || "0"),
+      doneToday:  parseInt(row.done_today || "0"),
+      failedToday:parseInt(row.failed_today || "0"),
+    });
+  });
+
+  app.get("/api/worker/jobs/next", requireLicense as any, async (req: AuthRequest, res: Response) => {
+    const userId = req.user!.id;
+
+    // Reset stale assigned jobs (assigned >5min ago) back to pending
+    await pool.query(`
+      UPDATE report_jobs
+      SET status = 'pending', assigned_to = NULL, assigned_at = NULL, updated_at = NOW()
+      WHERE status = 'assigned' AND assigned_at < NOW() - INTERVAL '5 minutes'
+    `);
+
+    // Atomically grab next pending job
+    const result = await pool.query(`
+      UPDATE report_jobs
+      SET status = 'assigned', assigned_to = $1, assigned_at = NOW(), updated_at = NOW()
+      WHERE id = (
+        SELECT id FROM report_jobs
+        WHERE status = 'pending'
+        ORDER BY created_at ASC
+        LIMIT 1
+        FOR UPDATE SKIP LOCKED
+      )
+      RETURNING *
+    `, [userId]);
+
+    const job = result.rows[0] || null;
+    res.json({ ok: true, job });
+  });
+
+  app.post("/api/worker/jobs/:id/status", requireLicense as any, async (req: AuthRequest, res: Response) => {
+    const userId = req.user!.id;
+    const jobId  = parseInt(req.params.id);
+    const status = req.body?.status;
+    const error  = req.body?.error ? String(req.body.error).slice(0, 500) : null;
+
+    if (!status || !["done", "failed"].includes(status)) {
+      return res.status(400).json({ ok: false, error: "status must be 'done' or 'failed'" });
+    }
+    if (isNaN(jobId)) {
+      return res.status(400).json({ ok: false, error: "invalid job id" });
+    }
+
+    const result = await pool.query(`
+      UPDATE report_jobs
+      SET status = $1, completed_at = NOW(), error_message = $2, updated_at = NOW()
+      WHERE id = $3 AND assigned_to = $4
+      RETURNING id
+    `, [status, error, jobId, userId]);
+
+    if (!result.rows[0]) {
+      return res.status(404).json({ ok: false, error: "job not found or not assigned to you" });
+    }
+    res.json({ ok: true, id: result.rows[0].id });
+  });
+
+  // ── Submit / View Report Jobs (PRO clients — Bazooka) ────────────────────────
+
+  app.post("/api/bazooka/report-jobs", requireLicense as any, async (req: AuthRequest, res: Response) => {
+    const userId = req.user!.id;
+    const rawItems = Array.isArray(req.body?.items)
+      ? req.body.items
+      : [{ url: req.body?.url, itemId: req.body?.itemId, title: req.body?.title }];
+
+    const items = rawItems.filter((i: any) => i?.url);
+    if (!items.length) {
+      return res.status(400).json({ ok: false, error: "no valid items provided" });
+    }
+
+    let queued = 0;
+    let duplicate = 0;
+
+    for (const item of items) {
+      const url    = String(item.url   || "").slice(0, 1000);
+      const itemId = item.itemId ? String(item.itemId).slice(0, 100) : null;
+      const title  = item.title  ? String(item.title ).slice(0, 500) : null;
+
+      // Skip if already pending or assigned for same itemId or url
+      if (itemId) {
+        const existing = await pool.query(
+          `SELECT id FROM report_jobs WHERE item_id = $1 AND status IN ('pending','assigned') LIMIT 1`,
+          [itemId]
+        );
+        if (existing.rows[0]) { duplicate++; continue; }
+      }
+
+      await pool.query(
+        `INSERT INTO report_jobs (item_url, item_id, title, submitted_by) VALUES ($1, $2, $3, $4)`,
+        [url, itemId, title, userId]
+      );
+      queued++;
+    }
+
+    res.json({ ok: true, queued, duplicate });
+  });
+
+  app.get("/api/bazooka/report-jobs", requireLicense as any, async (req: AuthRequest, res: Response) => {
+    const userId = req.user!.id;
+    const result = await pool.query(
+      `SELECT id, item_url, item_id, title, status, assigned_at, completed_at, error_message, created_at
+       FROM report_jobs
+       WHERE submitted_by = $1
+       ORDER BY created_at DESC
+       LIMIT 50`,
+      [userId]
+    );
+    res.json({ ok: true, jobs: result.rows });
+  });
+
+  // ── Lamine HUB Advanced Endpoints ─────────────────────────────────────────
+
+  // 1. Heartbeat — registra sesión de dispositivo y aplica límite/lock
+  app.post("/api/extension/heartbeat", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.user!.id;
+      const { installId, browserId, hwid, version } = req.body || {};
+      const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || null;
+      const userAgent = (req.headers["user-agent"] as string) || null;
+
+      // Comprobar dispositivos activos (últimas 24h, distintos install_id)
+      const activeCountQ = await pool.query(
+        `SELECT COUNT(DISTINCT install_id)::int AS n
+         FROM device_sessions
+         WHERE user_id = $1 AND last_seen > NOW() - INTERVAL '24 hours'
+           AND install_id IS NOT NULL AND install_id <> $2`,
+        [userId, installId || ""]
+      );
+      const activeOther = activeCountQ.rows[0]?.n ?? 0;
+      if (activeOther >= 5) {
+        return res.json({ ok: false, banned: true, error: "device_mismatch" });
+      }
+
+      // Lock por hwid: si ya hay un hwid distinto registrado en las últimas 24h, bloquear
+      if (hwid) {
+        const hwidQ = await pool.query(
+          `SELECT DISTINCT hwid FROM device_sessions
+           WHERE user_id = $1 AND hwid IS NOT NULL AND hwid <> ''
+             AND last_seen > NOW() - INTERVAL '24 hours'`,
+          [userId]
+        );
+        const known = hwidQ.rows.map((r: any) => r.hwid);
+        if (known.length > 0 && !known.includes(hwid)) {
+          return res.json({ ok: false, banned: true, error: "device_mismatch" });
+        }
+      }
+
+      await pool.query(
+        `INSERT INTO device_sessions (user_id, install_id, browser_id, hwid, version, ip, user_agent, last_seen)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+         ON CONFLICT (user_id, install_id) DO UPDATE
+           SET browser_id = EXCLUDED.browser_id,
+               hwid = EXCLUDED.hwid,
+               version = EXCLUDED.version,
+               ip = EXCLUDED.ip,
+               user_agent = EXCLUDED.user_agent,
+               last_seen = NOW()`,
+        [userId, installId || null, browserId || null, hwid || null, version || null, ip, userAgent]
+      );
+
+      res.json({ ok: true, status: "active" });
+    } catch (err: any) {
+      console.error("heartbeat error", err?.message);
+      res.status(500).json({ ok: false, error: "server_error" });
+    }
+  });
+
+  // 2. Whitelist items — añadir
+  app.post("/api/extension/whitelist-items", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.user!.id;
+      const { itemId, itemUrl } = req.body || {};
+      if (!itemId) return res.status(400).json({ ok: false, error: "itemId_required" });
+      await pool.query(
+        `INSERT INTO whitelist_items (user_id, item_id, item_url)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (user_id, item_id) DO UPDATE SET item_url = EXCLUDED.item_url`,
+        [userId, String(itemId), itemUrl || null]
+      );
+      res.json({ ok: true });
+    } catch (err: any) {
+      console.error("whitelist-items POST error", err?.message);
+      res.status(500).json({ ok: false, error: "server_error" });
+    }
+  });
+
+  // 3. Whitelist items — listar
+  app.get("/api/extension/whitelist-items", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.user!.id;
+      const result = await pool.query(
+        `SELECT item_id, item_url, created_at FROM whitelist_items
+         WHERE user_id = $1 ORDER BY created_at DESC`,
+        [userId]
+      );
+      const items = result.rows.map((r: any) => ({
+        itemId: r.item_id,
+        itemUrl: r.item_url,
+        createdAt: r.created_at,
+      }));
+      res.json({ ok: true, items });
+    } catch (err: any) {
+      console.error("whitelist-items GET error", err?.message);
+      res.status(500).json({ ok: false, error: "server_error" });
+    }
+  });
+
+  // 4. Whitelist profiles — añadir
+  app.post("/api/extension/whitelist-profiles", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.user!.id;
+      const { memberId, profileUrl } = req.body || {};
+      if (!memberId) return res.status(400).json({ ok: false, error: "memberId_required" });
+      await pool.query(
+        `INSERT INTO whitelist_profiles (user_id, member_id, profile_url)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (user_id, member_id) DO UPDATE SET profile_url = EXCLUDED.profile_url`,
+        [userId, String(memberId), profileUrl || null]
+      );
+      res.json({ ok: true });
+    } catch (err: any) {
+      console.error("whitelist-profiles POST error", err?.message);
+      res.status(500).json({ ok: false, error: "server_error" });
+    }
+  });
+
+  // 13. Whitelist profiles — listar
+  app.get("/api/extension/whitelist-profiles", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.user!.id;
+      const result = await pool.query(
+        `SELECT member_id, profile_url, created_at FROM whitelist_profiles
+         WHERE user_id = $1 ORDER BY created_at DESC`,
+        [userId]
+      );
+      const profiles = result.rows.map((r: any) => ({
+        memberId: r.member_id,
+        profileUrl: r.profile_url,
+        createdAt: r.created_at,
+      }));
+      res.json({ ok: true, profiles });
+    } catch (err: any) {
+      console.error("whitelist-profiles GET error", err?.message);
+      res.status(500).json({ ok: false, error: "server_error" });
+    }
+  });
+
+  // 14. Whitelist items — borrar
+  app.delete("/api/extension/whitelist-items/:itemId", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.user!.id;
+      const { itemId } = req.params;
+      await pool.query(
+        `DELETE FROM whitelist_items WHERE user_id = $1 AND item_id = $2`,
+        [userId, String(itemId)]
+      );
+      res.json({ ok: true });
+    } catch (err: any) {
+      console.error("whitelist-items DELETE error", err?.message);
+      res.status(500).json({ ok: false, error: "server_error" });
+    }
+  });
+
+  // 15. Whitelist profiles — borrar
+  app.delete("/api/extension/whitelist-profiles/:memberId", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.user!.id;
+      const { memberId } = req.params;
+      await pool.query(
+        `DELETE FROM whitelist_profiles WHERE user_id = $1 AND member_id = $2`,
+        [userId, String(memberId)]
+      );
+      res.json({ ok: true });
+    } catch (err: any) {
+      console.error("whitelist-profiles DELETE error", err?.message);
+      res.status(500).json({ ok: false, error: "server_error" });
+    }
+  });
+
+  // 5. Camouflage tick — placeholder
+  app.get("/api/extension/camouflage/tick", requireLicense as any, async (_req: AuthRequest, res: Response) => {
+    try {
+      res.json({ ok: true, action: "noop" });
+    } catch {
+      res.status(500).json({ ok: false, error: "server_error" });
+    }
+  });
+
+  // 6. Boost worker — siguiente tarea (stub)
+  app.get("/boost/worker/next", requireLicense as any, async (_req: AuthRequest, res: Response) => {
+    try {
+      res.json({ ok: true, task: null });
+    } catch {
+      res.status(500).json({ ok: false, error: "server_error" });
+    }
+  });
+
+  // 7. Boost task — completar (stub)
+  app.post("/boost/tasks/:id/complete", requireLicense as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { ok, durationMs, error } = req.body || {};
+      console.log("[boost] task complete", { id, ok, durationMs, error });
+      res.json({ ok: true, acknowledged: true });
+    } catch {
+      res.status(500).json({ ok: false, error: "server_error" });
+    }
+  });
+
+  // 8. Admin: bazooka workers probe (real data)
+  app.get("/api/admin/bazooka-workers-probe", requireAdmin as any, async (_req: AuthRequest, res: Response) => {
+    try {
+      const r = await pool.query(
+        `SELECT name, status, active_jobs, version, host, uptime_sec, last_seen,
+                EXTRACT(EPOCH FROM (NOW() - last_seen))::int AS seconds_since_last_ping
+         FROM bazooka_workers ORDER BY last_seen DESC`
+      );
+      const workers = r.rows.map((w: any) => ({
+        name: w.name,
+        busyNow: w.status === 'busy',
+        responsiveNow: w.seconds_since_last_ping < 120,
+        secondsSinceLastPing: w.seconds_since_last_ping,
+        version: w.version,
+        host: w.host,
+        activeJobs: w.active_jobs,
+        uptimeSec: w.uptime_sec,
+      }));
+      const activeNow = workers.filter((w: any) => w.responsiveNow).length;
+      const busy = workers.filter((w: any) => w.responsiveNow && w.busyNow).length;
+      res.json({
+        ok: true,
+        activeNowWorkers: activeNow,
+        busyNowWorkers: busy,
+        idleNowWorkers: activeNow - busy,
+        offlineNowWorkers: workers.length - activeNow,
+        workers,
+      });
+    } catch (err: any) {
+      console.error('[admin/bazooka-workers-probe]', err.message);
+      res.status(500).json({ ok: false, error: "server_error" });
+    }
+  });
+
+  // 9. Admin: bazooka orchestra (real metrics)
+  app.get("/api/admin/bazooka-orchestra", requireAdmin as any, async (_req: AuthRequest, res: Response) => {
+    try {
+      const [workersR, recentJobsR, pendingR] = await Promise.all([
+        pool.query(`SELECT COUNT(*) FILTER (WHERE EXTRACT(EPOCH FROM (NOW()-last_seen)) < 120) AS active,
+                           COUNT(*) FILTER (WHERE status='busy' AND EXTRACT(EPOCH FROM (NOW()-last_seen)) < 120) AS busy
+                    FROM bazooka_workers`),
+        pool.query(`SELECT COUNT(*) AS total,
+                           COUNT(*) FILTER (WHERE status='done') AS done,
+                           COALESCE(AVG(duration_ms) FILTER (WHERE status='done'), 0)::int AS avg_dur
+                    FROM bazooka_jobs WHERE completed_at > NOW() - INTERVAL '1 hour'`),
+        pool.query(`SELECT COUNT(*) AS total,
+                           COALESCE(EXTRACT(EPOCH FROM (NOW() - MIN(created_at))), 0)::int AS oldest_sec
+                    FROM bazooka_jobs WHERE status='pending'`),
+      ]);
+      const w = workersR.rows[0];
+      const j = recentJobsR.rows[0];
+      const p = pendingR.rows[0];
+      const active = Number(w.active) || 0;
+      const busy = Number(w.busy) || 0;
+      const totalJobs = Number(j.total) || 0;
+      const doneJobs = Number(j.done) || 0;
+      const oldJobs5mR = await pool.query(
+        `SELECT COUNT(*)::int AS n FROM bazooka_jobs WHERE completed_at > NOW() - INTERVAL '5 minutes'`
+      );
+      res.json({
+        ok: true,
+        saturationPercent: active > 0 ? Math.round((busy / active) * 100) : 0,
+        jobsPerMinute5m: Math.round((Number(oldJobs5mR.rows[0].n) || 0) / 5),
+        averageCompletionSeconds: Math.round((Number(j.avg_dur) || 0) / 1000),
+        oldestPendingSeconds: Number(p.oldest_sec) || 0,
+        queuePerOnlineWorker: active > 0 ? Math.round(Number(p.total) / active) : Number(p.total) || 0,
+        successRate1h: totalJobs > 0 ? Math.round((doneJobs / totalJobs) * 100) : 100,
+      });
+    } catch (err: any) {
+      console.error('[admin/bazooka-orchestra]', err.message);
+      res.status(500).json({ ok: false, error: "server_error" });
+    }
+  });
+
+  // ── Bazooka Worker Fleet (VPS-side, x-worker-secret auth) ────────────────────
+
+  // GET /api/bazooka/worker/next-job — claim oldest pending job
+  app.get('/api/bazooka/worker/next-job', requireWorkerSecret, async (req, res) => {
+    const workerName = String(req.headers['x-worker-name'] || 'unknown');
+    try {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const r = await client.query(
+          `SELECT id, url, type, params FROM bazooka_jobs
+           WHERE status = 'pending'
+           ORDER BY created_at ASC
+           LIMIT 1 FOR UPDATE SKIP LOCKED`
+        );
+        if (!r.rows[0]) {
+          await client.query('COMMIT');
+          return res.json({ ok: true, job: null });
+        }
+        const job = r.rows[0];
+        await client.query(
+          `UPDATE bazooka_jobs SET status='claimed', claimed_by=$1, claimed_at=NOW() WHERE id=$2`,
+          [workerName, job.id]
+        );
+        await client.query('COMMIT');
+        return res.json({ ok: true, job: { id: job.id, url: job.url, type: job.type, params: job.params || {} } });
+      } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
+      } finally {
+        client.release();
+      }
+    } catch (err: any) {
+      console.error('[bazooka/worker/next-job]', err.message);
+      res.status(500).json({ ok: false, error: 'server_error' });
+    }
+  });
+
+  // PATCH /api/bazooka/worker/jobs/:id — report job result
+  app.patch('/api/bazooka/worker/jobs/:id', requireWorkerSecret, async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ ok: false, error: 'invalid_id' });
+    const { status, durationMs, error } = req.body || {};
+    if (status !== 'done' && status !== 'failed') {
+      return res.status(400).json({ ok: false, error: 'invalid_status' });
+    }
+    try {
+      await pool.query(
+        `UPDATE bazooka_jobs SET status=$1, completed_at=NOW(), duration_ms=$2, error=$3 WHERE id=$4`,
+        [status, Number.isFinite(durationMs) ? durationMs : null, error || null, id]
+      );
+      res.json({ ok: true });
+    } catch (err: any) {
+      console.error('[bazooka/worker/jobs PATCH]', err.message);
+      res.status(500).json({ ok: false, error: 'server_error' });
+    }
+  });
+
+  // POST /api/bazooka/worker/heartbeat — worker liveness ping
+  app.post('/api/bazooka/worker/heartbeat', requireWorkerSecret, async (req, res) => {
+    const { name, status, activeJobs, version, host, uptimeSec } = req.body || {};
+    if (!name || typeof name !== 'string') return res.status(400).json({ ok: false, error: 'name_required' });
+    const normalizedStatus = ['idle', 'busy', 'offline'].includes(status) ? status : 'idle';
+    try {
+      await pool.query(
+        `INSERT INTO bazooka_workers (name, status, active_jobs, version, host, uptime_sec, last_seen)
+         VALUES ($1, $2, $3, $4, $5, $6, NOW())
+         ON CONFLICT (name) DO UPDATE SET
+           status = EXCLUDED.status,
+           active_jobs = EXCLUDED.active_jobs,
+           version = EXCLUDED.version,
+           host = EXCLUDED.host,
+           uptime_sec = EXCLUDED.uptime_sec,
+           last_seen = NOW()`,
+        [name, normalizedStatus, Number(activeJobs) || 0, version || null, host || null, Number(uptimeSec) || 0]
+      );
+      res.json({ ok: true });
+    } catch (err: any) {
+      console.error('[bazooka/worker/heartbeat]', err.message);
+      res.status(500).json({ ok: false, error: 'server_error' });
+    }
+  });
+
+  // 10. Vinted show — stub
+  app.post("/api/vinted/show", requireLicense as any, async (_req: AuthRequest, res: Response) => {
+    try {
+      res.json({ ok: true, stub: true });
+    } catch {
+      res.status(500).json({ ok: false, error: "server_error" });
+    }
+  });
+
+  // 11. Vinted bump — stub
+  app.post("/api/vinted/bump", requireLicense as any, async (_req: AuthRequest, res: Response) => {
+    try {
+      res.json({ ok: true, stub: true });
+    } catch {
+      res.status(500).json({ ok: false, error: "server_error" });
+    }
+  });
+
+  // 12. Vinted delete — stub
+  app.post("/api/vinted/delete", requireLicense as any, async (_req: AuthRequest, res: Response) => {
+    try {
+      res.json({ ok: true, stub: true });
+    } catch {
+      res.status(500).json({ ok: false, error: "server_error" });
+    }
+  });
+
+  // ── Lamine Anty — info + download ──────────────────────────────────────────
+
+  app.get("/api/anty/info", (_req, res) => {
+    res.json({
+      ok: true,
+      name: "Lamine Anty",
+      version: "0.3.0",
+      available: true,
+      platform: "macOS",
+      features: [
+        "Antidetect · TLS Safari iOS",
+        "Perfiles aislados",
+        "WebRTC Guard",
+        "Proxy integrado",
+      ],
+    });
+  });
+
+  // ── Lamine Anty DMG downloads (redirect to GitHub releases) ─────────────
+  const ANTY_GH =
+    "https://github.com/EcomRodrii/lamine-anty-releases/releases/download/v0.3.0";
   const ANTY_FILES: Record<string, string> = {
-    "Lamine-Anty-0.3.0-arm64.dmg": `${GH}/Lamine.Anty-0.3.0-arm64.dmg`,
-    "Lamine-Anty-0.3.0.dmg":       `${GH}/Lamine-Anty-0.3.0.zip`,
+    "Lamine-Anty-0.3.0-arm64.dmg": `${ANTY_GH}/Lamine.Anty-0.3.0-arm64.dmg`,
+    "Lamine-Anty-0.3.0.dmg": `${ANTY_GH}/Lamine-Anty-0.3.0.zip`,
   };
 
   app.get("/downloads/lamine-anty/:filename", (req: Request, res: Response) => {
-    const { filename } = req.params;
-    const target = ANTY_FILES[filename];
-    if (!target) return res.status(404).json({ error: "not_found" });
+    const target = ANTY_FILES[req.params.filename];
+    if (!target) { res.status(404).json({ error: "not_found" }); return; }
     res.redirect(302, target);
+  });
+
+  // legacy redirect
+  app.get("/downloads/anty", (_req, res) => {
+    res.redirect(302, `${ANTY_GH}/Lamine.Anty-0.3.0-arm64.dmg`);
+  });
+
+  // ── Vinte reposts (called by global-addon from page context) ─────────────────
+  // hub-runtime-bridge.js intercepts this in page context; background-side stub:
+  app.post("/api/vinted/items/reposts", requireLicense as any, async (_req: AuthRequest, res: Response) => {
+    res.json({ ok: true });
+  });
+
+  // ── Vinted session save — decode Vinted JWT to extract userId + username ──
+  app.post("/api/vinted/session/save", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const { bearerToken, domain, anonId } = req.body || {};
+
+      // Decode Vinted JWT payload (no signature check needed — we just want the claims)
+      let vintedUserId: string | null = null;
+      let vintedUsername: string | null = null;
+
+      if (bearerToken) {
+        try {
+          const parts = String(bearerToken).split(".");
+          if (parts.length >= 2) {
+            const payload = JSON.parse(
+              Buffer.from(parts[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")
+            );
+            // Vinted JWT payload: user_id or sub
+            vintedUserId = String(
+              payload.user_id || payload.sub || payload.id || payload.uid || ""
+            ).trim() || null;
+            vintedUsername = String(
+              payload.login || payload.username || payload.email?.split("@")[0] || ""
+            ).trim() || null;
+          }
+        } catch (_) {}
+      }
+
+      // Persist session to DB for multi-account tracking (best effort)
+      if (vintedUserId && req.user?.id) {
+        await pool.query(
+          `INSERT INTO vinted_sessions (user_id, vinted_user_id, vinted_username, domain, anon_id, last_seen)
+           VALUES ($1, $2, $3, $4, $5, NOW())
+           ON CONFLICT (user_id, vinted_user_id) DO UPDATE
+             SET vinted_username = EXCLUDED.vinted_username,
+                 domain = EXCLUDED.domain,
+                 anon_id = EXCLUDED.anon_id,
+                 last_seen = NOW()`,
+          [req.user.id, vintedUserId, vintedUsername, domain || "es", anonId || null]
+        ).catch(() => {}); // table may not exist yet, no-op
+      }
+
+      res.json({ ok: true, vintedUserId, vintedUsername });
+    } catch (err: any) {
+      console.error("[session/save]", err?.message);
+      res.status(500).json({ ok: false, error: "server_error" });
+    }
+  });
+
+  // ── AI Inbox Reply — generate a suggested reply for a Vinted conversation ──
+  app.post("/api/ai/inbox/reply", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const { messages, itemTitle, itemPrice, buyerName, sellerName } = req.body as {
+        messages: { isMe: boolean; text: string }[];
+        itemTitle: string;
+        itemPrice: string | number;
+        buyerName: string;
+        sellerName: string;
+      };
+
+      const apiKey = process.env.OPENAI_API_KEY;
+      if (!apiKey) {
+        return res.status(500).json({ ok: false, error: "openai_not_configured" });
+      }
+
+      const systemPrompt =
+        `Eres el asistente de ventas de un vendedor en Vinted. Genera respuestas breves (máximo 2-3 frases), amables y naturales.\n` +
+        `Artículo: "${itemTitle}" - ${itemPrice}€. Vendedor: ${sellerName}. Comprador: ${buyerName}.\n` +
+        `Responde siempre en el mismo idioma que el comprador. Tono directo y cercano. Sin emojis excesivos.`;
+
+      const lastMessages = (messages || []).slice(-6).map((m) => ({
+        role: m.isMe ? "assistant" : "user",
+        content: m.text,
+      }));
+
+      const openaiMessages = [
+        { role: "system", content: systemPrompt },
+        ...lastMessages,
+      ];
+
+      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          messages: openaiMessages,
+          max_tokens: 150,
+          temperature: 0.7,
+        }),
+      });
+
+      if (!response.ok) {
+        console.error("[ai/inbox/reply] OpenAI error", response.status, await response.text());
+        return res.status(500).json({ ok: false, error: "openai_error" });
+      }
+
+      const data = await response.json() as {
+        choices: { message: { content: string } }[];
+      };
+      const reply = data.choices?.[0]?.message?.content?.trim() ?? "";
+      return res.json({ ok: true, reply });
+    } catch (err: any) {
+      console.error("[ai/inbox/reply]", err?.message);
+      return res.status(500).json({ ok: false, error: "openai_error" });
+    }
+  });
+
+  // ── Vinted Sessions — list accounts linked to user ──────────────────────
+  app.get("/api/vinted/sessions", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const r = await pool.query(
+        `SELECT vinted_user_id, vinted_username, domain, last_seen
+         FROM vinted_sessions
+         WHERE user_id = $1
+         ORDER BY last_seen DESC`,
+        [req.user!.id]
+      ).catch(() => ({ rows: [] }));
+      res.json({ ok: true, sessions: r.rows });
+    } catch {
+      res.status(500).json({ ok: false, error: "server_error" });
+    }
+  });
+
+  // ── Labels — store label URLs found passively by vinted-favourite-sniffer ──
+  app.post("/api/extension/labels", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const { transactionId, labelUrl, labelCarrier, vintedUserId } = req.body || {};
+      if (!transactionId || !labelUrl) return res.status(400).json({ ok: false, error: "missing_fields" });
+      await pool.query(
+        `INSERT INTO order_labels (user_id, transaction_id, label_url, label_carrier, vinted_user_id, found_at)
+         VALUES ($1, $2, $3, $4, $5, NOW())
+         ON CONFLICT (user_id, transaction_id) DO UPDATE
+           SET label_url = EXCLUDED.label_url,
+               label_carrier = EXCLUDED.label_carrier,
+               found_at = NOW()`,
+        [req.user!.id, String(transactionId), String(labelUrl), String(labelCarrier || ""), String(vintedUserId || "")]
+      ).catch(() => {}); // table may not exist yet
+      res.json({ ok: true });
+    } catch {
+      res.status(500).json({ ok: false, error: "server_error" });
+    }
+  });
+
+  app.get("/api/extension/labels", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const r = await pool.query(
+        `SELECT transaction_id, label_url, label_carrier, vinted_user_id, found_at
+         FROM order_labels
+         WHERE user_id = $1
+         ORDER BY found_at DESC
+         LIMIT 100`,
+        [req.user!.id]
+      ).catch(() => ({ rows: [] }));
+      res.json({ ok: true, labels: r.rows });
+    } catch {
+      res.status(500).json({ ok: false, error: "server_error" });
+    }
   });
 
   // ── Vite / Static ───────────────────────────────────────────────────────────
@@ -1162,6 +3058,21 @@ ${customPrompt ? `\nADDITIONAL RULES:\n${customPrompt}` : ""}`;
   }
 
   app.listen(PORT, "0.0.0.0", () => console.log(`Server running on http://localhost:${PORT}`));
+}
+
+// ── SSE Ops Terminal ─────────────────────────────────────────────────────────
+// Mapa global: userId → Set de Response SSE activas
+const sseClients = new Map<string, Set<Response>>();
+
+/** Emite un evento SSE a todas las pestañas del terminal abiertas por el usuario */
+function opsEmit(userId: string | number, level: string, tag: string, msg: string) {
+  const uid = String(userId);
+  const clients = sseClients.get(uid);
+  if (!clients?.size) return;
+  const payload = `data: ${JSON.stringify({ level, tag, msg, ts: new Date().toISOString() })}\n\n`;
+  for (const res of clients) {
+    try { res.write(payload); } catch { clients.delete(res); }
+  }
 }
 
 startServer();

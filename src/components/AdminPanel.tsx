@@ -45,7 +45,7 @@ function Badge({ type }: { type: string }) {
     lifetime: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30',
     monthly: 'bg-violet-500/15 text-violet-400 border-violet-500/30',
     trial: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
-    custom: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+    custom: 'bg-acid-soft text-acid border-acid',
   };
   return (
     <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${colors[type] || 'bg-zinc-700 text-zinc-400 border-zinc-600'}`}>
@@ -189,7 +189,7 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
           <div className="grid grid-cols-3 gap-4">
             {[
               { label: 'Usuarios totales', value: stats.total_users, icon: <Users className="w-5 h-5 text-violet-400" /> },
-              { label: 'Licencias activas', value: stats.active_licenses, icon: <Key className="w-5 h-5 text-emerald-400" /> },
+              { label: 'Licencias activas', value: stats.active_licenses, icon: <Key className="w-5 h-5 text-acid" /> },
               { label: 'Sesiones (24h)', value: stats.sessions_24h, icon: <Activity className="w-5 h-5 text-blue-400" /> },
             ].map(s => (
               <div key={s.label} className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6">
@@ -317,7 +317,7 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
                   <p className="text-xs text-zinc-400 mb-2">{generatedKeys.length} clave(s) generada(s):</p>
                   {generatedKeys.map(k => (
                     <div key={k} className="flex items-center gap-2 bg-zinc-800 rounded-xl px-3 py-2">
-                      <code className="font-mono text-sm text-emerald-400 flex-1">{k}</code>
+                      <code className="font-mono text-sm text-acid flex-1">{k}</code>
                       <CopyButton text={k} />
                     </div>
                   ))}
@@ -353,7 +353,7 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
                       <td className="px-4 py-3 text-xs text-zinc-500 max-w-[100px] truncate" title={l.hwid || ''}>{truncate(l.hwid, 12)}</td>
                       <td className="px-4 py-3 text-xs text-zinc-500">{l.ip || '—'}</td>
                       <td className="px-4 py-3">
-                        <span className={`text-xs font-medium ${l.is_active ? 'text-emerald-400' : 'text-red-400'}`}>
+                        <span className={`text-xs font-medium ${l.is_active ? 'text-acid' : 'text-red-400'}`}>
                           {l.is_active ? 'Sí' : 'No'}
                         </span>
                       </td>
@@ -364,7 +364,7 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
                             title={l.is_active ? 'Desactivar' : 'Activar'}
                             className="text-zinc-500 hover:text-violet-400 transition"
                           >
-                            {l.is_active ? <ToggleRight className="w-4 h-4 text-emerald-400" /> : <ToggleLeft className="w-4 h-4" />}
+                            {l.is_active ? <ToggleRight className="w-4 h-4 text-acid" /> : <ToggleLeft className="w-4 h-4" />}
                           </button>
                           <button
                             onClick={async () => { await client.patch(`/api/admin/licenses/${l.id}/reset-hwid`); loadTab('licenses'); }}
