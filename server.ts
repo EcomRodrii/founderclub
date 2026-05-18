@@ -2347,6 +2347,77 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
   });
 
   /**
+   * POST /api/ext/analisis-verify
+   * Body: { key/license_key: "<session JWT>", hwid: "<sha256 fingerprint>", ... }
+   * Compatibilidad con el módulo Analisis (background-classic.js) que envía { key, hwid }.
+   * Reutiliza la lógica de /api/ext/verify pero acepta key/license_key como alias de token.
+   */
+  app.post("/api/ext/analisis-verify", extVerifyLimiter, async (req, res) => {
+    // El módulo Analisis envía el JWT en "key" o "license_key", no en "token"
+    const token = req.body.token || req.body.key || req.body.license_key || "";
+    const hwid  = req.body.hwid  || req.body.device_hwid || req.body.deviceHwid || "";
+
+    if (!token || !hwid)
+      return res.status(400).json({ ok: false, valid: false, allowed: false, error: "token_and_hwid_required" });
+
+    // Verificar JWT
+    let decoded: any;
+    try {
+      decoded = jwt.verify(token, JWT_SECRET) as any;
+    } catch {
+      return res.status(401).json({ ok: false, valid: false, allowed: false, error: "invalid_token" });
+    }
+
+    const { sid } = decoded;
+    if (!sid)
+      return res.status(401).json({ ok: false, valid: false, allowed: false, error: "invalid_token" });
+
+    try {
+      const sessRes = await pool.query(
+        "SELECT * FROM extension_sessions WHERE id = $1",
+        [sid]
+      );
+      const sess = sessRes.rows[0];
+
+      if (!sess || sess.revoked || new Date(sess.expires_at) < new Date())
+        return res.status(401).json({ ok: false, valid: false, allowed: false, status: "invalid", error: "session_invalid" });
+
+      if (sess.hwid !== hwid)
+        return res.status(403).json({ ok: false, valid: false, allowed: false, status: "invalid", error: "hwid_mismatch" });
+
+      const licRes = await pool.query(
+        "SELECT * FROM licenses WHERE key = $1 AND is_active = TRUE AND (expires_at IS NULL OR expires_at > NOW())",
+        [sess.license_key]
+      );
+      const lic = licRes.rows[0];
+
+      if (!lic)
+        return res.status(403).json({ ok: false, valid: false, allowed: false, status: "expired", error: "license_expired_or_revoked" });
+
+      pool
+        .query("UPDATE extension_sessions SET last_seen_at = NOW() WHERE id = $1", [sid])
+        .catch(() => {});
+
+      return res.json({
+        ok: true,
+        valid: true,
+        allowed: true,
+        status: "active",
+        license: {
+          key: sess.license_key,
+          type: lic.type,
+          plan: lic.type,
+          expires_at: lic.expires_at,
+          status: "active",
+        },
+      });
+    } catch (e: any) {
+      console.error("[ext/analisis-verify] error:", e?.message);
+      return res.status(500).json({ ok: false, valid: false, allowed: false, error: "server_error" });
+    }
+  });
+
+  /**
    * GET /api/ext/me
    * Authorization: Bearer <session JWT>
    * Returns user and license info for the active extension session.
