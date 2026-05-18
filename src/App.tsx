@@ -52,43 +52,43 @@ function LicenseActivation({ token, onActivated }: { token: string; onActivated:
   };
 
   return (
-    <div className="min-h-screen bg-zinc-950 flex items-center justify-center p-4">
+    <div className="min-h-screen flex items-center justify-center p-4">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-amber-500/20 border border-amber-500/30 mb-4">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-[20px] bg-amber-500/20 border border-amber-500/30 mb-4">
             <Key className="w-8 h-8 text-amber-400" />
           </div>
-          <h1 className="text-2xl font-bold text-white">Activar licencia</h1>
-          <p className="text-zinc-500 text-sm mt-1">Introduce tu clave para acceder</p>
+          <h1 className="text-2xl font-bold text-[#f4f4ef]">Activar licencia</h1>
+          <p className="text-[#a4a79f] text-sm mt-1">Introduce tu clave para acceder</p>
         </div>
-        <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6">
+        <div className="bg-[#0d1012] border border-white/8 rounded-[20px] p-6">
           {success ? (
             <div className="flex flex-col items-center gap-3 py-4">
-              <CheckCircle2 className="w-12 h-12 text-emerald-400" />
-              <p className="text-white font-medium">¡Licencia activada!</p>
+              <CheckCircle2 className="w-12 h-12 text-[#4d9fff]" />
+              <p className="text-[#f4f4ef] font-medium">¡Licencia activada!</p>
             </div>
           ) : (
             <form onSubmit={activate} className="space-y-4">
               <div>
-                <label className="block text-xs font-medium text-zinc-400 mb-1.5">Clave de licencia</label>
+                <label className="block text-xs font-medium text-[#a4a79f] mb-1.5">Clave de licencia</label>
                 <input
                   type="text"
                   value={key}
                   onChange={e => setKey(e.target.value.toUpperCase())}
                   placeholder="FC-XXXX-XXXX-XXXX-XXXX"
                   required
-                  className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 text-sm font-mono text-white placeholder-zinc-500 focus:outline-none focus:border-amber-500 transition"
+                  className="w-full bg-[#111416] border border-white/8 rounded-[14px] px-4 py-2.5 text-sm font-mono text-[#f4f4ef] placeholder-[#a4a79f] focus:outline-none focus:border-amber-500 transition"
                 />
               </div>
               {error && (
-                <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/20 rounded-xl px-3 py-2.5 text-sm text-red-400">
+                <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/20 rounded-[14px] px-3 py-2.5 text-sm text-red-400">
                   <AlertCircle className="w-4 h-4 shrink-0" />{error}
                 </div>
               )}
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-semibold rounded-xl py-2.5 text-sm transition"
+                className="w-full bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-semibold rounded-[14px] py-2.5 text-sm transition"
               >
                 {loading ? 'Activando…' : 'Activar'}
               </button>
@@ -138,8 +138,8 @@ export default function App() {
 
   if (authLoading) {
     return (
-      <div className="min-h-screen bg-zinc-950 flex items-center justify-center">
-        <div className="w-8 h-8 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-[#4d9fff] border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
@@ -681,12 +681,12 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
   };
 
   return (
-    <div className="min-h-screen bg-[#0a0a0a] text-[#e0e0e0] font-sans selection:bg-emerald-500/30 selection:text-emerald-400">
+    <div className="min-h-screen bg-[#050607] text-[#f4f4ef] font-sans selection:bg-[#4d9fff]/20 selection:text-[#4d9fff]">
       {/* Top Banner / Navigation */}
       <nav className="border-b border-white/10 px-4 lg:px-6 py-3 lg:py-4 flex items-center justify-between bg-black/50 backdrop-blur-md sticky top-0 z-50">
         <div className="flex items-center gap-2 lg:gap-3">
-          <div className="w-8 h-8 bg-emerald-500 rounded-lg flex items-center justify-center shadow-[0_0_15px_rgba(16,185,129,0.3)]">
-            <ShieldCheck className="w-5 h-5 text-black" />
+          <div className="w-8 h-8 bg-[#4d9fff] rounded-lg flex items-center justify-center shadow-[0_0_15px_rgba(77,159,255,0.3)]">
+            <ShieldCheck className="w-5 h-5 text-[#050607]" />
           </div>
           <div>
             <h1 className="text-base lg:text-xl font-bold tracking-tighter bg-gradient-to-r from-white to-white/70 bg-clip-text text-transparent">
@@ -698,8 +698,8 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
 
         <div className="flex items-center gap-2 lg:gap-4">
           {/* Session indicator */}
-          <div className={`w-2 h-2 rounded-full ${sessionValid === true ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : sessionValid === false ? 'bg-red-500' : 'bg-white/20'}`} />
-          <span className={`hidden sm:inline text-xs font-mono ${sessionValid === true ? 'text-emerald-400' : sessionValid === false ? 'text-red-400' : 'text-white/40'}`}>
+          <div className={`w-2 h-2 rounded-full ${sessionValid === true ? 'bg-[#4d9fff] shadow-[0_0_8px_rgba(77,159,255,0.5)]' : sessionValid === false ? 'bg-red-500' : 'bg-white/20'}`} />
+          <span className={`hidden sm:inline text-xs font-mono ${sessionValid === true ? 'text-[#4d9fff]' : sessionValid === false ? 'text-red-400' : 'text-white/40'}`}>
             {sessionValid === true ? 'Active' : sessionValid === false ? 'Expired' : '...'}
           </span>
           <div className="hidden lg:block h-6 w-[1px] bg-white/10" />
@@ -715,7 +715,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
             <button
               onClick={onAdmin}
               title="Panel de Admin"
-              className="hidden lg:flex p-2 hover:bg-violet-500/10 rounded-lg transition-colors text-violet-400/60 hover:text-violet-400"
+              className="hidden lg:flex p-2 hover:bg-[#4d9fff]/10 rounded-lg transition-colors text-[#4d9fff]/60 hover:text-[#4d9fff]"
             >
               <ShieldCheck className="w-4 h-4" />
             </button>
@@ -746,14 +746,14 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
               transition={{ type: 'spring', damping: 30, stiffness: 300 }}
-              className="fixed bottom-16 left-0 right-0 z-50 bg-[#141414] border-t border-white/10 rounded-t-3xl p-5 max-h-[80vh] overflow-y-auto lg:hidden"
+              className="fixed bottom-16 left-0 right-0 z-50 bg-[#0d1012] border-t border-white/10 rounded-t-3xl p-5 max-h-[80vh] overflow-y-auto lg:hidden"
             >
               <div className="w-10 h-1 bg-white/20 rounded-full mx-auto mb-5" />
               <div className="space-y-4">
                 <div>
                   <label className="block text-[10px] uppercase tracking-wider text-white/30 mb-1.5 ml-1">Dominio Vinted</label>
                   <select value={domain} onChange={e => setDomain(e.target.value)}
-                    className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-3 text-sm focus:outline-none focus:border-emerald-500/50 appearance-none">
+                    className="w-full bg-black/30 border border-white/10 rounded-[14px] px-3 py-3 text-sm focus:outline-none focus:border-[#4d9fff]/35 appearance-none">
                     {DOMAINS.map(d => <option key={d} value={d}>vinted.{d}</option>)}
                   </select>
                 </div>
@@ -762,9 +762,9 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                   <div className="flex gap-2">
                     <input type="text" placeholder="https://www.vinted.es/member/..."
                       value={profileUrl} onChange={e => setProfileUrl(e.target.value)}
-                      className="flex-1 bg-black/30 border border-white/10 rounded-lg px-3 py-3 text-sm focus:outline-none focus:border-emerald-500/50" />
+                      className="flex-1 bg-black/30 border border-white/10 rounded-[14px] px-3 py-3 text-sm focus:outline-none focus:border-[#4d9fff]/35" />
                     <button onClick={() => { resolveUserId(); setMobileSidebarOpen(false); }}
-                      className="p-3 bg-emerald-500/10 text-emerald-400 rounded-lg border border-emerald-500/20">
+                      className="p-3 bg-[#4d9fff]/10 text-[#4d9fff] rounded-[14px] border border-[#4d9fff]/20">
                       <Search className="w-4 h-4" />
                     </button>
                   </div>
@@ -773,10 +773,10 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                   <label className="block text-[10px] uppercase tracking-wider text-white/30 mb-1.5 ml-1">Cookie de sesión</label>
                   <textarea value={cookie} onChange={e => setCookie(e.target.value)}
                     placeholder="_vinted_fr_session=..."
-                    className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-3 text-sm font-mono h-24 resize-none focus:outline-none focus:border-emerald-500/50" />
+                    className="w-full bg-black/30 border border-white/10 rounded-[14px] px-3 py-3 text-sm font-mono h-24 resize-none focus:outline-none focus:border-[#4d9fff]/35" />
                 </div>
                 <button onClick={() => { fetchItems(); setMobileSidebarOpen(false); }} disabled={loading}
-                  className="w-full bg-emerald-500 text-black font-bold py-3.5 rounded-xl hover:bg-emerald-400 transition-all flex items-center justify-center gap-2 disabled:opacity-50 text-base">
+                  className="w-full bg-[#4d9fff] text-[#050607] font-bold py-3.5 rounded-[14px] hover:bg-[#3b7fd4] transition-all flex items-center justify-center gap-2 disabled:opacity-50 text-base">
                   {loading ? <RefreshCcw className="w-5 h-5 animate-spin" /> : <LayoutGrid className="w-5 h-5" />}
                   Cargar inventario
                 </button>
@@ -799,7 +799,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
             const isActive = item.id === 'config' ? mobileSidebarOpen : (item.id !== 'config' && activeTab === item.id);
             return (
               <button key={item.id} onClick={item.action}
-                className={`flex flex-col items-center gap-1 px-4 py-1.5 rounded-xl transition-all ${isActive ? 'text-emerald-400' : 'text-white/30'}`}>
+                className={`flex flex-col items-center gap-1 px-4 py-1.5 rounded-xl transition-all ${isActive ? 'text-[#4d9fff]' : 'text-white/30'}`}>
                 {item.icon}
                 <span className="text-[9px] font-medium uppercase tracking-wider">{item.label}</span>
               </button>
@@ -811,11 +811,11 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
       <main className="max-w-7xl mx-auto p-4 lg:p-6 pb-24 lg:pb-6 grid grid-cols-1 lg:grid-cols-[380px_1fr] gap-8">
         {/* Sidebar Configuration — desktop only */}
         <div className="hidden lg:block space-y-6">
-          <section className="bg-[#141414] border border-white/5 rounded-2xl p-6 shadow-xl relative overflow-hidden group">
-            <div className="absolute top-0 left-0 w-1 h-full bg-emerald-500 opacity-50 group-hover:opacity-100 transition-opacity" />
-            
+          <section className="bg-[#0d1012] border border-white/8 rounded-[20px] p-6 shadow-xl relative overflow-hidden group">
+            <div className="absolute top-0 left-0 w-1 h-full bg-[#4d9fff] opacity-50 group-hover:opacity-100 transition-opacity" />
+
             <div className="flex items-center gap-2 mb-6">
-              <Settings className="w-4 h-4 text-emerald-400" />
+              <Settings className="w-4 h-4 text-[#4d9fff]" />
               <h2 className="text-xs uppercase tracking-widest font-bold text-white/50">Configuración de Acceso</h2>
             </div>
 
@@ -825,7 +825,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                 <select 
                   value={domain}
                   onChange={(e) => setDomain(e.target.value)}
-                  className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500/50 transition-colors appearance-none cursor-pointer hover:bg-black/50"
+                  className="w-full bg-black/30 border border-white/10 rounded-[14px] px-3 py-2 text-sm focus:outline-none focus:border-[#4d9fff]/35 transition-colors appearance-none cursor-pointer hover:bg-black/50"
                 >
                   {DOMAINS.map(d => (
                     <option key={d} value={d}>vinted.{d}</option>
@@ -841,11 +841,11 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                     placeholder="Enlace al perfil de Vinted"
                     value={profileUrl}
                     onChange={(e) => setProfileUrl(e.target.value)}
-                    className="flex-1 bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500/50 transition-colors"
+                    className="flex-1 bg-black/30 border border-white/10 rounded-[14px] px-3 py-2 text-sm focus:outline-none focus:border-[#4d9fff]/35 transition-colors"
                   />
-                  <button 
+                  <button
                     onClick={resolveUserId}
-                    className="p-2 bg-emerald-500/10 text-emerald-400 rounded-lg hover:bg-emerald-500/20 transition-colors border border-emerald-500/20"
+                    className="p-2 bg-[#4d9fff]/10 text-[#4d9fff] rounded-[14px] hover:bg-[#4d9fff]/20 transition-colors border border-[#4d9fff]/20"
                   >
                     <Search className="w-4 h-4" />
                   </button>
@@ -860,7 +860,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                     value={cookie}
                     onChange={(e) => setCookie(e.target.value)}
                     placeholder="_vinted_fr_session=..."
-                    className={`w-full bg-black/30 border ${cookieWarning ? 'border-red-500/50' : 'border-white/10'} rounded-lg pl-10 pr-3 py-3 text-sm focus:outline-none focus:border-emerald-500/50 transition-colors h-24 font-mono resize-none`}
+                    className={`w-full bg-black/30 border ${cookieWarning ? 'border-red-500/50' : 'border-white/10'} rounded-[14px] pl-10 pr-3 py-3 text-sm focus:outline-none focus:border-[#4d9fff]/35 transition-colors h-24 font-mono resize-none`}
                   />
                 </div>
                 {cookieWarning && (
@@ -875,11 +875,11 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
               </div>
 
               {/* ── Goolazo Login ── */}
-              <div className="relative border border-white/10 rounded-xl p-3 bg-white/[0.02]">
+              <div className="relative border border-white/8 rounded-[14px] p-3 bg-white/[0.02]">
                 <label className="block text-[10px] uppercase tracking-wider text-white/30 mb-2 ml-1 flex items-center gap-1.5">
                   <span>Goolazo Bazooka</span>
                   {goolazoCookie
-                    ? <span className="text-emerald-400 font-semibold">● Sesión activa</span>
+                    ? <span className="text-[#4d9fff] font-semibold">● Sesión activa</span>
                     : <span className="text-white/20">● Sin sesión</span>
                   }
                 </label>
@@ -887,7 +887,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                 {goolazoCookie ? (
                   <div className="space-y-2">
                     {bsLoginMsg && (
-                      <p className={`text-[10px] ${bsLoginMsg.ok ? 'text-emerald-400' : 'text-red-400'} bg-white/5 rounded-lg px-2 py-1.5`}>
+                      <p className={`text-[10px] ${bsLoginMsg.ok ? 'text-[#4d9fff]' : 'text-red-400'} bg-white/5 rounded-lg px-2 py-1.5`}>
                         {bsLoginMsg.text}
                       </p>
                     )}
@@ -905,7 +905,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                       placeholder="Email de Goolazo"
                       value={bsEmail}
                       onChange={e => setBsEmail(e.target.value)}
-                      className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500/50 transition-colors"
+                      className="w-full bg-black/30 border border-white/10 rounded-[14px] px-3 py-2 text-sm focus:outline-none focus:border-[#4d9fff]/35 transition-colors"
                     />
                     <input
                       type="password"
@@ -913,17 +913,17 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                       value={bsPassword}
                       onChange={e => setBsPassword(e.target.value)}
                       onKeyDown={e => e.key === 'Enter' && loginGoolazo()}
-                      className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500/50 transition-colors"
+                      className="w-full bg-black/30 border border-white/10 rounded-[14px] px-3 py-2 text-sm focus:outline-none focus:border-[#4d9fff]/35 transition-colors"
                     />
                     {bsLoginMsg && (
-                      <p className={`text-[10px] ${bsLoginMsg.ok ? 'text-emerald-400' : 'text-red-400'} bg-white/5 rounded-lg px-2 py-1.5`}>
+                      <p className={`text-[10px] ${bsLoginMsg.ok ? 'text-[#4d9fff]' : 'text-red-400'} bg-white/5 rounded-lg px-2 py-1.5`}>
                         {bsLoginMsg.text}
                       </p>
                     )}
                     <button
                       onClick={loginGoolazo}
                       disabled={bsLoginLoading}
-                      className="w-full py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-sm font-medium hover:bg-emerald-500/20 transition-colors disabled:opacity-50"
+                      className="w-full py-2 rounded-[14px] bg-[#4d9fff]/10 border border-[#4d9fff]/20 text-[#4d9fff] text-sm font-medium hover:bg-[#4d9fff]/20 transition-colors disabled:opacity-50"
                     >
                       {bsLoginLoading ? 'Iniciando sesión...' : 'Iniciar sesión en Goolazo'}
                     </button>
@@ -935,7 +935,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                 <button 
                   onClick={fetchItems}
                   disabled={loading}
-                  className="w-full bg-emerald-500 text-black font-bold py-3 rounded-xl hover:bg-emerald-400 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-[0_0_20px_rgba(16,185,129,0.2)]"
+                  className="w-full bg-[#4d9fff] text-[#050607] font-bold py-3 rounded-[14px] hover:bg-[#3b7fd4] transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-[0_0_20px_rgba(77,159,255,0.2)]"
                 >
                   {loading ? <RefreshCcw className="w-5 h-5 animate-spin" /> : <LayoutGrid className="w-5 h-5" />}
                   Cargar Inventario
@@ -948,9 +948,9 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
             <motion.div 
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
-              className="bg-emerald-500/5 border border-emerald-500/20 rounded-2xl p-6 text-sm leading-relaxed"
+              className="bg-[#4d9fff]/5 border border-[#4d9fff]/20 rounded-[20px] p-6 text-sm leading-relaxed"
             >
-              <h3 className="text-emerald-400 font-bold mb-4 flex items-center gap-2">
+              <h3 className="text-[#4d9fff] font-bold mb-4 flex items-center gap-2">
                 <HelpCircle className="w-4 h-4" /> ¿Cómo obtener la Cookie de Sesión?
               </h3>
               
@@ -960,11 +960,11 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                   <ol className="list-decimal list-inside space-y-2 text-[11px] text-white/50">
                     <li>Entra en <span className="text-white">vinted.es</span> y logueate.</li>
                     <li>Presiona <kbd className="bg-white/10 px-1 rounded border border-white/20">F12</kbd> y ve a la pestaña <span className="text-white">Consola</span>.</li>
-                    <li>Escribe <code className="text-emerald-400">copy(document.cookie)</code> y dale al Enter.</li>
+                    <li>Escribe <code className="text-[#4d9fff]">copy(document.cookie)</code> y dale al Enter.</li>
                     <li>
                       <button 
                         onClick={() => copyToClipboard('copy(document.cookie)')}
-                        className="mt-2 flex items-center gap-2 px-3 py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 rounded-lg text-[10px] text-emerald-400 transition-all"
+                        className="mt-2 flex items-center gap-2 px-3 py-1.5 bg-[#4d9fff]/20 hover:bg-[#4d9fff]/30 border border-[#4d9fff]/30 rounded-lg text-[10px] text-[#4d9fff] transition-all"
                       >
                         <Copy className="w-3 h-3" /> Copiar comando para Consola
                       </button>
@@ -978,7 +978,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                     <li>En el panel F12, ve a la pestaña <span className="text-white">Red (Network)</span>.</li>
                     <li>Recarga la página de Vinted.</li>
                     <li>Busca la primera petición llamada <span className="text-white">vinted.es</span>.</li>
-                    <li>En la sección <span className="text-white">Request Headers</span>, copia el valor de <span className="text-emerald-400">Cookie</span>.</li>
+                    <li>En la sección <span className="text-white">Request Headers</span>, copia el valor de <span className="text-[#4d9fff]">Cookie</span>.</li>
                   </ol>
                 </div>
               </div>
@@ -1009,25 +1009,25 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
               <div className="hidden lg:flex gap-4 mt-2">
                 <button
                   onClick={() => setActiveTab('mine')}
-                  className={`text-xs uppercase tracking-widest font-bold pb-1 border-b-2 transition-all ${activeTab === 'mine' ? 'border-emerald-500 text-white' : 'border-transparent text-white/30 hover:text-white/60'}`}
+                  className={`text-xs uppercase tracking-widest font-bold pb-1 border-b-2 transition-all ${activeTab === 'mine' ? 'border-[#4d9fff] text-white' : 'border-transparent text-white/30 hover:text-white/60'}`}
                 >
                   Mis Productos
                 </button>
                 <button
                   onClick={() => setActiveTab('external')}
-                  className={`text-xs uppercase tracking-widest font-bold pb-1 border-b-2 transition-all ${activeTab === 'external' ? 'border-emerald-500 text-white' : 'border-transparent text-white/30 hover:text-white/60'}`}
+                  className={`text-xs uppercase tracking-widest font-bold pb-1 border-b-2 transition-all ${activeTab === 'external' ? 'border-[#4d9fff] text-white' : 'border-transparent text-white/30 hover:text-white/60'}`}
                 >
                   Ocultar Externo
                 </button>
                 <button
                   onClick={() => setActiveTab('tongues')}
-                  className={`text-xs uppercase tracking-widest font-bold pb-1 border-b-2 transition-all ${activeTab === 'tongues' ? 'border-emerald-500 text-white' : 'border-transparent text-white/30 hover:text-white/60'}`}
+                  className={`text-xs uppercase tracking-widest font-bold pb-1 border-b-2 transition-all ${activeTab === 'tongues' ? 'border-[#4d9fff] text-white' : 'border-transparent text-white/30 hover:text-white/60'}`}
                 >
                   Cambiar Lengüeta
                 </button>
                 <button
                   onClick={() => setActiveTab('profits')}
-                  className={`text-xs uppercase tracking-widest font-bold pb-1 border-b-2 transition-all ${activeTab === 'profits' ? 'border-emerald-500 text-white' : 'border-transparent text-white/30 hover:text-white/60'}`}
+                  className={`text-xs uppercase tracking-widest font-bold pb-1 border-b-2 transition-all ${activeTab === 'profits' ? 'border-[#4d9fff] text-white' : 'border-transparent text-white/30 hover:text-white/60'}`}
                 >
                   Beneficios
                 </button>
@@ -1036,7 +1036,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
             
             {activeTab === 'mine' && (
               <div className="flex bg-white/5 rounded-lg p-1 border border-white/10 self-start sm:self-auto">
-                <button className="p-2 bg-emerald-500/20 text-emerald-400 rounded-md">
+                <button className="p-2 bg-[#4d9fff]/20 text-[#4d9fff] rounded-md">
                   <LayoutGrid className="w-4 h-4" />
                 </button>
                 <button className="p-2 text-white/30 hover:text-white transition-colors">
@@ -1067,7 +1067,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, scale: 0.95 }}
                       transition={{ delay: idx * 0.05 }}
-                      className="group bg-[#141414] border border-white/5 rounded-2xl overflow-hidden hover:border-emerald-500/30 transition-all hover:bg-[#1a1a1a]"
+                      className="group bg-[#0d1012] border border-white/8 rounded-[20px] overflow-hidden hover:border-[#4d9fff]/30 transition-all hover:bg-[#111416]"
                     >
                       <div className="aspect-[3/4] relative overflow-hidden bg-black flex items-center justify-center">
                         {item.photo?.url ? (
@@ -1106,7 +1106,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                       <div className="p-4">
                         <div className="flex justify-between items-start gap-2 mb-1">
                           <h3 className="text-sm font-medium leading-tight truncate flex-1">{item.title}</h3>
-                          <span className="text-emerald-400 font-mono text-sm font-bold">
+                          <span className="text-[#4d9fff] font-mono text-sm font-bold">
                             {item.price?.amount} {item.price?.currency_code}
                           </span>
                         </div>
@@ -1115,8 +1115,8 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                         <button 
                           onClick={() => toggleVisibility(item.id, !!item.is_hidden)}
                           className={`w-full py-2.5 rounded-xl flex items-center justify-center gap-2 text-xs font-bold transition-all ${
-                            item.is_hidden 
-                              ? 'bg-emerald-500 text-black hover:bg-emerald-400' 
+                            item.is_hidden
+                              ? 'bg-[#4d9fff] text-[#050607] hover:bg-[#3b7fd4]'
                               : 'bg-white/5 text-white/60 hover:bg-white/10 border border-white/5'
                           }`}
                         >
@@ -1143,7 +1143,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
             <motion.div
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
-              className="bg-[#141414] border border-white/5 rounded-3xl p-8 shadow-2xl space-y-8"
+              className="bg-[#0d1012] border border-white/8 rounded-[28px] p-8 shadow-2xl space-y-8"
             >
               <div className="flex items-center gap-4">
                 <div className="w-12 h-12 bg-red-500/10 rounded-2xl flex items-center justify-center border border-red-500/20">
@@ -1165,11 +1165,11 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                         placeholder="https://www.vinted.es/items/123-titulo..."
                         value={externalUrl}
                         onChange={(e) => setExternalUrl(e.target.value)}
-                        className="flex-1 bg-black/30 border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-red-500/50 transition-colors"
+                        className="flex-1 bg-black/30 border border-white/10 rounded-[14px] px-4 py-3 text-sm focus:outline-none focus:border-red-500/50 transition-colors"
                       />
-                      <button 
+                      <button
                         onClick={resolveProductId}
-                        className="px-4 bg-white/5 hover:bg-white/10 text-white rounded-xl transition-all border border-white/10"
+                        className="px-4 bg-white/5 hover:bg-white/10 text-white rounded-[14px] transition-all border border-white/10"
                       >
                         Detectar ID
                       </button>
@@ -1181,7 +1181,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                     <select 
                       value={reportReason}
                       onChange={(e) => setReportReason(e.target.value)}
-                      className="w-full bg-black/30 border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-red-500/50 transition-colors appearance-none cursor-pointer"
+                      className="w-full bg-black/30 border border-white/10 rounded-[14px] px-4 py-3 text-sm focus:outline-none focus:border-red-500/50 transition-colors appearance-none cursor-pointer"
                     >
                       <option value="1">Falsificación (Fuerza revisión)</option>
                       <option value="4">Artículo Prohibido</option>
@@ -1205,7 +1205,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                     <textarea
                       value={stealthDescription}
                       onChange={(e) => setStealthDescription(e.target.value)}
-                      className="w-full bg-black/30 border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-red-500/50 transition-colors h-20 resize-none font-mono text-[11px] leading-relaxed"
+                      className="w-full bg-black/30 border border-white/10 rounded-[14px] px-4 py-3 text-sm focus:outline-none focus:border-red-500/50 transition-colors h-20 resize-none font-mono text-[11px] leading-relaxed"
                     />
                   </div>
 
@@ -1233,7 +1233,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                   {externalId ? (
                     <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2">
                        <div className="flex items-center justify-center gap-2 mb-2">
-                          <div className={`w-2 h-2 rounded-full ${itemStats.checked ? (itemStats.visible ? 'bg-emerald-500' : 'bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.5)]') : 'bg-white/20'}`} />
+                          <div className={`w-2 h-2 rounded-full ${itemStats.checked ? (itemStats.visible ? 'bg-[#4d9fff]' : 'bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.5)]') : 'bg-white/20'}`} />
                           <span className="text-[10px] uppercase tracking-[0.2em] font-bold">
                             {itemStats.checked ? (itemStats.visible ? 'En Venta' : 'OCULTO / ELIMINADO') : 'Objetivo Detectado'}
                           </span>
@@ -1265,13 +1265,13 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
 
                           {/* ── Resultados del Sniper ── */}
                           {sniperResult && (
-                            <div className={`rounded-xl border p-3 text-[11px] font-mono space-y-1 ${sniperResult.ok ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-300' : 'border-red-500/30 bg-red-500/5 text-red-300'}`}>
+                            <div className={`rounded-xl border p-3 text-[11px] font-mono space-y-1 ${sniperResult.ok ? 'border-[#4d9fff]/30 bg-[#4d9fff]/5 text-[#4d9fff]' : 'border-red-500/30 bg-red-500/5 text-red-300'}`}>
                               <div className="font-bold text-xs mb-2">
                                 {sniperResult.ok ? `✅ RESERVADO en ${sniperResult.fastestMs}ms` : '❌ Todos los workers fallaron'}
                               </div>
                               <div className="text-white/40">item: {sniperResult.itemId} · seller: {sniperResult.sellerId}</div>
                               {sniperResult.results.map(r => (
-                                <div key={r.worker} className={r.success ? 'text-emerald-400' : 'text-white/30'}>
+                                <div key={r.worker} className={r.success ? 'text-[#4d9fff]' : 'text-white/30'}>
                                   W{r.worker}: {r.success ? `OK tx=${r.transactionId} (${r.durationMs}ms)` : `FAIL — ${r.error?.slice(0, 60)}`}
                                 </div>
                               ))}
@@ -1372,12 +1372,12 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
 
             {/* Bazooka job queue */}
             {bazookaJobs.length > 0 && (
-              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-[#141414] border border-white/5 rounded-2xl p-5 space-y-3">
+              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-[#0d1012] border border-white/8 rounded-[20px] p-5 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <Zap className="w-4 h-4 text-emerald-400" />
+                    <Zap className="w-4 h-4 text-[#4d9fff]" />
                     <span className="text-xs font-bold uppercase tracking-widest text-white/60">Cola de reservas</span>
-                    <span className="text-[10px] bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded-full font-mono">{bazookaJobs.filter(j => j.status === 'pending' || j.status === 'processing').length} activos</span>
+                    <span className="text-[10px] bg-[#4d9fff]/10 text-[#4d9fff] px-2 py-0.5 rounded-full font-mono">{bazookaJobs.filter(j => j.status === 'pending' || j.status === 'processing').length} activos</span>
                   </div>
                   <button onClick={clearJobs} title="Limpiar cola" className="text-white/20 hover:text-red-400 transition-colors">
                     <Trash2 className="w-4 h-4" />
@@ -1387,7 +1387,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                   {bazookaJobs.map(job => (
                     <div key={job.id} className="flex items-center gap-3 bg-black/30 rounded-xl px-3 py-2.5">
                       <div className={`w-2 h-2 rounded-full shrink-0 ${
-                        job.status === 'done' ? 'bg-emerald-500' :
+                        job.status === 'done' ? 'bg-[#4d9fff]' :
                         job.status === 'failed' ? 'bg-red-500' :
                         job.status === 'processing' ? 'bg-amber-400 animate-pulse' :
                         'bg-white/20'
@@ -1399,11 +1399,11 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                           <p className="text-[10px] text-red-400 truncate mt-0.5">{job.error_message}</p>
                         )}
                         {job.status === 'done' && job.note && (
-                          <p className="text-[10px] text-emerald-400 truncate mt-0.5">✓ {job.note}</p>
+                          <p className="text-[10px] text-[#4d9fff] truncate mt-0.5">✓ {job.note}</p>
                         )}
                       </div>
                       <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded-full shrink-0 ${
-                        job.status === 'done' ? 'bg-emerald-500/10 text-emerald-400' :
+                        job.status === 'done' ? 'bg-[#4d9fff]/10 text-[#4d9fff]' :
                         job.status === 'failed' ? 'bg-red-500/10 text-red-400' :
                         job.status === 'processing' ? 'bg-amber-500/10 text-amber-400' :
                         'bg-white/5 text-white/30'
@@ -1420,7 +1420,7 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
             <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
               <div className="space-y-2">
                 <h2 className="text-3xl md:text-4xl font-black tracking-tighter text-white">
-                  CONTROL DE <span className="text-emerald-500 italic">BENEFICIOS</span>
+                  CONTROL DE <span className="text-[#4d9fff] italic">BENEFICIOS</span>
                 </h2>
                 <p className="text-sm text-white/40 font-medium uppercase tracking-[0.3em]">Facturación · Gastos · Net Profit</p>
               </div>
@@ -1438,9 +1438,9 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
             <div className="grid grid-cols-2 gap-2">
               <button
                 onClick={() => setTongueSubTab('editor')}
-                className={`flex items-center justify-center gap-2 px-4 py-3 rounded-2xl text-sm font-bold transition-all ${
+                className={`flex items-center justify-center gap-2 px-4 py-3 rounded-[20px] text-sm font-bold transition-all ${
                   tongueSubTab === 'editor'
-                    ? 'bg-emerald-500 text-black shadow-[0_0_20px_rgba(16,185,129,0.3)]'
+                    ? 'bg-[#4d9fff] text-[#050607] shadow-[0_0_20px_rgba(77,159,255,0.3)]'
                     : 'bg-white/5 text-white/40 hover:text-white hover:bg-white/10 border border-white/5'
                 }`}
               >
@@ -1449,9 +1449,9 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
               </button>
               <button
                 onClick={() => setTongueSubTab('photos')}
-                className={`flex items-center justify-center gap-2 px-4 py-3 rounded-2xl text-sm font-bold transition-all ${
+                className={`flex items-center justify-center gap-2 px-4 py-3 rounded-[20px] text-sm font-bold transition-all ${
                   tongueSubTab === 'photos'
-                    ? 'bg-emerald-500 text-black shadow-[0_0_20px_rgba(16,185,129,0.3)]'
+                    ? 'bg-[#4d9fff] text-[#050607] shadow-[0_0_20px_rgba(77,159,255,0.3)]'
                     : 'bg-white/5 text-white/40 hover:text-white hover:bg-white/10 border border-white/5'
                 }`}
               >
@@ -1462,14 +1462,14 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
 
             {/* Editor de Lengüetas */}
             {tongueSubTab === 'editor' && (
-              <div className="bg-[#0f0f0f] border border-white/5 rounded-[2.5rem] p-8 md:p-12 shadow-2xl relative overflow-hidden group">
+              <div className="bg-[#0d1012] border border-white/8 rounded-[28px] p-8 md:p-12 shadow-2xl relative overflow-hidden group">
                 <div className="absolute top-0 right-0 p-8 opacity-5">
-                  <Scissors className="w-32 h-32 text-emerald-500" />
+                  <Scissors className="w-32 h-32 text-[#4d9fff]" />
                 </div>
                 <div className="relative z-10 space-y-8">
                   <div className="space-y-2">
                     <h2 className="text-3xl md:text-5xl font-black tracking-tighter text-white">
-                      EDITOR DE <span className="text-emerald-500 italic underline decoration-white/10 underline-offset-8">LENGÜETAS</span>
+                      EDITOR DE <span className="text-[#4d9fff] italic underline decoration-white/10 underline-offset-8">LENGÜETAS</span>
                     </h2>
                     <p className="text-sm text-white/40 font-medium uppercase tracking-[0.3em]">IA Vision • Reconstrucción Forense</p>
                   </div>
@@ -1480,14 +1480,14 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
 
             {/* Fotos Únicas */}
             {tongueSubTab === 'photos' && (
-              <div className="bg-[#0f0f0f] border border-white/5 rounded-[2.5rem] p-8 md:p-12 shadow-2xl relative overflow-hidden">
+              <div className="bg-[#0d1012] border border-white/8 rounded-[28px] p-8 md:p-12 shadow-2xl relative overflow-hidden">
                 <div className="absolute top-0 right-0 p-8 opacity-5">
-                  <ImageIcon className="w-32 h-32 text-emerald-500" />
+                  <ImageIcon className="w-32 h-32 text-[#4d9fff]" />
                 </div>
                 <div className="relative z-10 space-y-8">
                   <div className="space-y-2">
                     <h2 className="text-3xl md:text-5xl font-black tracking-tighter text-white">
-                      FOTOS <span className="text-emerald-500 italic underline decoration-white/10 underline-offset-8">ÚNICAS</span>
+                      FOTOS <span className="text-[#4d9fff] italic underline decoration-white/10 underline-offset-8">ÚNICAS</span>
                     </h2>
                     <p className="text-sm text-white/40 font-medium uppercase tracking-[0.3em]">Anti-Detección · Hash Único · Sin EXIF</p>
                   </div>
@@ -1508,9 +1508,9 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                     ))}
                   </div>
 
-                  <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-2xl px-5 py-4 text-sm text-emerald-300/80 flex items-start gap-3">
+                  <div className="bg-[#4d9fff]/5 border border-[#4d9fff]/20 rounded-[20px] px-5 py-4 text-sm text-[#4d9fff]/80 flex items-start gap-3">
                     <span className="text-lg mt-0.5">💡</span>
-                    <span>Todo el proceso ocurre en tu navegador. Las imágenes <strong className="text-emerald-300">nunca se suben al servidor</strong>. Puedes procesar múltiples fotos a la vez y descargarlas todas de un clic.</span>
+                    <span>Todo el proceso ocurre en tu navegador. Las imágenes <strong className="text-[#4d9fff]">nunca se suben al servidor</strong>. Puedes procesar múltiples fotos a la vez y descargarlas todas de un clic.</span>
                   </div>
 
                   <ImageUniquifier />
@@ -1532,28 +1532,28 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
             <div className="space-y-4">
               <div className="bg-black border border-white/5 rounded-xl p-4 font-mono text-xs overflow-x-auto">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-emerald-400">POST /api/vinted/hide</span>
-                  <button onClick={() => copyToClipboard('curl -X POST /api/vinted/hide -d \'{"itemId": 123, "cookie": "..."}\'')} className="hover:text-emerald-400">
+                  <span className="text-[#4d9fff]">POST /api/vinted/hide</span>
+                  <button onClick={() => copyToClipboard('curl -X POST /api/vinted/hide -d \'{"itemId": 123, "cookie": "..."}\'')} className="hover:text-[#4d9fff]">
                     {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
                   </button>
                 </div>
                 <code className="text-white/40 leading-6">{"{"}</code><br/>
-                <code className="pl-4 text-emerald-300">"itemId": 1234567,</code><br/>
-                <code className="pl-4 text-emerald-300">"cookie": "string"</code><br/>
+                <code className="pl-4 text-[#4d9fff]">"itemId": 1234567,</code><br/>
+                <code className="pl-4 text-[#4d9fff]">"cookie": "string"</code><br/>
                 <code className="text-white/40 leading-6">{"}"}</code>
               </div>
             </div>
           </div>
 
-          <div className="bg-[#141414] rounded-3xl p-8 border border-white/5 relative overflow-hidden">
-            <div className="absolute -right-4 -bottom-4 w-32 h-32 bg-emerald-500/5 blur-3xl rounded-full" />
+          <div className="bg-[#0d1012] rounded-[28px] p-8 border border-white/8 relative overflow-hidden">
+            <div className="absolute -right-4 -bottom-4 w-32 h-32 bg-[#4d9fff]/5 blur-3xl rounded-full" />
             <h4 className="text-lg font-bold mb-2">Seguridad y Privacidad</h4>
             <p className="text-sm text-white/40 leading-relaxed">
               Esta herramienta no almacena tus cookies permanentemente en el servidor. 
               Toda la comunicación se realiza a través de un proxy local seguro. 
               Asegúrate de no compartir nunca tu cookie de sesión pública.
             </p>
-            <div className="mt-6 flex items-center gap-2 text-emerald-400/50 text-[10px] uppercase font-bold tracking-widest">
+            <div className="mt-6 flex items-center gap-2 text-[#4d9fff]/50 text-[10px] uppercase font-bold tracking-widest">
               <CheckCircle2 className="w-4 h-4" /> Cifrado de extremo a extremo activo
             </div>
           </div>

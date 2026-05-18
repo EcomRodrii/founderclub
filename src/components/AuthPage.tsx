@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Lock, User, Mail, Eye, EyeOff, ShieldCheck, AlertCircle } from 'lucide-react';
+import { Lock, User, Mail, Eye, EyeOff, AlertCircle } from 'lucide-react';
 
 interface AuthPageProps {
   onAuth: (token: string, user: any) => void;
@@ -39,124 +39,153 @@ export default function AuthPage({ onAuth }: AuthPageProps) {
   };
 
   return (
-    <div className="min-h-screen bg-zinc-950 flex items-center justify-center p-4">
+    <div className="min-h-screen flex items-center justify-center p-4">
       <motion.div
         initial={{ opacity: 0, y: 24 }}
         animate={{ opacity: 1, y: 0 }}
-        className="w-full max-w-md"
+        transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+        className="w-full max-w-[480px] relative z-10"
       >
         {/* Logo */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-violet-600/20 border border-violet-500/30 mb-4">
-            <ShieldCheck className="w-8 h-8 text-violet-400" />
+          <div className="inline-flex items-center gap-3 mb-4">
+            <div
+              className="w-3 h-3 rounded-[3px] bg-[#4d9fff]"
+              style={{ boxShadow: '0 0 20px rgba(77,159,255,0.55)' }}
+            />
+            <span className="text-2xl font-bold tracking-tight text-[#f4f4ef]">FounderClub</span>
           </div>
-          <h1 className="text-2xl font-bold text-white">FounderClub</h1>
-          <p className="text-zinc-500 text-sm mt-1">Herramientas profesionales para Vinted</p>
+          <p className="text-[#a4a79f] text-sm">Herramientas profesionales para Vinted</p>
         </div>
 
         {/* Card */}
-        <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6">
-          {/* Tabs */}
-          <div className="flex bg-zinc-800 rounded-xl p-1 mb-6">
-            {(['login', 'register'] as const).map(tab => (
-              <button
-                key={tab}
-                onClick={() => { setMode(tab); setError(null); }}
-                className={`flex-1 py-2 text-sm font-medium rounded-lg transition-all ${
-                  mode === tab ? 'bg-violet-600 text-white' : 'text-zinc-400 hover:text-white'
-                }`}
-              >
-                {tab === 'login' ? 'Iniciar sesión' : 'Registrarse'}
-              </button>
-            ))}
-          </div>
+        <div
+          className="border rounded-[28px] p-8 relative overflow-hidden"
+          style={{
+            background: 'linear-gradient(180deg, rgba(18,22,24,0.94) 0%, rgba(10,12,14,0.94) 100%)',
+            borderColor: 'rgba(255,255,255,0.16)',
+            boxShadow: '0 40px 110px rgba(0,0,0,0.55)',
+          }}
+        >
+          {/* Inner glow */}
+          <div
+            className="absolute inset-0 rounded-[28px] pointer-events-none"
+            style={{
+              background: 'radial-gradient(circle at 100% 0%, rgba(77,159,255,0.16), transparent 48%), radial-gradient(circle at 0% 110%, rgba(77,159,255,0.06), transparent 42%)',
+              opacity: 0.7,
+            }}
+          />
 
-          <form onSubmit={submit} className="space-y-4">
-            <AnimatePresence mode="wait">
-              {mode === 'register' && (
-                <motion.div
-                  key="username"
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="overflow-hidden"
+          <div className="relative z-10">
+            {/* Tabs */}
+            <div className="flex border-b border-white/8 mb-6">
+              {(['login', 'register'] as const).map(tab => (
+                <button
+                  key={tab}
+                  onClick={() => { setMode(tab); setError(null); }}
+                  className={`flex-1 py-2.5 text-sm font-medium transition-all border-b-2 -mb-px ${
+                    mode === tab
+                      ? 'border-[#4d9fff] text-[#f4f4ef]'
+                      : 'border-transparent text-[#a4a79f] hover:text-[#f4f4ef]'
+                  }`}
                 >
-                  <label className="block text-xs font-medium text-zinc-400 mb-1.5">Usuario</label>
-                  <div className="relative">
-                    <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
-                    <input
-                      type="text"
-                      value={username}
-                      onChange={e => setUsername(e.target.value)}
-                      placeholder="tunombre"
-                      required
-                      className="w-full bg-zinc-800 border border-zinc-700 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-violet-500 transition"
-                    />
-                  </div>
+                  {tab === 'login' ? 'Iniciar sesión' : 'Registrarse'}
+                </button>
+              ))}
+            </div>
+
+            <form onSubmit={submit} className="space-y-4">
+              <AnimatePresence mode="wait">
+                {mode === 'register' && (
+                  <motion.div
+                    key="username"
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className="overflow-hidden"
+                  >
+                    <label className="block text-[10px] font-bold uppercase tracking-[0.18em] text-[#b8bab2] mb-1.5">Usuario</label>
+                    <div className="relative">
+                      <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#a4a79f]" />
+                      <input
+                        type="text"
+                        value={username}
+                        onChange={e => setUsername(e.target.value)}
+                        placeholder="tunombre"
+                        required
+                        className="w-full bg-[#111416] border border-white/8 rounded-[14px] pl-10 pr-4 py-3 text-sm text-[#f4f4ef] placeholder-[#a4a79f] focus:outline-none focus:border-[#4d9fff]/35 focus:shadow-[0_0_0_3px_rgba(77,159,255,0.12)] transition-all"
+                      />
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-[0.18em] text-[#b8bab2] mb-1.5">Email</label>
+                <div className="relative">
+                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#a4a79f]" />
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={e => setEmail(e.target.value)}
+                    placeholder="tu@email.com"
+                    required
+                    className="w-full bg-[#111416] border border-white/8 rounded-[14px] pl-10 pr-4 py-3 text-sm text-[#f4f4ef] placeholder-[#a4a79f] focus:outline-none focus:border-[#4d9fff]/35 focus:shadow-[0_0_0_3px_rgba(77,159,255,0.12)] transition-all"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-[0.18em] text-[#b8bab2] mb-1.5">Contraseña</label>
+                <div className="relative">
+                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#a4a79f]" />
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={e => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    required
+                    className="w-full bg-[#111416] border border-white/8 rounded-[14px] pl-10 pr-10 py-3 text-sm text-[#f4f4ef] placeholder-[#a4a79f] focus:outline-none focus:border-[#4d9fff]/35 focus:shadow-[0_0_0_3px_rgba(77,159,255,0.12)] transition-all"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(p => !p)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[#a4a79f] hover:text-[#f4f4ef] transition-colors"
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              {error && (
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  className="flex items-center gap-2 rounded-[14px] px-3 py-2.5 text-sm text-[#ff9797] border"
+                  style={{
+                    background: 'rgba(255,151,151,0.08)',
+                    borderColor: 'rgba(255,151,151,0.2)',
+                  }}
+                >
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  {error}
                 </motion.div>
               )}
-            </AnimatePresence>
 
-            <div>
-              <label className="block text-xs font-medium text-zinc-400 mb-1.5">Email</label>
-              <div className="relative">
-                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
-                <input
-                  type="email"
-                  value={email}
-                  onChange={e => setEmail(e.target.value)}
-                  placeholder="tu@email.com"
-                  required
-                  className="w-full bg-zinc-800 border border-zinc-700 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-violet-500 transition"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-zinc-400 mb-1.5">Contraseña</label>
-              <div className="relative">
-                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  value={password}
-                  onChange={e => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  required
-                  className="w-full bg-zinc-800 border border-zinc-700 rounded-xl pl-10 pr-10 py-2.5 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-violet-500 transition"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(p => !p)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300"
-                >
-                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </div>
-            </div>
-
-            {error && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="flex items-center gap-2 bg-red-500/10 border border-red-500/20 rounded-xl px-3 py-2.5 text-sm text-red-400"
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full bg-[#4d9fff] hover:bg-[#3b7fd4] disabled:opacity-50 disabled:cursor-not-allowed text-[#050607] font-bold rounded-[14px] py-3 text-sm transition-all"
+                style={{ boxShadow: '0 18px 40px -12px rgba(77,159,255,0.45)' }}
               >
-                <AlertCircle className="w-4 h-4 shrink-0" />
-                {error}
-              </motion.div>
-            )}
-
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full bg-violet-600 hover:bg-violet-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-xl py-2.5 text-sm transition"
-            >
-              {loading ? 'Cargando...' : mode === 'login' ? 'Entrar' : 'Crear cuenta'}
-            </button>
-          </form>
+                {loading ? 'Cargando...' : mode === 'login' ? 'Entrar' : 'Crear cuenta'}
+              </button>
+            </form>
+          </div>
         </div>
 
-        <p className="text-center text-xs text-zinc-600 mt-4">
-          FounderClub © {new Date().getFullYear()} — Uso personal
+        <p className="text-center text-xs text-[#a4a79f]/50 mt-4">
+          FounderClub &copy; {new Date().getFullYear()} — Uso personal
         </p>
       </motion.div>
     </div>
