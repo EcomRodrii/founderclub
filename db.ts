@@ -6,9 +6,11 @@ const { Pool } = pg;
 
 function buildPoolConfig() {
   const url = process.env.DATABASE_URL || "";
-  const isRemote = process.env.NODE_ENV === "production" || url.includes("railway") || url.includes("rlwy");
-  if (isRemote && url.startsWith("postgresql://")) {
-    // Parse manualmente para evitar que pg sobrescriba ssl con su parser de URL
+  // Solo forzar SSL en conexiones públicas de Railway (proxy externo)
+  // Las conexiones internas (*.railway.internal) NO necesitan SSL
+  const needsSsl = url.includes("rlwy.net") || url.includes("proxy.rlwy");
+  if (needsSsl && url.startsWith("postgresql://")) {
+    // Parsear manualmente para evitar que pg override SSL con su parser de URL
     const u = new URL(url);
     return {
       host:     u.hostname,
@@ -19,7 +21,12 @@ function buildPoolConfig() {
       ssl:      { rejectUnauthorized: false },
     };
   }
-  return { connectionString: url, ssl: false };
+  // Railway interno o localhost: dejar que pg maneje la conexión normalmente
+  const isProd = process.env.NODE_ENV === "production";
+  return {
+    connectionString: url,
+    ssl: isProd ? { rejectUnauthorized: false } : false,
+  };
 }
 
 export const pool = new Pool(buildPoolConfig());
