@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   Upload, Download, Image as ImageIcon,
   CheckCircle2, RefreshCcw, Trash2, Shuffle,
-  ZapOff, Images, Zap
+  ZapOff, Images, Zap, Plus, Pencil, ChevronDown, ChevronUp, RotateCcw
 } from 'lucide-react';
 
 // ─── Cómo detecta Vinted duplicados ──────────────────────────────────────────
@@ -79,6 +79,14 @@ interface ModeConfig {
   // Si true, inyecta EXIF aleatorio realista (cámara, fecha, ISO, focal…).
   // Hace que la foto parezca tomada con móvil en vez de JPEG limpio.
   randomExif: boolean;
+  // Sesgar (skew) horizontal/vertical. Valores en "unidades" (0.5 ≈ leve, 2 ≈ fuerte).
+  // Se aplica como transformación afín antes del draw. Cambia la geometría sin rotar.
+  skewX?: number;
+  skewY?: number;
+  // Marco (crop) independiente por eje. Si están definidos, sobreescriben cropPctMin/Max.
+  // % de borde recortado en cada eje. P.ej. frameVPct=0, frameHPct=10 → solo recorta laterales.
+  frameVPct?: number;
+  frameHPct?: number;
 }
 
 const MODES: ModeConfig[] = [
@@ -248,6 +256,16 @@ async function uniquifyImage(
           srcH = Math.max(1, Math.floor(IH * rH));
           srcX = rndI(0, IW - srcW);
           srcY = rndI(0, IH - srcH);
+        } else if (cfg.frameVPct !== undefined || cfg.frameHPct !== undefined) {
+          // Crop por eje independiente: marco vertical/horizontal separado.
+          const vPct = (cfg.frameVPct ?? 0) / 100;
+          const hPct = (cfg.frameHPct ?? 0) / 100;
+          const cutH = Math.floor(IW * hPct);
+          const cutV = Math.floor(IH * vPct);
+          srcX = Math.floor(cutH / 2);
+          srcY = Math.floor(cutV / 2);
+          srcW = Math.max(1, IW - cutH);
+          srcH = Math.max(1, IH - cutV);
         } else if (cfg.cropPctMax > 0) {
           // Crop simétrico clásico: recorta X% de bordes y reescala.
           const pct  = rnd(cfg.cropPctMin, cfg.cropPctMax) / 100;
@@ -295,6 +313,19 @@ async function uniquifyImage(
           ctx.translate(W / 2, H / 2);
           ctx.rotate(angle);
           ctx.scale(scale, scale);
+          ctx.translate(-W / 2, -H / 2);
+        }
+        // Skew (sesgar) X/Y: transformación afín. Las "unidades" del UI se convierten
+        // a factor matriz dividiendo por 100 (0.5 → 0.005, suficiente para invisibilidad).
+        const skX = (cfg.skewX ?? 0) / 100;
+        const skY = (cfg.skewY ?? 0) / 100;
+        if (skX !== 0 || skY !== 0) {
+          // Compensa para que la imagen siga cubriendo el canvas completo.
+          const sxAbs = Math.abs(skX), syAbs = Math.abs(skY);
+          const scaleComp = 1 / (1 + Math.max(sxAbs, syAbs));
+          ctx.translate(W / 2, H / 2);
+          ctx.transform(1, skY, skX, 1, 0, 0);
+          ctx.scale(scaleComp, scaleComp);
           ctx.translate(-W / 2, -H / 2);
         }
         ctx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, W, H);
@@ -711,6 +742,76 @@ async function saveAll(
   }
 }
 
+// ─── Repost configs (multi-modificación cíclica) ──────────────────────────────
+// Cada fila de la tabla "Configuración de repost" es una RepostConfig.
+// processFiles aplica configs[i % configs.length] a cada foto subida.
+
+interface RepostConfig extends ModeConfig {
+  rid: string;                              // id único de la fila
+  editTitle: 'auto' | 'manual';
+  editDescription: 'auto' | 'manual';
+}
+
+// Base común (heredado del modo NORMAL pero sin crop simétrico cuando hay frame por eje).
+const REPOST_BASE: Omit<ModeConfig, 'id' | 'label' | 'desc'> = {
+  trimMin: 1, trimMax: 2,
+  cropPctMin: 0, cropPctMax: 0,
+  pixelNoiseMax: 1,
+  blockNoiseMax: 2, blockSize: 20,
+  lineWarpMax: 0,
+  brightMax: 2,
+  gradientMax: 0,
+  rotateDegMax: 0,
+  qualityMin: 0.90, qualityMax: 0.94,
+  flipChance: 0,
+  aspectStretchMax: 0,
+  perspectiveMax: 0,
+  bgShiftMax: 0,
+  bgTolerance: 0,
+  textureAmp: 0,
+  offCenterKeepMin: 0,
+  offCenterKeepMax: 0,
+  toneCurveAmp: 0,
+  distractorChance: 0,
+  randomExif: false,
+};
+
+let RID_SEQ = 0;
+const nextRid = () => `rc-${Date.now()}-${++RID_SEQ}`;
+
+function makeConfig(partial: Partial<ModeConfig> & Pick<ModeConfig, 'id' | 'label' | 'desc'>): RepostConfig {
+  return {
+    ...REPOST_BASE,
+    ...partial,
+    rid: nextRid(),
+    editTitle: 'auto',
+    editDescription: 'auto',
+  } as RepostConfig;
+}
+
+// Presets iniciales (8 filas mirroring el screenshot del Restocker).
+const DEFAULT_CONFIGS: RepostConfig[] = [
+  makeConfig({ id: 'normal', label: '#1', desc: 'Sesgar X+Y suave + marco 5%',  skewX: 0.5,  skewY: 0.5,  frameVPct: 5, frameHPct: 5 }),
+  makeConfig({ id: 'normal', label: '#2', desc: 'Sesgar X+Y inverso + marco 5%', skewX: -0.5, skewY: -0.5, frameVPct: 5, frameHPct: 5 }),
+  makeConfig({ id: 'normal', label: '#3', desc: 'Rotar +2° + marco 3/1/4%',     rotateDegMax: 2,  frameVPct: 1, frameHPct: 4 }),
+  makeConfig({ id: 'normal', label: '#4', desc: 'Rotar -2° + marco 3/1/4%',     rotateDegMax: 2,  frameVPct: 1, frameHPct: 4 }),
+  makeConfig({ id: 'normal', label: '#5', desc: 'Marco simple 5%',              frameVPct: 5, frameHPct: 5 }),
+  makeConfig({ id: 'normal', label: '#6', desc: 'Marco 10% + ajuste sutil',     frameVPct: 10, frameHPct: 10, skewX: -0.5, skewY: -0.2 }),
+  makeConfig({ id: 'normal', label: '#7', desc: 'Marco solo horizontal 10%',    frameVPct: 0, frameHPct: 10, skewY: -0.2 }),
+  makeConfig({ id: 'normal', label: '#8', desc: 'Marco solo vertical 10%',      frameVPct: 10, frameHPct: 0, skewX: -0.5 }),
+];
+
+function summarizeConfig(c: RepostConfig): string {
+  const parts: string[] = [];
+  if (c.skewX || c.skewY) parts.push(`Sesgar X: ${c.skewX ?? 0} Sesgar Y: ${c.skewY ?? 0}`);
+  if (c.rotateDegMax) parts.push(`Rotar: ${c.rotateDegMax > 0 ? '±' : ''}${c.rotateDegMax}°`);
+  const fv = c.frameVPct ?? 0, fh = c.frameHPct ?? 0;
+  if (fv === fh && fv > 0) parts.push(`Tamaño de marco simple: ${fv}%`);
+  else if (fv || fh) parts.push(`Marco vertical: ${fv}%, horizontal: ${fh}%`);
+  if (c.flipChance > 0) parts.push('Flip 50%');
+  return parts.join(' · ') || 'Sin modificaciones';
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface ProcessedImage {
@@ -720,10 +821,38 @@ interface ProcessedImage {
   cosineDist?: number; advAttempts?: number;
 }
 
+// ─── Sub-componente: campo numérico para el editor ───────────────────────────
+
+function NumField({
+  label, value, onChange, step = 1, min, max,
+}: {
+  label: string; value: number; onChange: (v: number) => void;
+  step?: number; min?: number; max?: number;
+}) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-[10px] uppercase tracking-wider text-white/40">{label}</span>
+      <input
+        type="number"
+        value={value}
+        step={step}
+        min={min}
+        max={max}
+        onChange={e => {
+          const v = parseFloat(e.target.value);
+          onChange(Number.isFinite(v) ? v : 0);
+        }}
+        className="bg-black border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/90 focus:border-acid focus:outline-none"
+      />
+    </label>
+  );
+}
+
 // ─── Componente ───────────────────────────────────────────────────────────────
 
 export default function ImageUniquifier() {
-  const [activeMode, setActiveMode] = useState<Mode>('normal');
+  const [configs, setConfigs]       = useState<RepostConfig[]>(DEFAULT_CONFIGS);
+  const [expandedRid, setExpandedRid] = useState<string | null>(null);
   const [images, setImages]         = useState<ProcessedImage[]>([]);
   const [dragging, setDragging]     = useState(false);
   const [savingAll, setSavingAll]   = useState(false);
@@ -735,8 +864,22 @@ export default function ImageUniquifier() {
   const [clipProgress, setClipProgress] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const cfg        = MODES.find(m => m.id === activeMode)!;
-  const techniques = TECHNIQUES[activeMode];
+  const updateConfig = (rid: string, patch: Partial<RepostConfig>) => {
+    setConfigs(prev => prev.map(c => c.rid === rid ? { ...c, ...patch } : c));
+  };
+  const removeConfig = (rid: string) => {
+    setConfigs(prev => prev.length <= 1 ? prev : prev.filter(c => c.rid !== rid));
+  };
+  const addConfig = () => {
+    setConfigs(prev => [
+      ...prev,
+      makeConfig({ id: 'normal', label: `#${prev.length + 1}`, desc: 'Nueva configuración', frameVPct: 5, frameHPct: 5 }),
+    ]);
+  };
+  const resetConfigs = () => {
+    setConfigs(DEFAULT_CONFIGS.map(c => ({ ...c, rid: nextRid() })));
+    setImages([]);
+  };
 
   const ensureCLIP = useCallback(async () => {
     if (clipReady) return true;
@@ -763,27 +906,26 @@ export default function ImageUniquifier() {
     if (!clipReady) await ensureCLIP();
   }, [nuclearMode, clipReady, ensureCLIP]);
 
-  const processFiles = useCallback(async (files: FileList | File[], mode: Mode) => {
-    const mc  = MODES.find(m => m.id === mode)!;
+  const processFiles = useCallback(async (files: FileList | File[], cfgs: RepostConfig[]) => {
     const arr = Array.from(files).filter(f => f.type.startsWith('image/'));
-    if (!arr.length) return;
+    if (!arr.length || !cfgs.length) return;
     const useNuclear = nuclearMode && clipReady;
-    const entries: ProcessedImage[] = arr.map(f => ({
-      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    const entries: ProcessedImage[] = arr.map((f, i) => ({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2)}-${i}`,
       originalName: f.name, originalUrl: URL.createObjectURL(f),
       processedUrl: null, originalSize: f.size, processedSize: 0,
-      status: 'processing', noiseLevel: 0, dimChange: '', mode,
+      status: 'processing', noiseLevel: 0, dimChange: '',
+      mode: cfgs[i % cfgs.length].id,
     }));
     setImages(prev => [...entries, ...prev]);
 
-    // Pre-import CLIP helpers si vamos a usarlos
     const clipHelpers = useNuclear ? await import('../lib/clipAdversarial') : null;
 
     for (let i = 0; i < arr.length; i++) {
       const entry = entries[i];
+      const mc = cfgs[i % cfgs.length];
       try {
         if (useNuclear && clipHelpers) {
-          // Original embedding (una vez)
           const origDataUrl = await new Promise<string>((resolve, reject) => {
             const r = new FileReader();
             r.onload = () => resolve(r.result as string);
@@ -814,17 +956,19 @@ export default function ImageUniquifier() {
   }, [nuclearMode, clipReady]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault(); setDragging(false); processFiles(e.dataTransfer.files, activeMode);
-  }, [processFiles, activeMode]);
+    e.preventDefault(); setDragging(false); processFiles(e.dataTransfer.files, configs);
+  }, [processFiles, configs]);
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) processFiles(e.target.files, activeMode);
+    if (e.target.files) processFiles(e.target.files, configs);
     e.target.value = '';
   };
 
   const reprocess = async (id: string) => {
     const entry = images.find(img => img.id === id); if (!entry) return;
-    const mc = MODES.find(m => m.id === entry.mode)!;
+    // Regenera con la primera config disponible (los presets cíclicos solo importan en lote).
+    const mc = configs[0];
+    if (!mc) return;
     setImages(prev => prev.map(img => img.id === id ? { ...img, status: 'processing', processedUrl: null } : img));
     try {
       const blob = await fetch(entry.originalUrl).then(r => r.blob());
@@ -866,25 +1010,137 @@ export default function ImageUniquifier() {
   return (
     <div className="space-y-6">
 
-      {/* Modos 2×2 */}
-      <div className="grid grid-cols-2 gap-3">
-        {MODES.map(m => {
-          const active    = activeMode === m.id;
-          const isExtremo = m.id === 'extremo';
-          return (
-            <button key={m.id} onClick={() => setActiveMode(m.id)}
-              className={`p-5 rounded-2xl border-2 text-left transition-all ${
-                active && isExtremo ? 'border-red-700 bg-red-950/60'
-                : active            ? 'border-white/30 bg-white/10'
-                : 'border-white/[0.08] bg-white/[0.03] hover:border-white/15'
-              }`}>
-              <p className={`text-sm font-black uppercase tracking-widest mb-1 ${
-                active && isExtremo ? 'text-red-400' : active ? 'text-white' : 'text-white/40'
-              }`}>{m.label}</p>
-              <p className={`text-[11px] leading-snug ${active ? 'text-white/60' : 'text-white/25'}`}>{m.desc}</p>
-            </button>
-          );
-        })}
+      {/* Configuración de repost — tabla cíclica */}
+      <div className="bg-[#0f0f0f] border border-white/[0.08] rounded-2xl overflow-hidden">
+        <div className="p-5 pb-3 border-b border-white/5">
+          <p className="text-xs font-black uppercase tracking-widest text-white/50">Configuración de repost</p>
+          <p className="text-[11px] text-white/40 mt-1">Modo de procesamiento de fotos</p>
+        </div>
+
+        {/* Header */}
+        <div className="hidden md:grid grid-cols-[40px_1fr_140px_140px_180px] gap-3 px-5 py-3 text-[10px] uppercase tracking-widest text-white/40 font-bold border-b border-white/5">
+          <div>#</div>
+          <div>Modificaciones</div>
+          <div>Editar título</div>
+          <div>Editar descripción</div>
+          <div>Acciones</div>
+        </div>
+
+        {/* Filas */}
+        <div className="divide-y divide-white/5">
+          {configs.map((c, idx) => {
+            const expanded = expandedRid === c.rid;
+            return (
+              <div key={c.rid}>
+                <div className="grid grid-cols-1 md:grid-cols-[40px_1fr_140px_140px_180px] gap-3 px-5 py-4 items-center">
+                  <div className="text-white/40 font-mono text-sm">{idx + 1}</div>
+
+                  <div className="text-[12px] text-white/80 leading-snug">
+                    {summarizeConfig(c)}
+                  </div>
+
+                  <select
+                    value={c.editTitle}
+                    onChange={e => updateConfig(c.rid, { editTitle: e.target.value as 'auto' | 'manual' })}
+                    className="bg-black border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 focus:border-acid focus:outline-none"
+                  >
+                    <option value="auto">✦ Auto</option>
+                    <option value="manual">✎ Manual</option>
+                  </select>
+
+                  <select
+                    value={c.editDescription}
+                    onChange={e => updateConfig(c.rid, { editDescription: e.target.value as 'auto' | 'manual' })}
+                    className="bg-black border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 focus:border-acid focus:outline-none"
+                  >
+                    <option value="auto">✦ Auto</option>
+                    <option value="manual">✎ Manual</option>
+                  </select>
+
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setExpandedRid(expanded ? null : c.rid)}
+                      className="flex items-center gap-1.5 bg-acid-soft border border-acid/40 text-acid hover:bg-acid hover:text-black font-bold px-3 py-1.5 rounded-lg text-xs transition"
+                    >
+                      {expanded ? <ChevronUp className="w-3.5 h-3.5" /> : <Pencil className="w-3.5 h-3.5" />}
+                      Abrir editor
+                    </button>
+                    <button
+                      onClick={() => removeConfig(c.rid)}
+                      disabled={configs.length <= 1}
+                      className="flex items-center gap-1.5 bg-pink-500/20 border border-pink-400/30 text-pink-300 hover:bg-pink-500/40 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed font-bold px-3 py-1.5 rounded-lg text-xs transition"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Eliminar
+                    </button>
+                  </div>
+                </div>
+
+                {/* Editor expandido inline */}
+                {expanded && (
+                  <div className="px-5 pb-5 pt-1 bg-black/30">
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                      <NumField label="Sesgar X" step={0.1} value={c.skewX ?? 0} onChange={v => updateConfig(c.rid, { skewX: v })} />
+                      <NumField label="Sesgar Y" step={0.1} value={c.skewY ?? 0} onChange={v => updateConfig(c.rid, { skewY: v })} />
+                      <NumField label="Rotar máx (°)" step={0.5} min={0} value={c.rotateDegMax} onChange={v => updateConfig(c.rid, { rotateDegMax: v })} />
+                      <NumField label="Marco vertical (%)" step={1} min={0} max={50} value={c.frameVPct ?? 0} onChange={v => updateConfig(c.rid, { frameVPct: v })} />
+                      <NumField label="Marco horizontal (%)" step={1} min={0} max={50} value={c.frameHPct ?? 0} onChange={v => updateConfig(c.rid, { frameHPct: v })} />
+                      <NumField label="Ruido por bloque" step={1} min={0} max={6} value={c.blockNoiseMax} onChange={v => updateConfig(c.rid, { blockNoiseMax: v })} />
+                      <NumField label="Brillo máx" step={1} min={0} max={20} value={c.brightMax} onChange={v => updateConfig(c.rid, { brightMax: v })} />
+                      <NumField label="JPEG calidad mín" step={0.01} min={0.5} max={1} value={c.qualityMin} onChange={v => updateConfig(c.rid, { qualityMin: v })} />
+                      <NumField label="JPEG calidad máx" step={0.01} min={0.5} max={1} value={c.qualityMax} onChange={v => updateConfig(c.rid, { qualityMax: v })} />
+                      <NumField label="Flip horizontal (0-1)" step={0.1} min={0} max={1} value={c.flipChance} onChange={v => updateConfig(c.rid, { flipChance: v })} />
+                      <label className="flex items-center gap-2 text-xs text-white/70 col-span-2 md:col-span-1">
+                        <input
+                          type="checkbox"
+                          checked={c.randomExif}
+                          onChange={e => updateConfig(c.rid, { randomExif: e.target.checked })}
+                          className="accent-acid"
+                        />
+                        EXIF aleatorio
+                      </label>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Footer tabla */}
+        <div className="px-5 py-4 border-t border-white/5">
+          <button
+            onClick={addConfig}
+            className="flex items-center gap-2 bg-white/5 hover:bg-white/10 border border-white/10 text-white/70 hover:text-white font-bold px-4 py-2 rounded-xl text-xs transition"
+          >
+            <Plus className="w-4 h-4" />
+            Agregar configuración de repost
+          </button>
+          <p className="text-[11px] text-white/40 mt-3">
+            Modificaciones a aplicar al artículo reposteado. Cuando se usan todas las modificaciones, se repetirá el ciclo.
+          </p>
+          <p className="text-[11px] text-acid mt-1">
+            Rotación activa: el restocker usa todos los conjuntos en orden (1,2,3… y vuelve a 1).
+          </p>
+        </div>
+      </div>
+
+      {/* Acciones formulario */}
+      <div className="flex gap-2 flex-wrap">
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          className="flex items-center gap-2 bg-acid hover:bg-acid/90 text-black font-bold px-5 py-2.5 rounded-xl text-sm transition"
+        >
+          <Zap className="w-4 h-4" />
+          Iniciar Restocker
+        </button>
+        <button
+          onClick={resetConfigs}
+          className="flex items-center gap-2 bg-pink-500/20 hover:bg-pink-500/40 border border-pink-400/30 text-pink-200 hover:text-white font-bold px-5 py-2.5 rounded-xl text-sm transition"
+        >
+          <RotateCcw className="w-4 h-4" />
+          Resetear formulario
+        </button>
       </div>
 
       {/* Modo NUCLEAR: CLIP adversarial verifier */}
@@ -928,24 +1184,6 @@ export default function ImageUniquifier() {
             ✓ CLIP cargado. Cada imagen tardará ~3-6s. Objetivo: cosine ≥ {ADV_TARGET_DIST.toFixed(2)}.
           </p>
         )}
-      </div>
-
-      {/* Técnicas */}
-      <div className="bg-[#111] border border-white/[0.08] rounded-2xl p-5 space-y-3">
-        <p className="text-xs font-black uppercase tracking-widest text-white/50">
-          {techniques.length} técnicas aplicadas — nivel {cfg.label}
-        </p>
-        <div className="space-y-2.5">
-          {techniques.map((t, i) => (
-            <div key={i} className="flex gap-3">
-              <span className={`text-sm shrink-0 mt-0.5 ${activeMode === 'extremo' ? 'text-red-400' : 'text-acid'}`}>{t.icon}</span>
-              <p className="text-[12px] text-white/70 leading-snug">
-                <span className="font-bold text-white/90">{t.title}</span>
-                {t.detail ? ` — ${t.detail}` : ''}
-              </p>
-            </div>
-          ))}
-        </div>
       </div>
 
       {/* Drop Zone */}
@@ -1003,7 +1241,7 @@ export default function ImageUniquifier() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         <AnimatePresence>
           {images.map(img => {
-            const mc = MODES.find(m => m.id === img.mode)!;
+            const mc = MODES.find(m => m.id === img.mode) ?? MODES[1];
             return (
               <motion.div key={img.id}
                 initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9 }}
