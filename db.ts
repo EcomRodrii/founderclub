@@ -243,6 +243,11 @@ export async function initDB() {
     `ALTER TABLE bazooka_jobs ALTER COLUMN vinted_cookies DROP NOT NULL`,
     `CREATE INDEX IF NOT EXISTS idx_bazooka_jobs_pending ON bazooka_jobs(status, created_at) WHERE status = 'pending'`,
 
+    // ── Columnas HWID en licenses (migración — las tablas antiguas no las tienen) ─
+    `ALTER TABLE licenses ADD COLUMN IF NOT EXISTS hwid VARCHAR(512)`,
+    `ALTER TABLE licenses ADD COLUMN IF NOT EXISTS activated_at TIMESTAMP`,
+    `ALTER TABLE licenses ADD COLUMN IF NOT EXISTS ip VARCHAR(64)`,
+
     // ── Extension HWID sessions ────────────────────────────────────────────────
     `CREATE TABLE IF NOT EXISTS extension_sessions (
       id TEXT PRIMARY KEY,
