@@ -2438,6 +2438,17 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
     });
   });
 
+  /**
+   * GET /api/ext/ai-config
+   * Returns server-side AI config (Gemini key) for authenticated extension sessions.
+   * The key is never exposed to the frontend — only via this authenticated endpoint.
+   */
+  app.get("/api/ext/ai-config", requireAuth as any, async (req: AuthRequest, res) => {
+    const geminiKey = process.env.GEMINI_API_KEY || null;
+    if (!geminiKey) return res.status(503).json({ ok: false, error: "ai_not_configured" });
+    return res.json({ ok: true, geminiKey });
+  });
+
   // ── Admin: reset HWID de una licencia ──────────────────────────────────────
   // (ya existe /api/admin/licenses/:id/reset-hwid — añadimos también la revocación
   //  de todas las sesiones activas de esa licencia)
