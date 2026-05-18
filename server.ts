@@ -72,6 +72,20 @@ async function startServer() {
   app.use(helmet({ contentSecurityPolicy: false })); // cabeceras HTTP de seguridad
   app.set("trust proxy", 1); // necesario para rate limit detrás de Railway
 
+  // ── CORS — permite peticiones desde la extensión de Chrome ────────────────
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const origin = req.headers.origin || "";
+    const allowed = /^chrome-extension:\/\/|^https?:\/\/localhost|^https?:\/\/founderclub-production\.up\.railway\.app/.test(origin);
+    if (allowed || !origin) {
+      res.setHeader("Access-Control-Allow-Origin", origin || "*");
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+      res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,x-csrf-token");
+    }
+    if (req.method === "OPTIONS") { res.sendStatus(204); return; }
+    next();
+  });
+
   // Rate limit general: 200 peticiones por IP cada 15 minutos
   app.use(rateLimit({
     windowMs: 15 * 60 * 1000,
