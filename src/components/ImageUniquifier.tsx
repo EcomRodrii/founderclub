@@ -945,8 +945,19 @@ export default function ImageUniquifier() {
   }, [nuclearMode, clipReady, ensureCLIP]);
 
   const processFiles = useCallback(async (files: FileList | File[], cfgs: RepostConfig[]) => {
-    const arr = Array.from(files).filter(f => f.type.startsWith('image/'));
-    if (!arr.length || !cfgs.length) return;
+    // Acepta cualquier archivo cuyo type sea image/* o cuya extensión parezca imagen.
+    // iOS/Android a veces devuelven HEIC/HEIF con type vacío.
+    const looksLikeImage = (f: File) =>
+      f.type.startsWith('image/') ||
+      /\.(jpe?g|png|webp|gif|bmp|heic|heif|avif)$/i.test(f.name);
+    const all = Array.from(files);
+    const arr = all.filter(looksLikeImage);
+    if (!cfgs.length) { console.warn('[uniquify] sin configs'); return; }
+    if (!arr.length) {
+      console.warn('[uniquify] ningún archivo pasa el filtro de imagen:', all.map(f => `${f.name} (${f.type || 'sin type'})`));
+      alert('No se reconoció ningún archivo como imagen. Asegúrate de subir JPG, PNG, WEBP o HEIC.');
+      return;
+    }
     const useNuclear = nuclearMode && clipReady;
     const entries: ProcessedImage[] = arr.map((f, i) => ({
       id: `${Date.now()}-${Math.random().toString(36).slice(2)}-${i}`,
