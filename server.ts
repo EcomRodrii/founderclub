@@ -2125,7 +2125,7 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
   // ── Lamine Hub Extension endpoints ──────────────────────────────────────────
   // Health check que usa el control-center de la extensión
   app.get("/api/up", (_req, res) => {
-    res.json({ ok: true, data: { serverTime: new Date().toISOString() } });
+    res.json({ ok: true, data: { serverTime: new Date().toISOString(), version: "1.2.16-hwid" } });
   });
 
   // ── HWID License System ──────────────────────────────────────────────────────

@@ -4,10 +4,25 @@ dotenv.config({ path: ".env.local" });
 
 const { Pool } = pg;
 
-export const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
-});
+function buildPoolConfig() {
+  const url = process.env.DATABASE_URL || "";
+  const isRemote = process.env.NODE_ENV === "production" || url.includes("railway") || url.includes("rlwy");
+  if (isRemote && url.startsWith("postgresql://")) {
+    // Parse manualmente para evitar que pg sobrescriba ssl con su parser de URL
+    const u = new URL(url);
+    return {
+      host:     u.hostname,
+      port:     Number(u.port) || 5432,
+      user:     u.username,
+      password: decodeURIComponent(u.password),
+      database: u.pathname.replace(/^\//, ""),
+      ssl:      { rejectUnauthorized: false },
+    };
+  }
+  return { connectionString: url, ssl: false };
+}
+
+export const pool = new Pool(buildPoolConfig());
 
 export async function initDB() {
   await pool.query(`
