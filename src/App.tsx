@@ -465,10 +465,20 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
         <div className={`space-y-6 ${['profits','tongues','photos'].includes(activeTab) ? 'hidden' : 'hidden lg:block'}`}>
           <section className="bg-[#141414] border border-white/5 rounded-2xl p-6 shadow-xl relative overflow-hidden group">
             <div className="absolute top-0 left-0 w-1 h-full bg-acid opacity-50 group-hover:opacity-100 transition-opacity" />
-            
-            <div className="flex items-center gap-2 mb-6">
+
+            <div className="flex items-center gap-2 mb-4">
               <Settings className="w-4 h-4 text-acid" />
               <h2 className="text-xs uppercase tracking-widest font-bold text-white/50">Configuración de Acceso</h2>
+            </div>
+
+            {/* Aviso extensión */}
+            <div className="flex items-start gap-2.5 bg-acid-soft border border-acid rounded-[12px] px-3 py-2.5 mb-5">
+              <span className="text-acid mt-0.5 shrink-0">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              </span>
+              <p className="text-[11px] text-acid leading-relaxed">
+                Para usar esta sección necesitas tener instalada la extensión <span className="font-semibold">Lamine Hub</span> en Chrome. La extensión sincroniza automáticamente tu sesión y cookie de Vinted.
+              </p>
             </div>
 
             <div className="space-y-4">
