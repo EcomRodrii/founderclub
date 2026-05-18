@@ -692,7 +692,29 @@ function formatSize(b: number) {
 }
 
 function dl(dataUrl: string, name: string) {
-  const a = document.createElement('a'); a.href = dataUrl; a.download = name; a.click();
+  // Convertir data URL grande a Blob URL — más fiable en Chrome para JPEGs pesados.
+  let href = dataUrl;
+  let revoke: string | null = null;
+  try {
+    if (dataUrl.startsWith('data:')) {
+      const [meta, b64] = dataUrl.split(',');
+      const mime = meta.match(/:(.*?);/)?.[1] || 'image/jpeg';
+      const bin = atob(b64);
+      const buf = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+      const blob = new Blob([buf], { type: mime });
+      href = URL.createObjectURL(blob);
+      revoke = href;
+    }
+  } catch { /* fallback al data url */ }
+  const a = document.createElement('a');
+  a.href = href;
+  a.download = name;
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  if (revoke) setTimeout(() => URL.revokeObjectURL(revoke!), 1000);
 }
 
 async function dataUrlToFile(dataUrl: string, name: string): Promise<File> {
@@ -874,8 +896,6 @@ function NumField({
 // ─── Componente ───────────────────────────────────────────────────────────────
 
 export default function ImageUniquifier() {
-  const [advancedMode, setAdvancedMode] = useState(false);
-  const [activeMode, setActiveMode]     = useState<Mode>('normal');
   const [configs, setConfigs]       = useState<RepostConfig[]>(DEFAULT_CONFIGS);
   const [expandedRid, setExpandedRid] = useState<string | null>(null);
   const [images, setImages]         = useState<ProcessedImage[]>([]);
@@ -904,6 +924,20 @@ export default function ImageUniquifier() {
   const resetConfigs = () => {
     setConfigs(DEFAULT_CONFIGS.map(c => ({ ...c, rid: nextRid() })));
     setImages([]);
+  };
+  // Aleatorio: perturba los valores numéricos de cada config para que el lote sea
+  // diferente sin perder la idea (sesgar, rotar, marco). El número de filas no cambia.
+  const randomizeConfigs = () => {
+    const rnd = (a: number, b: number) => +(a + Math.random() * (b - a)).toFixed(2);
+    const rndI = (a: number, b: number) => Math.floor(a + Math.random() * (b - a + 1));
+    setConfigs(prev => prev.map(c => ({
+      ...c,
+      skewX:        Math.random() < 0.5 ? rnd(-2, 2) : 0,
+      skewY:        Math.random() < 0.5 ? rnd(-2, 2) : 0,
+      rotateDegMax: Math.random() < 0.5 ? rnd(0.5, 3) : 0,
+      frameVPct:    rndI(0, 10),
+      frameHPct:    rndI(0, 10),
+    })));
   };
 
   const ensureCLIP = useCallback(async () => {
@@ -985,16 +1019,12 @@ export default function ImageUniquifier() {
     }
   }, [nuclearMode, clipReady]);
 
-  const activeConfigs: RepostConfig[] = advancedMode
-    ? configs
-    : [{ ...MODES.find(m => m.id === activeMode)!, rid: 'simple', editTitle: 'auto', editDescription: 'auto' }];
-
   const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault(); setDragging(false); processFiles(e.dataTransfer.files, activeConfigs);
-  }, [processFiles, activeConfigs]);
+    e.preventDefault(); setDragging(false); processFiles(e.dataTransfer.files, configs);
+  }, [processFiles, configs]);
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) processFiles(e.target.files, activeConfigs);
+    if (e.target.files) processFiles(e.target.files, configs);
     e.target.value = '';
   };
 
@@ -1044,46 +1074,7 @@ export default function ImageUniquifier() {
   return (
     <div className="space-y-6">
 
-      {/* Modo simple: 4 presets en píldora */}
-      {!advancedMode && (
-        <div className="bg-[#0f0f0f] border border-white/[0.08] rounded-2xl p-5">
-          <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-            <p className="text-xs font-black uppercase tracking-widest text-white/50">Intensidad</p>
-            <button
-              onClick={() => setAdvancedMode(true)}
-              className="text-[11px] text-acid hover:underline font-medium"
-            >
-              Ajustes avanzados →
-            </button>
-          </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            {MODES.map(m => {
-              const active = activeMode === m.id;
-              const isExtremo = m.id === 'extremo';
-              return (
-                <button key={m.id} onClick={() => setActiveMode(m.id)}
-                  className={`px-3 py-3 rounded-xl border-2 text-center transition ${
-                    active && isExtremo ? 'border-red-700 bg-red-950/60 text-red-300'
-                    : active            ? 'border-acid bg-acid-soft text-acid'
-                    : 'border-white/10 bg-white/[0.02] text-white/50 hover:border-white/20 hover:text-white/80'
-                  }`}>
-                  <p className="text-xs font-black uppercase tracking-wider">{m.label}</p>
-                </button>
-              );
-            })}
-          </div>
-          <p className="text-[11px] text-white/40 mt-3 leading-snug">
-            {MODES.find(m => m.id === activeMode)!.desc}
-          </p>
-          <p className="text-[10px] text-white/30 mt-2 leading-snug">
-            ℹ La foto procesada parecerá idéntica a la vista — el cambio es invisible al ojo, pero hash, EXIF y firma CNN son únicos.
-          </p>
-        </div>
-      )}
-
-      {/* Configuración de repost — tabla cíclica (solo en avanzado) */}
-      {advancedMode && (
-      <>
+      {/* Configuración de repost — tabla cíclica */}
       <div className="bg-[#0f0f0f] border border-white/[0.08] rounded-2xl overflow-hidden">
         <div className="p-5 pb-3 border-b border-white/5">
           <p className="text-xs font-black uppercase tracking-widest text-white/50">Configuración de modificaciones</p>
@@ -1198,13 +1189,14 @@ export default function ImageUniquifier() {
         </div>
       </div>
 
-      {/* Acciones formulario (avanzado) */}
+      {/* Acciones formulario */}
       <div className="flex gap-2 flex-wrap">
         <button
-          onClick={() => setAdvancedMode(false)}
-          className="flex items-center gap-2 bg-white/5 hover:bg-white/10 border border-white/10 text-white/60 hover:text-white font-bold px-5 py-2.5 rounded-xl text-sm transition"
+          onClick={randomizeConfigs}
+          className="flex items-center gap-2 bg-acid hover:bg-acid/90 text-black font-bold px-5 py-2.5 rounded-xl text-sm transition"
         >
-          ← Modo simple
+          <Shuffle className="w-4 h-4" />
+          Aleatorio
         </button>
         <button
           onClick={resetConfigs}
@@ -1214,8 +1206,6 @@ export default function ImageUniquifier() {
           Resetear formulario
         </button>
       </div>
-      </>
-      )}
 
       {/* Modo NUCLEAR: CLIP adversarial verifier */}
       <div className={`rounded-2xl border-2 p-4 transition-all ${
