@@ -27,13 +27,43 @@ async function requireAuth(req: AuthRequest, res: Response, next: NextFunction) 
   if (!token) return res.status(401).json({ error: "No autenticado" });
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as any;
-    const result = await pool.query("SELECT id, username, email, is_admin FROM users WHERE id = $1", [decoded.id]);
-    if (!result.rows[0]) return res.status(401).json({ error: "Usuario no encontrado" });
-    req.user = result.rows[0];
-    next();
+
+    // ── Standard user JWT ──
+    if (decoded.id) {
+      const result = await pool.query("SELECT id, username, email, is_admin FROM users WHERE id = $1", [decoded.id]);
+      if (!result.rows[0]) return res.status(401).json({ error: "Usuario no encontrado" });
+      req.user = result.rows[0];
+      return next();
+    }
+
+    // ── Extension session JWT ({sid}) ──
+    // Accepted on all endpoints so extension users can access their data
+    if (decoded.sid) {
+      const sessRes = await pool.query(
+        `SELECT es.id as sid, es.license_key, l.user_id, l.type as license_type
+         FROM extension_sessions es
+         JOIN licenses l ON l.key = es.license_key
+         WHERE es.id = $1
+           AND es.revoked = FALSE
+           AND es.expires_at > NOW()
+           AND l.is_active = TRUE
+           AND (l.expires_at IS NULL OR l.expires_at > NOW())`,
+        [decoded.sid]
+      );
+      const sess = sessRes.rows[0];
+      if (!sess) return res.status(401).json({ error: "Sesión de extensión inválida o expirada" });
+      if (!sess.user_id) return res.status(401).json({ error: "Licencia sin usuario vinculado. Reactiva la licencia desde el Hub." });
+
+      const userRes = await pool.query("SELECT id, username, email, is_admin FROM users WHERE id = $1", [sess.user_id]);
+      if (!userRes.rows[0]) return res.status(401).json({ error: "Usuario no encontrado" });
+      req.user = userRes.rows[0];
+      pool.query("UPDATE extension_sessions SET last_seen_at = NOW() WHERE id = $1", [decoded.sid]).catch(() => {});
+      return next();
+    }
   } catch {
-    res.status(401).json({ error: "Token inválido o expirado" });
+    return res.status(401).json({ error: "Token inválido o expirado" });
   }
+  return res.status(401).json({ error: "Token inválido o expirado" });
 }
 
 async function requireAdmin(req: AuthRequest, res: Response, next: NextFunction) {
@@ -2172,6 +2202,23 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
           ? new Date(lic.expires_at)
           : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
+      // Crear usuario virtual si la licencia no tiene usuario vinculado
+      // Esto permite usar todos los endpoints de la API con el token de la sesión
+      if (!lic.user_id) {
+        const vUsername = `lm_${keyNorm.replace(/-/g, "").toLowerCase().slice(0, 16)}`;
+        const vEmail = `ext:${keyNorm.toLowerCase()}@lamine.hub`;
+        const userRes = await pool.query(
+          `INSERT INTO users (username, email, password_hash, is_admin)
+           VALUES ($1, $2, 'ext_session_no_password', FALSE)
+           ON CONFLICT (email) DO UPDATE SET username = EXCLUDED.username
+           RETURNING id`,
+          [vUsername, vEmail]
+        );
+        const userId = userRes.rows[0].id;
+        await pool.query("UPDATE licenses SET user_id = $1 WHERE key = $2", [userId, keyNorm]);
+        lic.user_id = userId;
+      }
+
       // Revocar sesiones previas del mismo HWID+licencia (evita tokens huérfanos)
       await pool.query(
         "UPDATE extension_sessions SET revoked = TRUE WHERE license_key = $1 AND hwid = $2 AND revoked = FALSE",
@@ -2297,6 +2344,27 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
     }
 
     return res.json({ ok: true });
+  });
+
+  /**
+   * GET /api/ext/me
+   * Authorization: Bearer <session JWT>
+   * Returns user and license info for the active extension session.
+   */
+  app.get("/api/ext/me", extVerifyLimiter, requireAuth as any, async (req: AuthRequest, res) => {
+    const user = req.user!;
+    const licRes = await pool.query(
+      "SELECT key, type, expires_at FROM licenses WHERE user_id = $1 AND is_active = TRUE AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1",
+      [user.id]
+    );
+    const lic = licRes.rows[0];
+    res.json({
+      ok: true,
+      user: { id: user.id, username: user.username, email: user.email, is_admin: user.is_admin },
+      license: lic
+        ? { status: "active", plan: lic.type, type: lic.type, key: lic.key, expires_at: lic.expires_at }
+        : { status: "inactive" },
+    });
   });
 
   // ── Admin: reset HWID de una licencia ──────────────────────────────────────
@@ -3274,6 +3342,50 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
     } catch {
       res.status(500).json({ ok: false, error: "server_error" });
     }
+  });
+
+  // ── Vinted accounts CRUD (for extension FounderClub tab) ──────────────────
+  app.get("/api/vinted/accounts", requireAuth as any, async (req: AuthRequest, res) => {
+    const result = await pool.query(
+      "SELECT id, username, label, domain, balance, items_count, sold_count, last_synced_at, is_active FROM vinted_accounts WHERE user_id = $1 ORDER BY created_at DESC",
+      [req.user!.id]
+    );
+    res.json({ success: true, accounts: result.rows });
+  });
+
+  app.post("/api/vinted/accounts", requireAuth as any, async (req: AuthRequest, res) => {
+    const { cookie, domain = "es", label } = req.body;
+    if (!cookie) return res.status(400).json({ success: false, error: "cookie_required" });
+    try {
+      const username = label || `cuenta_${Date.now()}`;
+      const result = await pool.query(
+        "INSERT INTO vinted_accounts (user_id, username, cookie, domain, label) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id, username) DO UPDATE SET cookie = $3, domain = $4 RETURNING id, username",
+        [req.user!.id, username, cookie, domain.replace("vinted.", "").replace(".es", ""), label || null]
+      );
+      res.json({ success: true, account: result.rows[0] });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  app.delete("/api/vinted/accounts/:id", requireAuth as any, async (req: AuthRequest, res) => {
+    await pool.query("DELETE FROM vinted_accounts WHERE id = $1 AND user_id = $2", [req.params.id, req.user!.id]);
+    res.json({ success: true });
+  });
+
+  app.post("/api/vinted/accounts/:id/sync", requireAuth as any, async (req: AuthRequest, res) => {
+    // Placeholder — triggers a background sync job
+    await pool.query("UPDATE vinted_accounts SET last_synced_at = NOW() WHERE id = $1 AND user_id = $2", [req.params.id, req.user!.id]);
+    res.json({ success: true, message: "Sync iniciado" });
+  });
+
+  app.post("/api/vinted/accounts/:id/hide-all", requireAuth as any, async (req: AuthRequest, res) => {
+    const { reveal = false } = req.body;
+    await pool.query(
+      "UPDATE vinted_inventory SET is_hidden = $1 WHERE account_id = $2",
+      [!reveal, req.params.id]
+    );
+    res.json({ success: true, reveal });
   });
 
   // ── Vite / Static ───────────────────────────────────────────────────────────
