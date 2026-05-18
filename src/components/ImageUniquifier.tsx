@@ -256,16 +256,6 @@ async function uniquifyImage(
           srcH = Math.max(1, Math.floor(IH * rH));
           srcX = rndI(0, IW - srcW);
           srcY = rndI(0, IH - srcH);
-        } else if (cfg.frameVPct !== undefined || cfg.frameHPct !== undefined) {
-          // Crop por eje independiente: marco vertical/horizontal separado.
-          const vPct = (cfg.frameVPct ?? 0) / 100;
-          const hPct = (cfg.frameHPct ?? 0) / 100;
-          const cutH = Math.floor(IW * hPct);
-          const cutV = Math.floor(IH * vPct);
-          srcX = Math.floor(cutH / 2);
-          srcY = Math.floor(cutV / 2);
-          srcW = Math.max(1, IW - cutH);
-          srcH = Math.max(1, IH - cutV);
         } else if (cfg.cropPctMax > 0) {
           // Crop simétrico clásico: recorta X% de bordes y reescala.
           const pct  = rnd(cfg.cropPctMin, cfg.cropPctMax) / 100;
@@ -315,10 +305,11 @@ async function uniquifyImage(
           ctx.scale(scale, scale);
           ctx.translate(-W / 2, -H / 2);
         }
-        // Skew (sesgar) X/Y: transformación afín. Las "unidades" del UI se convierten
-        // a factor matriz dividiendo por 100 (0.5 → 0.005, suficiente para invisibilidad).
-        const skX = (cfg.skewX ?? 0) / 100;
-        const skY = (cfg.skewY ?? 0) / 100;
+        // Skew (sesgar) X/Y: transformación afín VISIBLE. Cada unidad del UI = 0.05
+        // de shear (≈3°). 0.5 → 0.025 (~1.5°), 2 → 0.1 (~5.7°). Suficiente para que
+        // el cliente note la diferencia entre fotos del mismo lote.
+        const skX = (cfg.skewX ?? 0) * 0.05;
+        const skY = (cfg.skewY ?? 0) * 0.05;
         if (skX !== 0 || skY !== 0) {
           // Compensa para que la imagen siga cubriendo el canvas completo.
           const sxAbs = Math.abs(skX), syAbs = Math.abs(skY);
@@ -605,10 +596,31 @@ async function uniquifyImage(
           ctx.restore();
         }
 
+        // ── 5e. Marco blanco VISIBLE (border, no crop) ────────────────────
+        // Si frameVPct o frameHPct > 0, envuelve la imagen procesada en un canvas
+        // mayor con padding blanco. A diferencia del crop simétrico, esto SE VE.
+        let outCanvas: HTMLCanvasElement = canvas;
+        const fvPct = (cfg.frameVPct ?? 0) / 100;
+        const fhPct = (cfg.frameHPct ?? 0) / 100;
+        if (fvPct > 0 || fhPct > 0) {
+          const padV = Math.round(H * fvPct);
+          const padH = Math.round(W * fhPct);
+          const bigW = W + padH * 2;
+          const bigH = H + padV * 2;
+          const big = document.createElement('canvas');
+          big.width = bigW;
+          big.height = bigH;
+          const bctx = big.getContext('2d')!;
+          bctx.fillStyle = '#ffffff';
+          bctx.fillRect(0, 0, bigW, bigH);
+          bctx.drawImage(canvas, padH, padV);
+          outCanvas = big;
+        }
+
         // ── 6. JPEG con calidad variable ──────────────────────────────────
         // Cuantización diferente → artefactos de compresión únicos.
         const quality = rnd(cfg.qualityMin, cfg.qualityMax);
-        let dataUrl = canvas.toDataURL('image/jpeg', quality);
+        let dataUrl = outCanvas.toDataURL('image/jpeg', quality);
 
         // ── 7. EXIF aleatorio realista (si está activo) ──────────────────
         // Inyecta metadata creíble (cámara, fecha, ISO, focal…) para que la
