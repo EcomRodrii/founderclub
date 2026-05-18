@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import express, { Request, Response, NextFunction } from "express";
 import axios from "axios";
 import https from "https";
@@ -67,7 +68,7 @@ function requireWorkerSecret(req: Request, res: Response, next: NextFunction) {
 function generateLicenseKey(): string {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   const segment = (len: number) => Array.from({ length: len }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
-  return `FC-${segment(4)}-${segment(4)}-${segment(4)}-${segment(4)}`;
+  return `LM-${segment(4)}-${segment(4)}-${segment(4)}`;
 }
 
 // ─── Main Server ──────────────────────────────────────────────────────────────
@@ -385,10 +386,26 @@ async function startServer() {
       "UPDATE licenses SET is_active = NOT is_active WHERE id = $1 RETURNING *",
       [req.params.id]
     );
-    res.json(result.rows[0]);
+    const lic = result.rows[0];
+    // Si se desactiva, revocar sesiones de extensión activas
+    if (lic && !lic.is_active) {
+      await pool.query(
+        "UPDATE extension_sessions SET revoked = TRUE WHERE license_key = $1 AND revoked = FALSE",
+        [lic.key]
+      ).catch(() => {});
+    }
+    res.json(lic);
   });
 
   app.delete("/api/admin/licenses/:id", requireAdmin as any, async (req, res) => {
+    const licRes = await pool.query("SELECT key FROM licenses WHERE id = $1", [req.params.id]);
+    const key = licRes.rows[0]?.key;
+    if (key) {
+      await pool.query(
+        "UPDATE extension_sessions SET revoked = TRUE WHERE license_key = $1 AND revoked = FALSE",
+        [key]
+      ).catch(() => {});
+    }
     await pool.query("DELETE FROM licenses WHERE id = $1", [req.params.id]);
     res.json({ success: true });
   });
@@ -398,7 +415,15 @@ async function startServer() {
       "UPDATE licenses SET hwid = NULL, ip = NULL WHERE id = $1 RETURNING *",
       [req.params.id]
     );
-    res.json(result.rows[0]);
+    const lic = result.rows[0];
+    if (lic?.key) {
+      // Revocar todas las sesiones de extensión activas para esta licencia
+      await pool.query(
+        "UPDATE extension_sessions SET revoked = TRUE WHERE license_key = $1 AND revoked = FALSE",
+        [lic.key]
+      ).catch(() => {});
+    }
+    res.json(lic);
   });
 
   app.get("/api/admin/sessions", requireAdmin as any, async (_req, res) => {
@@ -2072,6 +2097,211 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
   app.get("/api/up", (_req, res) => {
     res.json({ ok: true, data: { serverTime: new Date().toISOString() } });
   });
+
+  // ── HWID License System ──────────────────────────────────────────────────────
+  // Rate limiters estrictos para endpoints sensibles
+  const extActivateLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    message: { ok: false, error: "too_many_requests" },
+    keyGenerator: (req) =>
+      (req.headers["x-forwarded-for"] as string)?.split(",")[0].trim() ||
+      req.socket.remoteAddress ||
+      "unknown",
+  });
+  const extVerifyLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 500,
+    message: { ok: false, error: "too_many_requests" },
+    keyGenerator: (req) =>
+      (req.headers["x-forwarded-for"] as string)?.split(",")[0].trim() ||
+      req.socket.remoteAddress ||
+      "unknown",
+  });
+
+  /**
+   * POST /api/ext/activate
+   * Body: { key: "LM-XXXX-XXXX-XXXX", hwid: "<sha256 fingerprint>" }
+   * — Valida la licencia, vincula HWID en primer uso, devuelve session JWT.
+   */
+  app.post("/api/ext/activate", extActivateLimiter, async (req, res) => {
+    const { key, hwid } = req.body;
+    const ip =
+      (req.headers["x-forwarded-for"] as string)?.split(",")[0].trim() ||
+      req.socket.remoteAddress ||
+      "";
+
+    if (!key || !hwid)
+      return res.status(400).json({ ok: false, error: "key_and_hwid_required" });
+
+    const keyNorm = String(key).trim().toUpperCase();
+    if (keyNorm.length < 10)
+      return res.status(400).json({ ok: false, error: "invalid_key_format" });
+
+    try {
+      const licRes = await pool.query("SELECT * FROM licenses WHERE key = $1", [keyNorm]);
+      const lic = licRes.rows[0];
+
+      if (!lic)
+        return res.status(404).json({ ok: false, error: "license_not_found" });
+      if (!lic.is_active)
+        return res.status(403).json({ ok: false, error: "license_revoked" });
+      if (lic.expires_at && new Date(lic.expires_at) < new Date())
+        return res.status(403).json({ ok: false, error: "license_expired" });
+
+      // HWID binding: si ya está vinculado a otro dispositivo, bloquear
+      if (lic.hwid && lic.hwid !== hwid)
+        return res.status(403).json({
+          ok: false,
+          error: "hwid_mismatch",
+          message:
+            "Esta licencia está vinculada a otro dispositivo. Contacta con soporte para transferirla.",
+        });
+
+      // Vincular HWID en primer uso
+      if (!lic.hwid) {
+        await pool.query(
+          "UPDATE licenses SET hwid = $1, activated_at = COALESCE(activated_at, NOW()), ip = $2 WHERE key = $3",
+          [hwid, ip, keyNorm]
+        );
+      }
+
+      // Calcular expiración de la sesión (igual a la de la licencia o 30 días)
+      const sessionExpiry: Date =
+        lic.expires_at
+          ? new Date(lic.expires_at)
+          : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
+      // Revocar sesiones previas del mismo HWID+licencia (evita tokens huérfanos)
+      await pool.query(
+        "UPDATE extension_sessions SET revoked = TRUE WHERE license_key = $1 AND hwid = $2 AND revoked = FALSE",
+        [keyNorm, hwid]
+      );
+
+      // Crear nueva sesión
+      const sessionId = randomUUID();
+      await pool.query(
+        `INSERT INTO extension_sessions (id, license_key, hwid, expires_at, ip)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [sessionId, keyNorm, hwid, sessionExpiry, ip]
+      );
+
+      // Firmar JWT con sid
+      const expiresInSec = Math.floor((sessionExpiry.getTime() - Date.now()) / 1000);
+      const token = jwt.sign({ sid: sessionId }, JWT_SECRET, {
+        expiresIn: Math.max(expiresInSec, 60),
+      });
+
+      return res.json({
+        ok: true,
+        token,
+        expires_at: sessionExpiry.toISOString(),
+        type: lic.type,
+      });
+    } catch (e: any) {
+      console.error("[ext/activate] error:", e?.message);
+      return res.status(500).json({ ok: false, error: "server_error" });
+    }
+  });
+
+  /**
+   * POST /api/ext/verify
+   * Body: { token: "<session JWT>", hwid: "<sha256 fingerprint>" }
+   * — Re-valida la sesión en cada apertura del hub. Verificación completa en DB.
+   */
+  app.post("/api/ext/verify", extVerifyLimiter, async (req, res) => {
+    const { token, hwid } = req.body;
+
+    if (!token || !hwid)
+      return res.status(400).json({ ok: false, error: "token_and_hwid_required" });
+
+    // 1. Verificar JWT
+    let decoded: any;
+    try {
+      decoded = jwt.verify(token, JWT_SECRET) as any;
+    } catch {
+      return res.status(401).json({ ok: false, error: "invalid_token" });
+    }
+
+    const { sid } = decoded;
+    if (!sid)
+      return res.status(401).json({ ok: false, error: "invalid_token" });
+
+    try {
+      // 2. Buscar sesión en DB
+      const sessRes = await pool.query(
+        "SELECT * FROM extension_sessions WHERE id = $1",
+        [sid]
+      );
+      const sess = sessRes.rows[0];
+
+      if (!sess)
+        return res.status(401).json({ ok: false, error: "session_not_found" });
+      if (sess.revoked)
+        return res.status(401).json({ ok: false, error: "session_revoked" });
+      if (new Date(sess.expires_at) < new Date())
+        return res.status(401).json({ ok: false, error: "session_expired" });
+
+      // 3. HWID debe coincidir exactamente
+      if (sess.hwid !== hwid)
+        return res.status(403).json({ ok: false, error: "hwid_mismatch" });
+
+      // 4. Licencia todavía activa
+      const licRes = await pool.query(
+        "SELECT * FROM licenses WHERE key = $1 AND is_active = TRUE AND (expires_at IS NULL OR expires_at > NOW())",
+        [sess.license_key]
+      );
+      const lic = licRes.rows[0];
+
+      if (!lic)
+        return res.status(403).json({ ok: false, error: "license_expired_or_revoked" });
+
+      // 5. Actualizar last_seen (sin await para no bloquear la respuesta)
+      pool
+        .query("UPDATE extension_sessions SET last_seen_at = NOW() WHERE id = $1", [sid])
+        .catch(() => {});
+
+      return res.json({
+        ok: true,
+        license: {
+          key: sess.license_key,
+          type: lic.type,
+          expires_at: lic.expires_at,
+        },
+      });
+    } catch (e: any) {
+      console.error("[ext/verify] error:", e?.message);
+      return res.status(500).json({ ok: false, error: "server_error" });
+    }
+  });
+
+  /**
+   * POST /api/ext/deactivate
+   * Body: { token: "<session JWT>" }
+   * — Revoca la sesión activa (logout desde el hub).
+   */
+  app.post("/api/ext/deactivate", async (req, res) => {
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ ok: false, error: "token_required" });
+
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET) as any;
+      if (decoded?.sid) {
+        await pool.query(
+          "UPDATE extension_sessions SET revoked = TRUE WHERE id = $1",
+          [decoded.sid]
+        );
+      }
+    } catch {
+      // Token inválido — no importa, el cliente ya limpia el storage local
+    }
+
+    return res.json({ ok: true });
+  });
+
+  // ── Admin: reset HWID de una licencia ──────────────────────────────────────
+  // (ya existe /api/admin/licenses/:id/reset-hwid — añadimos también la revocación
+  //  de todas las sesiones activas de esa licencia)
 
   // Login para el módulo de análisis (usa Bearer igual que el auth principal)
   app.post("/api/extension/login", authLimiter, async (req, res) => {

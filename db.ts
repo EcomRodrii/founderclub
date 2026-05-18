@@ -242,6 +242,20 @@ export async function initDB() {
     `ALTER TABLE bazooka_jobs ADD COLUMN IF NOT EXISTS error TEXT`,
     `ALTER TABLE bazooka_jobs ALTER COLUMN vinted_cookies DROP NOT NULL`,
     `CREATE INDEX IF NOT EXISTS idx_bazooka_jobs_pending ON bazooka_jobs(status, created_at) WHERE status = 'pending'`,
+
+    // ── Extension HWID sessions ────────────────────────────────────────────────
+    `CREATE TABLE IF NOT EXISTS extension_sessions (
+      id TEXT PRIMARY KEY,
+      license_key VARCHAR(64) NOT NULL,
+      hwid VARCHAR(512) NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW(),
+      expires_at TIMESTAMP NOT NULL,
+      last_seen_at TIMESTAMP DEFAULT NOW(),
+      revoked BOOLEAN DEFAULT FALSE,
+      ip VARCHAR(64)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_ext_sessions_license ON extension_sessions(license_key)`,
+    `CREATE INDEX IF NOT EXISTS idx_ext_sessions_hwid ON extension_sessions(hwid)`,
   ];
   for (const sql of migrations) {
     await pool.query(sql).catch(() => {}); // silently ignore if column already exists
