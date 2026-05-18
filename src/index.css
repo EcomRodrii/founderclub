@@ -6,38 +6,46 @@
   --font-display: "Bebas Neue", "DM Sans", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 
-  /* Lamine Hub palette */
-  --color-bg: #050607;
-  --color-panel: #0d1012;
-  --color-panel-soft: #111416;
-  --color-text: #f4f4ef;
-  --color-muted: #a4a79f;
-  --color-muted-strong: #b8bab2;
-  --color-acid: #4d9fff;
-  --color-acid-2: #3b7fd4;
-  --color-acid-soft: rgba(77, 159, 255, 0.16);
-  --color-acid-glow: rgba(77, 159, 255, 0.45);
-  --color-danger: #ff9797;
-  --color-warn: #ffd06f;
-  --color-ok: #b8ff7f;
+  /* Lamine Hub palette — neon yellow system */
+  --color-bg:           #0e0e0e;
+  --color-panel:        #161616;
+  --color-panel-soft:   #1c1c1c;
+  --color-text:         #f2f2ef;
+  --color-muted:        #888880;
+  --color-muted-strong: #aaa9a0;
+  --color-acid:         #d4ff00;
+  --color-acid-2:       #b3da00;
+  --color-acid-soft:    rgba(212, 255, 0, 0.10);
+  --color-acid-glow:    rgba(212, 255, 0, 0.38);
+  --color-danger:       #ff8080;
+  --color-warn:         #ffcc55;
+  --color-ok:           #d4ff00;
+
+  /* Hero gradient (pink → orange → yellow) */
+  --color-hero-from:    #ff3d8e;
+  --color-hero-mid:     #ff7c38;
+  --color-hero-to:      #ffe600;
 }
 
-/* Lamine Hub aliases for Tailwind utilities (bg-acid, text-acid, etc.) */
+/* Lamine Hub aliases for Tailwind utilities */
 @layer utilities {
-  .text-acid       { color: var(--color-acid); }
-  .text-acid-2     { color: var(--color-acid-2); }
-  .text-muted      { color: var(--color-muted); }
+  .text-acid         { color: var(--color-acid); }
+  .text-acid-2       { color: var(--color-acid-2); }
+  .text-muted        { color: var(--color-muted); }
   .text-muted-strong { color: var(--color-muted-strong); }
-  .bg-acid         { background-color: var(--color-acid); }
-  .bg-acid-soft    { background-color: var(--color-acid-soft); }
-  .bg-panel        { background-color: var(--color-panel); }
-  .bg-panel-soft   { background-color: var(--color-panel-soft); }
-  .border-acid     { border-color: rgba(77, 159, 255, 0.35); }
-  .border-strong   { border-color: rgba(255, 255, 255, 0.16); }
-  .font-display    { font-family: var(--font-display); letter-spacing: 0.02em; }
-  .ease-hub        { transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1); }
-  .bg-acid-gradient {
+  .bg-acid           { background-color: var(--color-acid); }
+  .bg-acid-soft      { background-color: var(--color-acid-soft); }
+  .bg-panel          { background-color: var(--color-panel); }
+  .bg-panel-soft     { background-color: var(--color-panel-soft); }
+  .border-acid       { border-color: rgba(212, 255, 0, 0.32); }
+  .border-strong     { border-color: rgba(255, 255, 255, 0.12); }
+  .font-display      { font-family: var(--font-display); letter-spacing: 0.02em; }
+  .ease-hub          { transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1); }
+  .bg-acid-gradient  {
     background: linear-gradient(180deg, var(--color-acid), var(--color-acid-2));
+  }
+  .bg-hero-gradient  {
+    background: linear-gradient(128deg, var(--color-hero-from) 0%, var(--color-hero-mid) 48%, var(--color-hero-to) 100%);
   }
   .shadow-acid {
     box-shadow: 0 18px 40px -12px var(--color-acid-glow);
@@ -50,35 +58,31 @@
 body {
   font-family: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: var(--color-text);
-  background:
-    radial-gradient(circle at 88% -6%, rgba(77, 159, 255, 0.12), transparent 34%),
-    radial-gradient(circle at -4% 110%, rgba(77, 159, 255, 0.08), transparent 38%),
-    radial-gradient(circle at 50% 80%, rgba(77, 159, 255, 0.04), transparent 50%),
-    var(--color-bg);
+  background: var(--color-bg);
   overflow-x: hidden;
   min-height: 100vh;
 }
 
-/* Grid overlay sub-visible (cuadrícula tipo /hub) */
+/* Subtle grid overlay */
 body::before {
   content: "";
   position: fixed;
   inset: 0;
   pointer-events: none;
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
-  background-size: 80px 80px;
-  mask-image: radial-gradient(circle at 50% 20%, black, transparent 85%);
-  opacity: 0.35;
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-size: 60px 60px;
+  mask-image: radial-gradient(ellipse at 50% 0%, black 0%, transparent 70%);
+  opacity: 0.4;
   z-index: 0;
 }
 
-/* Reveal animation for [data-reveal] elements */
+/* Reveal animation */
 [data-reveal] {
   opacity: 0;
-  transform: translate3d(0, 28px, 0);
-  transition: opacity 0.8s cubic-bezier(0.22, 1, 0.36, 1), transform 0.8s cubic-bezier(0.22, 1, 0.36, 1);
+  transform: translate3d(0, 24px, 0);
+  transition: opacity 0.75s cubic-bezier(0.22, 1, 0.36, 1), transform 0.75s cubic-bezier(0.22, 1, 0.36, 1);
   will-change: opacity, transform;
 }
 [data-reveal].is-visible {
@@ -90,18 +94,13 @@ body::before {
   [data-reveal] { opacity: 1; transform: none; transition: none; }
 }
 
-/* Custom Scrollbar — adaptado al acid blue */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
+/* Custom Scrollbar */
+::-webkit-scrollbar        { width: 8px; height: 8px; }
+::-webkit-scrollbar-track  { background: transparent; }
+::-webkit-scrollbar-thumb  {
+  background: rgba(255, 255, 255, 0.10);
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(77, 159, 255, 0.35);
+  background: rgba(212, 255, 0, 0.32);
 }
