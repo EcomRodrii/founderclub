@@ -738,42 +738,21 @@ function canShareFiles(): boolean {
 const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
 async function saveOne(dataUrl: string, filename: string): Promise<void> {
-  if (canShareFiles()) {
-    const file = await dataUrlToFile(dataUrl, filename);
-    await navigator.share({ files: [file], title: filename });
-  } else {
-    dl(dataUrl, filename);
-  }
+  // Siempre forzamos descarga vía <a download>. navigator.share daba problemas
+  // silenciosos cuando el usuario cerraba el sheet o el navegador lo bloqueaba.
+  dl(dataUrl, filename);
 }
 
 async function saveAll(
   items: { dataUrl: string; filename: string }[],
   onProgress?: (n: number) => void
 ): Promise<void> {
-  if (canShareFiles()) {
-    try {
-      const files = await Promise.all(items.map(i => dataUrlToFile(i.dataUrl, i.filename)));
-      if (navigator.canShare({ files })) {
-        await navigator.share({ files, title: `${files.length} fotos únicas` });
-        onProgress?.(files.length);
-        return;
-      }
-    } catch { /* continuar con fallback */ }
-    for (let i = 0; i < items.length; i++) {
-      try {
-        const file = await dataUrlToFile(items[i].dataUrl, items[i].filename);
-        await navigator.share({ files: [file], title: items[i].filename });
-        onProgress?.(i + 1);
-      } catch { /* usuario canceló */ }
-    }
-  } else {
-    items.forEach((item, idx) => {
-      setTimeout(() => {
-        dl(item.dataUrl, item.filename);
-        onProgress?.(idx + 1);
-      }, idx * 120);
-    });
-  }
+  items.forEach((item, idx) => {
+    setTimeout(() => {
+      dl(item.dataUrl, item.filename);
+      onProgress?.(idx + 1);
+    }, idx * 200);
+  });
 }
 
 // ─── Repost configs (multi-modificación cíclica) ──────────────────────────────
@@ -1074,6 +1053,28 @@ export default function ImageUniquifier() {
   return (
     <div className="space-y-6">
 
+      {/* Drop Zone — arriba del todo */}
+      <div
+        onDragOver={e => { e.preventDefault(); setDragging(true); }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={handleDrop}
+        onClick={() => fileInputRef.current?.click()}
+        className={`relative border-2 border-dashed rounded-3xl p-10 text-center cursor-pointer transition-all ${
+          dragging ? 'border-acid bg-acid-soft scale-[1.01]' : 'border-white/10 hover:border-white/20 hover:bg-white/[0.02]'
+        }`}
+      >
+        <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" onChange={handleFileInput} />
+        <div className="flex flex-col items-center gap-3">
+          <div className={`w-16 h-16 rounded-2xl flex items-center justify-center border transition-all ${dragging ? 'bg-acid-soft border-acid' : 'bg-white/5 border-white/10'}`}>
+            <Upload className={`w-7 h-7 ${dragging ? 'text-acid' : 'text-white/40'}`} />
+          </div>
+          <div>
+            <p className="text-white font-semibold">Arrastra las fotos del producto aquí · o haz click</p>
+            <p className="text-white/40 text-sm mt-1">Cada foto se procesa con la configuración cíclica de abajo</p>
+          </div>
+        </div>
+      </div>
+
       {/* Configuración de repost — tabla cíclica */}
       <div className="bg-[#0f0f0f] border border-white/[0.08] rounded-2xl overflow-hidden">
         <div className="p-5 pb-3 border-b border-white/5">
@@ -1248,28 +1249,6 @@ export default function ImageUniquifier() {
             ✓ CLIP cargado. Cada imagen tardará ~3-6s. Objetivo: cosine ≥ {ADV_TARGET_DIST.toFixed(2)}.
           </p>
         )}
-      </div>
-
-      {/* Drop Zone */}
-      <div
-        onDragOver={e => { e.preventDefault(); setDragging(true); }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={handleDrop}
-        onClick={() => fileInputRef.current?.click()}
-        className={`relative border-2 border-dashed rounded-3xl p-10 text-center cursor-pointer transition-all ${
-          dragging ? 'border-acid bg-acid-soft scale-[1.01]' : 'border-white/10 hover:border-white/20 hover:bg-white/[0.02]'
-        }`}
-      >
-        <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" onChange={handleFileInput} />
-        <div className="flex flex-col items-center gap-3">
-          <div className={`w-16 h-16 rounded-2xl flex items-center justify-center border transition-all ${dragging ? 'bg-acid-soft border-acid' : 'bg-white/5 border-white/10'}`}>
-            <Upload className={`w-7 h-7 ${dragging ? 'text-acid' : 'text-white/40'}`} />
-          </div>
-          <div>
-            <p className="text-white font-semibold">Arrastra las fotos del producto aquí</p>
-            <p className="text-white/40 text-sm mt-1">Cada foto procesada es 100% única · Colores sin cambios</p>
-          </div>
-        </div>
       </div>
 
       {/* Barra acciones */}
