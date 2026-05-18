@@ -1074,8 +1074,8 @@ export default function ImageUniquifier() {
       <>
       <div className="bg-[#0f0f0f] border border-white/[0.08] rounded-2xl overflow-hidden">
         <div className="p-5 pb-3 border-b border-white/5">
-          <p className="text-xs font-black uppercase tracking-widest text-white/50">Configuración de repost</p>
-          <p className="text-[11px] text-white/40 mt-1">Modo de procesamiento de fotos</p>
+          <p className="text-xs font-black uppercase tracking-widest text-white/50">Configuración de modificaciones</p>
+          <p className="text-[11px] text-white/40 mt-1">Define varios sets — cada foto subida usa uno en orden cíclico</p>
         </div>
 
         {/* Header */}
@@ -1175,13 +1175,13 @@ export default function ImageUniquifier() {
             className="flex items-center gap-2 bg-white/5 hover:bg-white/10 border border-white/10 text-white/70 hover:text-white font-bold px-4 py-2 rounded-xl text-xs transition"
           >
             <Plus className="w-4 h-4" />
-            Agregar configuración de repost
+            Agregar configuración
           </button>
           <p className="text-[11px] text-white/40 mt-3">
-            Modificaciones a aplicar al artículo reposteado. Cuando se usan todas las modificaciones, se repetirá el ciclo.
+            Cada foto que subas usa una configuración. Al llegar a la última, vuelve a la primera.
           </p>
           <p className="text-[11px] text-acid mt-1">
-            Rotación activa: el restocker usa todos los conjuntos en orden (1,2,3… y vuelve a 1).
+            Rotación activa: orden 1, 2, 3… y vuelve a 1.
           </p>
         </div>
       </div>
