@@ -2639,30 +2639,43 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
 
   // ── Vinted Entitlements — called by hub-addon.js background ────────────────
   app.get("/api/vinted/entitlements", requireLicense as any, async (req: AuthRequest, res: Response) => {
-    const plan = String((req.user as any)?.plan || "lamine").toLowerCase();
+    const licResult = await pool.query(
+      "SELECT type, plan, expires_at FROM licenses WHERE user_id = $1 AND is_active = TRUE AND (expires_at IS NULL OR expires_at > NOW()) ORDER BY created_at DESC LIMIT 1",
+      [req.user!.id]
+    );
+    const lic = licResult.rows[0];
+    const plan = String(lic?.plan || lic?.type || "lamine").toLowerCase();
+    const isActive = !!lic;
+    const canBazooka = ["bazooka", "pro", "elite", "full"].includes(plan);
+
     res.json({
       ok: true,
       data: {
         plan,
-        status: "active",
+        status: isActive ? "active" : "inactive",
         is_duplicate: false,
-        can_reposts: true,
-        can_auto_messages: true,
-        can_smart_offers: true,
-        can_restocker: true,
-        can_monitor: true,
-        can_ai_messages: true,
-        can_bazooka: true,
+        can_reposts: isActive,
+        can_auto_messages: isActive,
+        can_smart_offers: isActive,
+        can_restocker: isActive,
+        can_monitor: isActive,
+        can_ai_messages: isActive,
+        can_bazooka: canBazooka,
         enforced_limits: {
-          ai_reposts: true,
-          auto_messages: true,
-          smart_offers: true,
-          smart_agents: true,
-          restocker: true,
-          orders: true,
-          inventory: true,
-          bazooka: true,
+          ai_reposts: isActive,
+          auto_messages: isActive,
+          smart_offers: isActive,
+          smart_agents: isActive,
+          restocker: isActive,
+          orders: isActive,
+          inventory: isActive,
+          bazooka: canBazooka,
           max_accounts: 10,
+        },
+        resources: {
+          discord: "https://discord.gg/lamine",
+          guide: "https://lamine.app/",
+          billing: "https://lamine.app/pricing",
         },
       },
     });
@@ -2670,37 +2683,64 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
 
   // ── Extension Runtime ────────────────────────────────────────────────────────
   app.get("/api/extension/runtime", requireLicense as any, async (req: AuthRequest, res: Response) => {
-    const email = String((req.user as any)?.email || "").toLowerCase();
+    const licResult = await pool.query(
+      "SELECT key, type, plan, expires_at FROM licenses WHERE user_id = $1 AND is_active = TRUE AND (expires_at IS NULL OR expires_at > NOW()) ORDER BY created_at DESC LIMIT 1",
+      [req.user!.id]
+    );
+    const lic = licResult.rows[0];
+    const plan = String(lic?.plan || lic?.type || "lamine").toLowerCase();
+    const canBazooka = ["bazooka", "pro", "elite", "full"].includes(plan);
+
     res.json({
       ok: true,
       data: {
+        brand: "Lamine",
+        extensionName: "Lamine Vinted OS",
         productCode: "automatizacion",
+        planKey: plan,
+        planLabel: "Automatización",
+        bazookaEnabled: canBazooka,
         automationEnabled: true,
-        plan: "lamine",
+        analysisEnabled: true,
         featureFlags: {
-          restocker: true,
+          smartOffers:  true,
+          restocker:    true,
           autoMessages: true,
-          smartOffers: true,
-          aiMessages: true,
-          smartAgent: true,
-          ordersSync: true,
-          bazooka: true,
-          monitor: true,
-          inventory: true,
+          aiMessages:   true,
+          smartAgent:   true,
+          ordersSync:   true,
+          bazooka:      canBazooka,
+          bazookaRemote: canBazooka,
+        },
+        moduleStates: {
+          bazooka:        { id: "bazooka",        state: "active", degraded: false, blocked: !canBazooka, message: null },
+          automatizacion: { id: "automatizacion", state: "active", degraded: false, blocked: false, message: null },
+          analisis:       { id: "analisis",       state: "active", degraded: false, blocked: false, message: null },
         },
         modulesVisible: {
-          restocker: true,
+          bazooka:      canBazooka,
+          restocker:    true,
+          smartOffers:  true,
+          smartAgent:   true,
+          orders:       true,
           autoMessages: true,
-          smartOffers: true,
-          smartAgent: true,
-          orders: true,
-          bazooka: true,
-          monitor: true,
-          inventory: true,
+          analisis:     true,
+        },
+        license: {
+          key:        lic?.key || null,
+          status:     lic ? "active" : "inactive",
+          plan:       lic?.plan || "month",
+          expiresAt:  lic?.expires_at || null,
+          maxInstalls: 3,
+        },
+        resources: {
+          discord:   "https://discord.gg/lamine",
+          extension: "https://lamine.app/extension",
+          guide:     "https://lamine.app/",
+          billing:   "https://lamine.app/pricing",
         },
       },
       config: { heartbeatIntervalSec: 60, workerPollIntervalSec: 60, camuflajePeriodMin: 30 },
-      flags: { workerEnabled: true, reportEnabled: true },
       serverTime: new Date().toISOString(),
     });
   });
@@ -3429,10 +3469,25 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
   // ── Vinted accounts CRUD (for extension FounderClub tab) ──────────────────
   app.get("/api/vinted/accounts", requireAuth as any, async (req: AuthRequest, res) => {
     const result = await pool.query(
-      "SELECT id, username, label, domain, balance, items_count, sold_count, last_synced_at, is_active FROM vinted_accounts WHERE user_id = $1 ORDER BY created_at DESC",
+      `SELECT id, id::text AS vinted_id, username AS login, username AS title,
+              label, domain AS country_code, balance, items_count, sold_count,
+              last_synced_at, is_active,
+              CASE WHEN is_active THEN 'active' ELSE 'inactive' END AS status,
+              TRUE AS can_auto_messages, TRUE AS can_reposts,
+              created_at, updated_at
+       FROM vinted_accounts WHERE user_id = $1 ORDER BY created_at DESC`,
       [req.user!.id]
     );
-    res.json({ success: true, accounts: result.rows });
+    // Dual format: ok/data (Blackstock compat) + success/accounts (legacy panel compat)
+    res.json({
+      ok: true,
+      success: true,
+      data: {
+        accounts: result.rows,
+        meta: { has_next_page: false, end_cursor: null, start_cursor: null, total_pages: 1, total_entries: result.rows.length },
+      },
+      accounts: result.rows,
+    });
   });
 
   app.post("/api/vinted/accounts", requireAuth as any, async (req: AuthRequest, res) => {
@@ -3468,6 +3523,189 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
       [!reveal, req.params.id]
     );
     res.json({ success: true, reveal });
+  });
+
+  // ── GET /api/vinted/:accountId/items  (Blackstock compat) ──────────────────
+  app.get("/api/vinted/:accountId/items", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const { accountId } = req.params;
+      const limit  = Math.min(parseInt(String(req.query.limit  || "50")), 200);
+      const cursor = req.query.cursor ? parseInt(String(req.query.cursor)) : null;
+      const status = req.query.status ? String(req.query.status) : null;
+
+      // Verify account belongs to user
+      const accResult = await pool.query(
+        "SELECT id FROM vinted_accounts WHERE id = $1 AND user_id = $2 AND is_active = TRUE",
+        [accountId, req.user!.id]
+      );
+      if (!accResult.rows[0]) return res.status(404).json({ ok: false, error: "account_not_found" });
+
+      const conditions: string[] = ["vi.account_id = $1"];
+      const params: any[] = [accResult.rows[0].id];
+      let pIndex = 2;
+
+      if (status) { conditions.push(`vi.status = $${pIndex++}`); params.push(status); }
+      if (cursor) { conditions.push(`vi.id < $${pIndex++}`); params.push(cursor); }
+
+      const query = `
+        SELECT
+          vi.id, vi.item_id, vi.title, vi.price, vi.status,
+          vi.is_hidden, vi.views, vi.likes AS favorites,
+          vi.brand, vi.size, vi.category, vi.url, vi.image_url,
+          vi.buy_price, vi.profit, vi.listed_at, vi.sold_at, vi.last_synced_at,
+          va.username AS account_login, va.domain AS country_code
+        FROM vinted_inventory vi
+        JOIN vinted_accounts va ON va.id = vi.account_id
+        WHERE ${conditions.join(" AND ")}
+        ORDER BY vi.id DESC
+        LIMIT $${pIndex}
+      `;
+      params.push(limit + 1);
+
+      const result = await pool.query(query, params);
+      const hasMore = result.rows.length > limit;
+      const items = result.rows.slice(0, limit);
+      const endCursor = hasMore ? String(items[items.length - 1].id) : null;
+
+      res.json({
+        ok: true,
+        data: {
+          items,
+          meta: {
+            has_next_page: hasMore,
+            end_cursor: endCursor,
+            start_cursor: items[0] ? String(items[0].id) : null,
+            total_pages: null,
+            total_entries: null,
+          },
+        },
+      });
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // ── GET /api/vinted/:accountId/orders  (Blackstock compat) ──────────────────
+  app.get("/api/vinted/:accountId/orders", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const { accountId } = req.params;
+      const limit  = Math.min(parseInt(String(req.query.limit  || "50")), 200);
+      const cursor = req.query.cursor ? parseInt(String(req.query.cursor)) : null;
+
+      // Verify account belongs to user
+      const accResult = await pool.query(
+        "SELECT id, username FROM vinted_accounts WHERE id = $1 AND user_id = $2",
+        [accountId, req.user!.id]
+      );
+      if (!accResult.rows[0]) return res.status(404).json({ ok: false, error: "account_not_found" });
+      const acc = accResult.rows[0];
+
+      const conditions: string[] = ["(s.account_id = $1 OR s.vinted_account = $2)"];
+      const params: any[] = [acc.id, acc.username];
+      let pIndex = 3;
+
+      if (cursor) { conditions.push(`s.id < $${pIndex++}`); params.push(cursor); }
+
+      const query = `
+        SELECT
+          s.id, s.model AS title, s.buy_price, s.sell_price AS amount,
+          s.date AS sold_at, s.vinted_account AS account_login,
+          s.account_id, s.created_at,
+          va.username AS buyer_name
+        FROM sales s
+        LEFT JOIN vinted_accounts va ON va.id = s.account_id
+        WHERE ${conditions.join(" AND ")}
+        ORDER BY s.id DESC
+        LIMIT $${pIndex}
+      `;
+      params.push(limit + 1);
+
+      const result = await pool.query(query, params);
+      const hasMore = result.rows.length > limit;
+      const orders = result.rows.slice(0, limit).map(row => ({
+        id:         row.id,
+        title:      row.title,
+        amount:     parseFloat(row.amount || "0"),
+        buyPrice:   parseFloat(row.buy_price || "0"),
+        profit:     parseFloat(row.amount || "0") - parseFloat(row.buy_price || "0"),
+        soldAt:     row.sold_at,
+        accountLogin: row.account_login,
+        createdAt:  row.created_at,
+      }));
+
+      res.json({
+        ok: true,
+        data: {
+          orders,
+          meta: {
+            has_next_page: hasMore,
+            end_cursor: hasMore ? String(result.rows[limit - 1].id) : null,
+            start_cursor: orders[0] ? String(orders[0].id) : null,
+            total_pages: null,
+            total_entries: null,
+          },
+        },
+      });
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // ── GET /api/vinted/:accountId/stats  (Blackstock compat) ───────────────────
+  app.get("/api/vinted/:accountId/stats", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const { accountId } = req.params;
+      const accResult = await pool.query(
+        "SELECT id, username FROM vinted_accounts WHERE id = $1 AND user_id = $2",
+        [accountId, req.user!.id]
+      );
+      if (!accResult.rows[0]) return res.status(404).json({ ok: false, error: "account_not_found" });
+      const acc = accResult.rows[0];
+
+      const [invR, salesR] = await Promise.all([
+        pool.query(
+          `SELECT
+             COUNT(*) FILTER (WHERE status = 'active')  AS active,
+             COUNT(*) FILTER (WHERE status = 'sold')    AS sold,
+             COUNT(*) FILTER (WHERE is_hidden = TRUE)   AS hidden,
+             COUNT(*) AS total
+           FROM vinted_inventory WHERE account_id = $1`,
+          [acc.id]
+        ),
+        pool.query(
+          `SELECT
+             COUNT(*)                  AS total_orders,
+             COALESCE(SUM(sell_price), 0) AS revenue,
+             COALESCE(AVG(sell_price), 0) AS avg_order,
+             COALESCE(SUM(sell_price - buy_price), 0) AS profit
+           FROM sales WHERE account_id = $1 OR vinted_account = $2`,
+          [acc.id, acc.username]
+        ),
+      ]);
+
+      const inv   = invR.rows[0];
+      const sales = salesR.rows[0];
+
+      res.json({
+        ok: true,
+        data: {
+          inventory: {
+            active:  parseInt(inv.active  || "0"),
+            sold:    parseInt(inv.sold    || "0"),
+            hidden:  parseInt(inv.hidden  || "0"),
+            total:   parseInt(inv.total   || "0"),
+          },
+          sales: {
+            totalOrders: parseInt(sales.total_orders || "0"),
+            revenue:     parseFloat(sales.revenue    || "0"),
+            avgOrder:    parseFloat(sales.avg_order  || "0"),
+            profit:      parseFloat(sales.profit     || "0"),
+          },
+        },
+      });
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
   });
 
   // ── Vite / Static ───────────────────────────────────────────────────────────
