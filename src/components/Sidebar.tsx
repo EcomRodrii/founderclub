@@ -1,17 +1,14 @@
-import React from 'react';
-import { motion } from 'motion/react';
+import React, { useState } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import {
-  LayoutDashboard,
-  Users,
-  Package,
-  ShoppingBag,
-  Zap,
-  Settings,
-  LogOut,
-  ShieldCheck,
+  LayoutDashboard, Users, Package, ShoppingBag, Zap, Settings,
+  LogOut, ShieldCheck, Scissors, Image as ImageIcon, TrendingUp,
+  MoreHorizontal, X,
 } from 'lucide-react';
 
-export type Page = 'dashboard' | 'accounts' | 'inventory' | 'orders' | 'boost' | 'settings';
+export type Page =
+  | 'dashboard' | 'accounts' | 'inventory' | 'orders'
+  | 'profits' | 'tongue' | 'photos' | 'boost' | 'settings';
 
 interface SidebarProps {
   currentPage: Page;
@@ -21,14 +18,37 @@ interface SidebarProps {
   onAdmin?: () => void;
 }
 
-const NAV_ITEMS: { id: Page; label: string; icon: React.ReactNode }[] = [
-  { id: 'dashboard',  label: 'Dashboard',    icon: <LayoutDashboard className="w-[18px] h-[18px]" /> },
-  { id: 'accounts',   label: 'Cuentas',      icon: <Users            className="w-[18px] h-[18px]" /> },
-  { id: 'inventory',  label: 'Inventario',   icon: <Package          className="w-[18px] h-[18px]" /> },
-  { id: 'orders',     label: 'Pedidos',      icon: <ShoppingBag      className="w-[18px] h-[18px]" /> },
-  { id: 'boost',      label: 'Boost',        icon: <Zap              className="w-[18px] h-[18px]" /> },
-  { id: 'settings',   label: 'Configuración',icon: <Settings         className="w-[18px] h-[18px]" /> },
+const NAV_MAIN: { id: Page; label: string; icon: React.ReactNode }[] = [
+  { id: 'dashboard', label: 'Dashboard',  icon: <LayoutDashboard className="w-[18px] h-[18px]" /> },
+  { id: 'accounts',  label: 'Cuentas',   icon: <Users            className="w-[18px] h-[18px]" /> },
+  { id: 'inventory', label: 'Inventario',icon: <Package          className="w-[18px] h-[18px]" /> },
+  { id: 'orders',    label: 'Pedidos',   icon: <ShoppingBag      className="w-[18px] h-[18px]" /> },
 ];
+
+const NAV_TOOLS: { id: Page; label: string; icon: React.ReactNode }[] = [
+  { id: 'profits', label: 'Beneficios',   icon: <TrendingUp  className="w-[18px] h-[18px]" /> },
+  { id: 'tongue',  label: 'Lengüeta',     icon: <Scissors    className="w-[18px] h-[18px]" /> },
+  { id: 'photos',  label: 'Foto única',   icon: <ImageIcon   className="w-[18px] h-[18px]" /> },
+  { id: 'boost',   label: 'Boost',        icon: <Zap         className="w-[18px] h-[18px]" /> },
+  { id: 'settings',label: 'Configuración',icon: <Settings    className="w-[18px] h-[18px]" /> },
+];
+
+function NavBtn({ item, active, onNavigate }: { item: { id: Page; label: string; icon: React.ReactNode }; active: boolean; onNavigate: (p: Page) => void }) {
+  return (
+    <button
+      onClick={() => onNavigate(item.id)}
+      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[0.86rem] font-medium transition-all group ${
+        active ? 'bg-[#d4ff00]/10 text-[#d4ff00]' : 'text-[#888880] hover:text-[#f2f2ef] hover:bg-white/[0.04]'
+      }`}
+    >
+      <span className={active ? 'text-[#d4ff00]' : 'text-[#555550] group-hover:text-[#f2f2ef] transition-colors'}>
+        {item.icon}
+      </span>
+      {item.label}
+      {active && <motion.span layoutId="sidebar-indicator" className="ml-auto w-1 h-4 rounded-full bg-[#d4ff00]" />}
+    </button>
+  );
+}
 
 export default function Sidebar({ currentPage, onNavigate, user, onLogout, onAdmin }: SidebarProps) {
   const initials = user.username.slice(0, 2).toUpperCase();
@@ -38,49 +58,24 @@ export default function Sidebar({ currentPage, onNavigate, user, onLogout, onAdm
       {/* Logo */}
       <div className="flex items-center gap-2.5 px-6 py-7">
         <span className="w-2 h-2 rounded-sm bg-[#d4ff00] shadow-[0_0_12px_rgba(212,255,0,0.55)]" />
-        <span className="font-display text-[1.6rem] leading-none tracking-[0.06em] text-[#f2f2ef]">
-          LAMINE
-        </span>
+        <span className="font-display text-[1.6rem] leading-none tracking-[0.06em] text-[#f2f2ef]">LAMINE</span>
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 px-3 space-y-0.5 overflow-y-auto">
-        {NAV_ITEMS.map((item) => {
-          const active = currentPage === item.id;
-          return (
-            <button
-              key={item.id}
-              onClick={() => onNavigate(item.id)}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[0.86rem] font-medium transition-all ease-hub group ${
-                active
-                  ? 'bg-[#d4ff00]/10 text-[#d4ff00]'
-                  : 'text-[#888880] hover:text-[#f2f2ef] hover:bg-white/[0.04]'
-              }`}
-            >
-              <span className={active ? 'text-[#d4ff00]' : 'text-[#555550] group-hover:text-[#f2f2ef] transition-colors'}>
-                {item.icon}
-              </span>
-              {item.label}
-              {active && (
-                <motion.span
-                  layoutId="sidebar-indicator"
-                  className="ml-auto w-1 h-4 rounded-full bg-[#d4ff00]"
-                />
-              )}
-            </button>
-          );
-        })}
+      <nav className="flex-1 px-3 overflow-y-auto space-y-0.5">
+        {NAV_MAIN.map(item => <NavBtn key={item.id} item={item} active={currentPage === item.id} onNavigate={onNavigate} />)}
+
+        <div className="pt-3 pb-1 px-3">
+          <span className="text-[10px] uppercase tracking-widest text-[#444440] font-semibold">Herramientas</span>
+        </div>
+        {NAV_TOOLS.map(item => <NavBtn key={item.id} item={item} active={currentPage === item.id} onNavigate={onNavigate} />)}
       </nav>
 
       {/* Footer */}
       <div className="px-3 pb-5 pt-4 border-t border-white/[0.06] space-y-1">
         {onAdmin && (
-          <button
-            onClick={onAdmin}
-            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[0.82rem] font-medium text-[#888880] hover:text-[#d4ff00] hover:bg-[#d4ff00]/[0.06] transition-all"
-          >
-            <ShieldCheck className="w-[16px] h-[16px]" />
-            Panel Admin
+          <button onClick={onAdmin} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[0.82rem] font-medium text-[#888880] hover:text-[#d4ff00] hover:bg-[#d4ff00]/[0.06] transition-all">
+            <ShieldCheck className="w-[16px] h-[16px]" /> Panel Admin
           </button>
         )}
         <div className="flex items-center gap-3 px-3 py-2.5">
@@ -91,11 +86,7 @@ export default function Sidebar({ currentPage, onNavigate, user, onLogout, onAdm
             <p className="text-[0.82rem] font-semibold text-[#f2f2ef] truncate">{user.username}</p>
             <p className="text-[0.7rem] text-[#888880] truncate">{user.email}</p>
           </div>
-          <button
-            onClick={onLogout}
-            title="Cerrar sesión"
-            className="text-[#555550] hover:text-[#ff8080] transition-colors shrink-0"
-          >
+          <button onClick={onLogout} title="Cerrar sesión" className="text-[#555550] hover:text-[#ff8080] transition-colors shrink-0">
             <LogOut className="w-4 h-4" />
           </button>
         </div>
@@ -106,35 +97,80 @@ export default function Sidebar({ currentPage, onNavigate, user, onLogout, onAdm
 
 /* ── Mobile bottom tab bar ─────────────────────────────────────────────────── */
 
-const MOBILE_ITEMS: { id: Page; label: string; icon: React.ReactNode }[] = [
-  { id: 'dashboard', label: 'Inicio',    icon: <LayoutDashboard className="w-5 h-5" /> },
-  { id: 'accounts',  label: 'Cuentas',  icon: <Users            className="w-5 h-5" /> },
+const MOBILE_MAIN: { id: Page; label: string; icon: React.ReactNode }[] = [
+  { id: 'dashboard', label: 'Inicio',   icon: <LayoutDashboard className="w-5 h-5" /> },
   { id: 'inventory', label: 'Items',    icon: <Package          className="w-5 h-5" /> },
   { id: 'orders',    label: 'Pedidos',  icon: <ShoppingBag      className="w-5 h-5" /> },
-  { id: 'boost',     label: 'Boost',    icon: <Zap              className="w-5 h-5" /> },
-  { id: 'settings',  label: 'Config',   icon: <Settings         className="w-5 h-5" /> },
+  { id: 'profits',   label: 'Beneficios', icon: <TrendingUp     className="w-5 h-5" /> },
+];
+
+const MOBILE_MORE: { id: Page; label: string; icon: React.ReactNode }[] = [
+  { id: 'tongue',   label: 'Lengüeta',   icon: <Scissors   className="w-5 h-5" /> },
+  { id: 'photos',   label: 'Foto única', icon: <ImageIcon  className="w-5 h-5" /> },
+  { id: 'accounts', label: 'Cuentas',    icon: <Users      className="w-5 h-5" /> },
+  { id: 'boost',    label: 'Boost',      icon: <Zap        className="w-5 h-5" /> },
+  { id: 'settings', label: 'Config',     icon: <Settings   className="w-5 h-5" /> },
 ];
 
 export function MobileTabBar({ currentPage, onNavigate }: { currentPage: Page; onNavigate: (p: Page) => void }) {
+  const [showMore, setShowMore] = useState(false);
+  const inMore = MOBILE_MORE.some(i => i.id === currentPage);
+
   return (
-    <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-[rgba(10,10,10,0.92)] backdrop-blur-xl border-t border-white/[0.08] safe-area-inset-bottom">
-      <div className="flex items-center justify-around px-1 py-2">
-        {MOBILE_ITEMS.map((item) => {
-          const active = currentPage === item.id;
-          return (
-            <button
-              key={item.id}
-              onClick={() => onNavigate(item.id)}
-              className={`flex flex-col items-center gap-0.5 px-2 py-1.5 rounded-xl transition-all ${
-                active ? 'text-[#d4ff00]' : 'text-[#555550]'
-              }`}
+    <>
+      {/* "Más" bottom sheet */}
+      <AnimatePresence>
+        {showMore && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="lg:hidden fixed inset-0 z-40 bg-black/60"
+              onClick={() => setShowMore(false)}
+            />
+            <motion.div
+              initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }}
+              transition={{ type: 'spring', damping: 32, stiffness: 320 }}
+              className="lg:hidden fixed bottom-[60px] left-0 right-0 z-50 bg-[#141414] border-t border-white/[0.08] rounded-t-3xl p-4 pb-2"
             >
-              {item.icon}
-              <span className="text-[9px] font-medium uppercase tracking-wider">{item.label}</span>
-            </button>
-          );
-        })}
-      </div>
-    </nav>
+              <div className="w-8 h-1 bg-white/15 rounded-full mx-auto mb-4" />
+              <div className="grid grid-cols-5 gap-1 mb-2">
+                {MOBILE_MORE.map(item => {
+                  const active = currentPage === item.id;
+                  return (
+                    <button key={item.id} onClick={() => { onNavigate(item.id); setShowMore(false); }}
+                      className={`flex flex-col items-center gap-1.5 p-3 rounded-2xl transition-all ${active ? 'bg-[#d4ff00]/10 text-[#d4ff00]' : 'text-[#888880] hover:text-[#f2f2ef] hover:bg-white/[0.04]'}`}>
+                      {item.icon}
+                      <span className="text-[10px] font-medium text-center leading-tight">{item.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* Bottom tab bar */}
+      <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-[rgba(10,10,10,0.95)] backdrop-blur-xl border-t border-white/[0.08]">
+        <div className="flex items-center justify-around px-1 py-2 pb-[max(8px,env(safe-area-inset-bottom))]">
+          {MOBILE_MAIN.map(item => {
+            const active = currentPage === item.id;
+            return (
+              <button key={item.id} onClick={() => { onNavigate(item.id); setShowMore(false); }}
+                className={`flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-xl transition-all ${active ? 'text-[#d4ff00]' : 'text-[#555550]'}`}>
+                {item.icon}
+                <span className="text-[9px] font-medium uppercase tracking-wider">{item.label}</span>
+              </button>
+            );
+          })}
+          {/* Más */}
+          <button onClick={() => setShowMore(v => !v)}
+            className={`flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-xl transition-all ${(showMore || inMore) ? 'text-[#d4ff00]' : 'text-[#555550]'}`}>
+            {showMore ? <X className="w-5 h-5" /> : <MoreHorizontal className="w-5 h-5" />}
+            <span className="text-[9px] font-medium uppercase tracking-wider">Más</span>
+          </button>
+        </div>
+      </nav>
+    </>
   );
 }

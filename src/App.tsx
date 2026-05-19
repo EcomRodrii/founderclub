@@ -12,6 +12,9 @@ import InventoryPage  from './components/pages/InventoryPage';
 import OrdersPage     from './components/pages/OrdersPage';
 import BoostPage      from './components/pages/BoostPage';
 import SettingsPage   from './components/pages/SettingsPage';
+import ProfitControl  from './components/ProfitControl';
+import TongueEditor   from './components/TongueEditor';
+import ImageUniquifier from './components/ImageUniquifier';
 
 // ─── License activation ───────────────────────────────────────────────────────
 
@@ -196,18 +199,16 @@ function Dashboard({
 
   const renderPage = () => {
     switch (page) {
-      case 'dashboard':  return <DashboardPage  token={token} />;
-      case 'accounts':   return <AccountsPage   token={token} />;
-      case 'inventory':  return <InventoryPage  token={token} />;
-      case 'orders':     return <OrdersPage     token={token} />;
-      case 'boost':      return <BoostPage      token={token} />;
+      case 'dashboard':  return <DashboardPage   token={token} />;
+      case 'accounts':   return <AccountsPage    token={token} />;
+      case 'inventory':  return <InventoryPage   token={token} />;
+      case 'orders':     return <OrdersPage      token={token} />;
+      case 'boost':      return <BoostPage       token={token} />;
+      case 'profits':    return <ProfitControl />;
+      case 'tongue':     return <TongueEditor />;
+      case 'photos':     return <ImageUniquifier />;
       case 'settings':   return (
-        <SettingsPage
-          token={token}
-          user={user}
-          license={license}
-          onLogout={onLogout}
-        />
+        <SettingsPage token={token} user={user} license={license} onLogout={onLogout} />
       );
     }
   };
@@ -223,7 +224,7 @@ function Dashboard({
       />
 
       <main className="flex-1 overflow-y-auto">
-        <div className="p-6 lg:p-8 pb-24 lg:pb-8 max-w-[1200px]">
+        <div className="p-4 lg:p-8 pb-28 lg:pb-8 max-w-[1280px] mx-auto">
           <AnimatePresence mode="wait">
             <motion.div
               key={page}
