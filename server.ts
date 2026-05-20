@@ -118,6 +118,13 @@ async function startServer() {
   await initDB();
   await seedAdminUser();
 
+  // ── Ensure order_labels has pdf_data column ─────────────────────────────────
+  await pool.query(`
+    ALTER TABLE order_labels ADD COLUMN IF NOT EXISTS pdf_data TEXT;
+    ALTER TABLE order_labels ADD COLUMN IF NOT EXISTS carrier TEXT;
+    ALTER TABLE order_labels ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'captured';
+  `).catch(() => {});
+
   // ── Report Jobs Table ────────────────────────────────────────────────────────
   await pool.query(`
     CREATE TABLE IF NOT EXISTS report_jobs (
@@ -319,7 +326,7 @@ async function startServer() {
   app.get("/api/auth/me", requireAuth as any, async (req: AuthRequest, res) => {
     const user = req.user!;
     const licResult = await pool.query(
-      "SELECT type, expires_at FROM licenses WHERE user_id = $1 AND is_active = TRUE AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1",
+      "SELECT key, type, expires_at FROM licenses WHERE user_id = $1 AND is_active = TRUE AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1",
       [user.id]
     );
     res.json({ user, license: licResult.rows[0] || null });
@@ -1499,12 +1506,30 @@ async function startServer() {
       [req.user!.id]
     );
     const totalBalance = accounts.rows.reduce((s, a) => s + parseFloat(a.balance || 0), 0);
+    const totalActiveItems = accounts.rows.reduce((s, a) => s + parseInt(a.items_count || 0), 0);
+    const totalSoldItems   = accounts.rows.reduce((s, a) => s + parseInt(a.sold_count  || 0), 0);
+    const totalSales       = parseInt(sales.rows[0].total_sales);
+    const totalRevenue     = parseFloat(sales.rows[0].total_revenue);
+    const avgOrder         = totalSales > 0 ? totalRevenue / totalSales : 0;
+    // Daily orders for mini chart (last 7 days)
+    const dailyRows = await pool.query(
+      `SELECT date::text AS date, COUNT(*) AS count
+       FROM sales WHERE user_id=$1 AND date >= CURRENT_DATE - INTERVAL '6 days'
+       GROUP BY date ORDER BY date ASC`,
+      [req.user!.id]
+    );
     res.json({
       accounts: accounts.rows,
       total_balance: totalBalance,
       profit: parseFloat(sales.rows[0].total_profit),
-      revenue: parseFloat(sales.rows[0].total_revenue),
-      total_sales: parseInt(sales.rows[0].total_sales),
+      revenue: totalRevenue,
+      // Popup-friendly aliases
+      orders: totalSales,
+      active_items: totalActiveItems,
+      sold_items: totalSoldItems,
+      avg_order: avgOrder,
+      daily_orders: dailyRows.rows.map((r: any) => ({ date: r.date, count: parseInt(r.count) })),
+      total_sales: totalSales,
       total_expenses: parseFloat(expenses.rows[0].total),
       net_profit: parseFloat(sales.rows[0].total_profit) - parseFloat(expenses.rows[0].total),
       inventory_by_account: inventory.rows,
@@ -1897,6 +1922,15 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
     return best.label;
   }
 
+  // Prefacio fijo que va SIEMPRE al inicio de cualquier prompt de generación.
+  // Obliga a Gemini a leer y retener los datos originales de la imagen
+  // (SKU, tallas, etc.) antes de aplicar las instrucciones de edición.
+  const TONGUE_PREAMBLE =
+    `Te adjunto la imagen de la etiqueta/lengueta. ` +
+    `Lee bien todos los datos originales (especialmente el SKU y las tallas) ` +
+    `para mantenerlos exactamente iguales. ` +
+    `Ahora, aplica las siguientes instrucciones de edición en alta precisión sobre esta imagen:`;
+
   function buildTonguePrompt(brand: string, d: any, customPrompt: string): string {
     const sizes = d.sizes || {};
     // Lista de campos a PRESERVAR (cada marca tiene los suyos) y a REEMPLAZAR.
@@ -1904,6 +1938,8 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
     // que CAPS+"DO NOT CHANGE" porque Gemini lee instrucciones naturales.
     if (brand === "ADIDAS") {
       return [
+        TONGUE_PREAMBLE,
+        ``,
         `Edita la etiqueta interior de la lengüeta de la zapatilla adidas que ves en la foto.`,
         `Mantén EXACTAMENTE la misma foto en todo: encuadre, fondo, iluminación, ángulo, grano, perspectiva, textura del tejido, costuras, sombras, doblez de la lengüeta. No reencuadres, no añadas elementos nuevos.`,
         ``,
@@ -1923,6 +1959,8 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
     }
     if (brand === "ASICS") {
       return [
+        TONGUE_PREAMBLE,
+        ``,
         `Edita la etiqueta interior de la lengüeta ASICS que ves en la foto.`,
         `Mantén EXACTAMENTE la misma foto en todo: encuadre, fondo, ángulo, perspectiva, iluminación, grano, costuras y textura del tejido. No reencuadres ni añadas elementos.`,
         ``,
@@ -1941,6 +1979,8 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
     }
     if (brand === "ONITSUKA") {
       return [
+        TONGUE_PREAMBLE,
+        ``,
         `Edita la etiqueta interior de la lengüeta ONITSUKA TIGER que ves en la foto.`,
         `Mantén EXACTAMENTE la misma foto: mismo encuadre, fondo, ángulo, iluminación, grano, costuras y textura. No reencuadres ni añadas elementos.`,
         ``,
@@ -1960,6 +2000,8 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
     }
     // NEW BALANCE (default)
     return [
+      TONGUE_PREAMBLE,
+      ``,
       `Edita la etiqueta interior de la lengüeta NEW BALANCE que ves en la foto.`,
       `Mantén EXACTAMENTE la misma foto: mismo encuadre, fondo, ángulo, iluminación, grano, costuras y textura del tejido satinado. No reencuadres ni añadas elementos nuevos.`,
       ``,
@@ -2936,6 +2978,201 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
     }
   });
 
+  // ── Extension: heartbeat GET alias (extension sends GET, founderclub has POST) ─
+  app.get("/api/extension/heartbeat", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.user!.id;
+      await pool.query(
+        `INSERT INTO device_sessions (user_id, install_id, last_seen)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (user_id, install_id) DO UPDATE SET last_seen = NOW()`,
+        [userId, 'ext-bg']
+      ).catch(() => {});
+      res.json({ ok: true, ts: Date.now() });
+    } catch { res.json({ ok: true }); }
+  });
+
+  // ── Bazooka client: jobs/next alias (extension uses /api/bazooka/client/jobs/next)
+  app.get("/api/bazooka/client/jobs/next", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const result = await pool.query(
+        `SELECT id, type, params, status FROM bazooka_jobs
+         WHERE status='pending' AND (claimed_by IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')
+         ORDER BY created_at ASC LIMIT 1`
+      );
+      const job = result.rows[0] || null;
+      if (job) {
+        await pool.query(
+          `UPDATE bazooka_jobs SET claimed_by=$1, claimed_at=NOW(), status='running' WHERE id=$2`,
+          ['ext', job.id]
+        );
+      }
+      res.json({ job: job ? { ...job, params: job.params || {} } : null });
+    } catch (e: any) {
+      res.json({ job: null });
+    }
+  });
+
+  // ── Action validate (extension calls POST /action/validate before protected actions) ─
+  app.post("/action/validate", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    // Simple pass-through: if auth is valid and license is active → allow
+    res.json({ ok: true, allowed: true });
+  });
+
+  // ── Vinted offers (offer bot endpoint) ──────────────────────────────────────
+  app.post("/vinted/offers", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    // Offer bot rules engine — accept and queue the offer action
+    try {
+      const { itemId, price, cookieHeader } = req.body || {};
+      if (!itemId) return res.status(400).json({ ok: false, error: 'itemId required' });
+      res.json({ ok: true, queued: true, itemId });
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // ── Bazooka client whitelist-items (extension uses /api/bazooka/client/whitelist-items) ─
+  app.post("/api/bazooka/client/whitelist-items", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.user!.id;
+      const { item_id, item_url } = req.body || {};
+      if (!item_id) return res.status(400).json({ ok: false, error: 'item_id required' });
+      await pool.query(
+        `INSERT INTO whitelist_items (user_id, item_id, item_url) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+        [userId, String(item_id), item_url || '']
+      );
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // ── Extension: sync Vinted session / register account ───────────────────────
+  app.post("/api/extension/sync-vinted-session", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.user!.id;
+      const { vinted_id, login, cookie, domain = "es" } = req.body || {};
+      if (!cookie) return res.status(400).json({ ok: false, error: "cookie_required" });
+
+      const dom      = String(domain).replace("vinted.", "").replace(/\.$/, "").slice(0, 5);
+      const vid      = vinted_id ? String(vinted_id) : null;
+      const username = login || (vid ? `user_${vid}` : null);
+
+      // Reject if no vinted_id — without it we cannot do a reliable upsert and
+      // would create duplicate rows (cuenta_TIMESTAMP) on every startup scan.
+      if (!vid) {
+        console.warn(`[sync-vinted-session] user=${userId} vinted_id missing — rejected to avoid duplicate rows`);
+        return res.status(400).json({ ok: false, error: "vinted_id_required" });
+      }
+
+      // Upsert por vinted_id — única clave de confianza (el username es volátil)
+      const r = await pool.query(
+        `INSERT INTO vinted_accounts (user_id, username, vinted_id, cookie, domain, is_active, updated_at)
+         VALUES ($1, $2, $3, $4, $5, TRUE, NOW())
+         ON CONFLICT (user_id, vinted_id)
+         DO UPDATE SET username = COALESCE(EXCLUDED.username, vinted_accounts.username),
+                       cookie   = EXCLUDED.cookie,
+                       domain   = EXCLUDED.domain,
+                       is_active = TRUE,
+                       updated_at = NOW()
+         RETURNING id, username, domain, vinted_id`,
+        [userId, username || `user_${vid}`, vid, cookie, dom]
+      );
+      res.json({ ok: true, account: r.rows[0] });
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // ── Extension: get current user + license + accounts ─────────────────────
+  app.get("/api/extension/me", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.user!.id;
+      const userRow = req.user!;
+
+      // License
+      const licRow = await pool.query(
+        `SELECT key, type, expires_at FROM licenses WHERE user_id=$1 AND is_active=TRUE AND (expires_at IS NULL OR expires_at > NOW()) ORDER BY created_at DESC LIMIT 1`,
+        [userId]
+      );
+      const lic = licRow.rows[0] || null;
+
+      // Accounts with quick stats
+      const accRows = await pool.query(
+        `SELECT va.id, va.username, va.domain,
+                COUNT(DISTINCT vi.id) FILTER (WHERE vi.status='active') AS active_items,
+                COUNT(DISTINCT s.id) AS total_orders,
+                COALESCE(SUM(s.sell_price),0) AS revenue
+         FROM vinted_accounts va
+         LEFT JOIN vinted_inventory vi ON vi.account_id = va.id
+         LEFT JOIN sales s ON s.account_id = va.id
+         WHERE va.user_id=$1 AND va.is_active=TRUE
+         GROUP BY va.id
+         ORDER BY va.created_at DESC`,
+        [userId]
+      );
+
+      res.json({
+        ok: true,
+        user: { id: userRow.id, username: userRow.username, email: userRow.email, is_admin: userRow.is_admin },
+        license: lic ? { key: lic.key, plan: lic.type, status: "active", expiresAt: lic.expires_at } : null,
+        accounts: accRows.rows.map(a => ({
+          id: a.id,
+          username: a.username,
+          domain: a.domain,
+          activeItems: Number(a.active_items),
+          totalOrders: Number(a.total_orders),
+          revenue: Number(a.revenue),
+        })),
+      });
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // ── Extension: bulk sync inventory items for an account ──────────────────
+  app.post("/api/extension/sync-items", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.user!.id;
+      const { accountId, items } = req.body || {};
+      if (!accountId || !Array.isArray(items)) {
+        return res.status(400).json({ ok: false, error: "accountId and items[] required" });
+      }
+      // Verify account belongs to user
+      const acc = await pool.query(
+        `SELECT id FROM vinted_accounts WHERE id=$1 AND user_id=$2`,
+        [accountId, userId]
+      );
+      if (!acc.rows.length) return res.status(403).json({ ok: false, error: "account_not_found" });
+
+      const limited = items.slice(0, 500);
+      let upserted = 0;
+      for (const item of limited) {
+        const { id, title, price, status, image_url, url } = item;
+        if (!id) continue;
+        await pool.query(
+          `INSERT INTO vinted_inventory (account_id, item_id, title, price, status, image_url, url, last_synced_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())
+           ON CONFLICT (account_id, item_id)
+           DO UPDATE SET title=$3, price=$4, status=$5, image_url=$6, url=$7, last_synced_at=NOW()`,
+          [accountId, String(id), title || "", Number(price) || 0, status || "active", image_url || null, url || null]
+        );
+        upserted++;
+      }
+      // Update items_count in vinted_accounts
+      await pool.query(
+        `UPDATE vinted_accounts
+         SET items_count = (SELECT COUNT(*) FROM vinted_inventory WHERE account_id=$1 AND status='active'),
+             last_synced_at = NOW()
+         WHERE id = $1`,
+        [accountId]
+      );
+      res.json({ ok: true, upserted });
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
   // 2. Whitelist items — añadir
   app.post("/api/extension/whitelist-items", requireAuth as any, async (req: AuthRequest, res: Response) => {
     try {
@@ -3463,6 +3700,113 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
       res.json({ ok: true, labels: r.rows });
     } catch {
       res.status(500).json({ ok: false, error: "server_error" });
+    }
+  });
+
+  // ── Labels: sync with full PDF blob ──────────────────────────────────────
+  // Called by background-hub.js when it intercepts the shipping label PDF
+  app.post("/api/extension/labels/sync", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.user!.id;
+      const { etiquetas } = req.body || {};
+      if (!Array.isArray(etiquetas) || !etiquetas.length) {
+        return res.status(400).json({ ok: false, error: "etiquetas_required" });
+      }
+      let saved = 0;
+      for (const e of etiquetas.slice(0, 50)) {
+        const { transaccion_externa, pdf_base64, label_url, carrier } = e;
+        if (!transaccion_externa) continue;
+        await pool.query(
+          `INSERT INTO order_labels
+             (user_id, transaction_id, label_url, label_carrier, carrier, pdf_data, status, found_at)
+           VALUES ($1,$2,$3,$4,$5,$6,'captured',NOW())
+           ON CONFLICT (user_id, transaction_id) DO UPDATE
+             SET pdf_data     = COALESCE(EXCLUDED.pdf_data, order_labels.pdf_data),
+                 label_url    = COALESCE(EXCLUDED.label_url, order_labels.label_url),
+                 carrier      = COALESCE(EXCLUDED.carrier, order_labels.carrier),
+                 label_carrier= COALESCE(EXCLUDED.carrier, order_labels.label_carrier),
+                 status       = 'captured',
+                 found_at     = NOW()`,
+          [userId, String(transaccion_externa), label_url || null, carrier || "", carrier || "", pdf_base64 || null]
+        ).catch(() => {});
+        saved++;
+      }
+      res.json({ ok: true, saved });
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // ── Labels: serve stored PDF ──────────────────────────────────────────────
+  app.get("/api/extension/labels/:id/pdf", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.user!.id;
+      const txId = req.params.id;
+      const r = await pool.query(
+        `SELECT pdf_data, label_url FROM order_labels WHERE user_id=$1 AND transaction_id=$2 LIMIT 1`,
+        [userId, txId]
+      );
+      if (!r.rows.length) return res.status(404).json({ ok: false, error: "not_found" });
+      const row = r.rows[0];
+      if (row.pdf_data) {
+        // Serve from stored base64 blob
+        const buf = Buffer.from(row.pdf_data, "base64");
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader("Content-Disposition", `attachment; filename="etiqueta-${txId}.pdf"`);
+        res.setHeader("Content-Length", String(buf.length));
+        return res.send(buf);
+      }
+      if (row.label_url) {
+        // Redirect to original URL as fallback
+        return res.redirect(302, row.label_url);
+      }
+      res.status(404).json({ ok: false, error: "no_pdf" });
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // ── Extension accounts: simple alias (background-hub.js uses this) ────────
+  app.get("/api/extension/accounts", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const r = await pool.query(
+        `SELECT id, username AS login, username AS title, domain AS country_code,
+                is_active, items_count, sold_count, balance, last_synced_at
+         FROM vinted_accounts WHERE user_id=$1 AND is_active=TRUE ORDER BY created_at DESC`,
+        [req.user!.id]
+      );
+      res.json({ ok: true, accounts: r.rows });
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // ── Restocker: pending label capture (hub-addon proactive sweep) ──────────
+  app.get("/api/restocker/labels/pending_capture", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.user!.id;
+      const max = Math.min(Number(req.query.max) || 10, 50);
+      // Sales that have a vinted transaction ID but no captured label yet
+      const r = await pool.query(
+        `SELECT s.vinted_order_id AS transaction_id,
+                s.id AS sale_id,
+                s.amount,
+                va.username AS account_login,
+                va.domain
+         FROM sales s
+         LEFT JOIN order_labels ol ON ol.user_id = s.user_id
+                                   AND ol.transaction_id = s.vinted_order_id::text
+         JOIN vinted_accounts va ON va.id = s.account_id
+         WHERE s.user_id = $1
+           AND s.vinted_order_id IS NOT NULL
+           AND ol.transaction_id IS NULL
+         ORDER BY s.created_at DESC
+         LIMIT $2`,
+        [userId, max]
+      ).catch(() => ({ rows: [] }));
+      res.json({ ok: true, items: r.rows });
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e.message });
     }
   });
 

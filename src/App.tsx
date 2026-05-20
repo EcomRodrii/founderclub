@@ -204,7 +204,7 @@ function Dashboard({
       case 'inventory':  return <InventoryPage   token={token} />;
       case 'orders':     return <OrdersPage      token={token} />;
       case 'boost':      return <BoostPage       token={token} />;
-      case 'profits':    return <ProfitControl />;
+      case 'profits':    return <ProfitControl token={token} />;
       case 'tongue':     return <TongueEditor />;
       case 'photos':     return <ImageUniquifier />;
       case 'settings':   return (

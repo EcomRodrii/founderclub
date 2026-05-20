@@ -271,6 +271,11 @@ export async function initDB() {
     `ALTER TABLE licenses ADD COLUMN IF NOT EXISTS activated_at TIMESTAMP`,
     `ALTER TABLE licenses ADD COLUMN IF NOT EXISTS ip VARCHAR(64)`,
 
+    // ── vinted_accounts: vinted_id para upsert fiable ─────────────────────────
+    `ALTER TABLE vinted_accounts ADD COLUMN IF NOT EXISTS vinted_id VARCHAR(50)`,
+    `ALTER TABLE vinted_accounts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS vinted_accounts_user_vid_idx ON vinted_accounts(user_id, vinted_id) WHERE vinted_id IS NOT NULL`,
+
     // ── Extension HWID sessions ────────────────────────────────────────────────
     `CREATE TABLE IF NOT EXISTS extension_sessions (
       id TEXT PRIMARY KEY,
