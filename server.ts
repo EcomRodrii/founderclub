@@ -3065,14 +3065,15 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
         return res.status(400).json({ ok: false, error: "vinted_id_required" });
       }
 
-      // Upsert por vinted_id — única clave de confianza (el username es volátil)
+      // Upsert por vinted_id — única clave de confianza (el username es volátil).
+      // ON CONFLICT must match the partial index: WHERE vinted_id IS NOT NULL
       const r = await pool.query(
         `INSERT INTO vinted_accounts (user_id, username, vinted_id, cookie, domain, is_active, updated_at)
          VALUES ($1, $2, $3, $4, $5, TRUE, NOW())
-         ON CONFLICT (user_id, vinted_id)
-         DO UPDATE SET username = COALESCE(EXCLUDED.username, vinted_accounts.username),
-                       cookie   = EXCLUDED.cookie,
-                       domain   = EXCLUDED.domain,
+         ON CONFLICT (user_id, vinted_id) WHERE vinted_id IS NOT NULL
+         DO UPDATE SET username  = COALESCE(EXCLUDED.username, vinted_accounts.username),
+                       cookie    = EXCLUDED.cookie,
+                       domain    = EXCLUDED.domain,
                        is_active = TRUE,
                        updated_at = NOW()
          RETURNING id, username, domain, vinted_id`,
@@ -3080,6 +3081,7 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
       );
       res.json({ ok: true, account: r.rows[0] });
     } catch (e: any) {
+      console.error('[sync-vinted-session] DB error:', e.message);
       res.status(500).json({ ok: false, error: e.message });
     }
   });
