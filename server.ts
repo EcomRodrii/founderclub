@@ -3051,7 +3051,9 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
   app.post("/api/extension/sync-vinted-session", requireAuth as any, async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.user!.id;
-      const { vinted_id, login, cookie, domain = "es" } = req.body || {};
+      // `cookie` = access_token_web Bearer token (for compat)
+      // `session_cookie` = full "name=value; name2=value2" cookie string (for server-side Vinted calls)
+      const { vinted_id, login, cookie, session_cookie, domain = "es" } = req.body || {};
       if (!cookie) return res.status(400).json({ ok: false, error: "cookie_required" });
 
       const dom      = String(domain).replace("vinted.", "").replace(/\.$/, "").slice(0, 5);
@@ -3068,20 +3070,122 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
       // Upsert por vinted_id — única clave de confianza (el username es volátil).
       // ON CONFLICT must match the partial index: WHERE vinted_id IS NOT NULL
       const r = await pool.query(
-        `INSERT INTO vinted_accounts (user_id, username, vinted_id, cookie, domain, is_active, updated_at)
-         VALUES ($1, $2, $3, $4, $5, TRUE, NOW())
+        `INSERT INTO vinted_accounts (user_id, username, vinted_id, cookie, session_cookie, domain, is_active, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, TRUE, NOW())
          ON CONFLICT (user_id, vinted_id) WHERE vinted_id IS NOT NULL
-         DO UPDATE SET username  = COALESCE(EXCLUDED.username, vinted_accounts.username),
-                       cookie    = EXCLUDED.cookie,
-                       domain    = EXCLUDED.domain,
-                       is_active = TRUE,
-                       updated_at = NOW()
+         DO UPDATE SET username       = COALESCE(EXCLUDED.username, vinted_accounts.username),
+                       cookie         = EXCLUDED.cookie,
+                       session_cookie = COALESCE(EXCLUDED.session_cookie, vinted_accounts.session_cookie),
+                       domain         = EXCLUDED.domain,
+                       is_active      = TRUE,
+                       updated_at     = NOW()
          RETURNING id, username, domain, vinted_id`,
-        [userId, username || `user_${vid}`, vid, cookie, dom]
+        [userId, username || `user_${vid}`, vid, cookie, session_cookie || null, dom]
       );
       res.json({ ok: true, account: r.rows[0] });
     } catch (e: any) {
       console.error('[sync-vinted-session] DB error:', e.message);
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // ── Extension: server-side inventory fetch (Blackstock-style proxy) ─────────
+  // The server fetches items from Vinted using the stored session_cookie,
+  // so the extension never needs to call Vinted directly.
+  app.post("/api/extension/fetch-inventory", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.user!.id;
+      const { accountId } = req.body || {};
+      if (!accountId) return res.status(400).json({ ok: false, error: "accountId required" });
+
+      // Verify account belongs to user and get stored session
+      const acc = await pool.query(
+        `SELECT id, vinted_id, domain, session_cookie, cookie FROM vinted_accounts WHERE id=$1 AND user_id=$2`,
+        [accountId, userId]
+      );
+      if (!acc.rows.length) return res.status(403).json({ ok: false, error: "account_not_found" });
+
+      const account = acc.rows[0];
+      const { vinted_id, domain, session_cookie, cookie: bearerToken } = account;
+
+      if (!vinted_id) return res.status(400).json({ ok: false, error: "vinted_id_missing" });
+      if (!session_cookie && !bearerToken) return res.status(400).json({ ok: false, error: "no_session_stored" });
+
+      const base = `https://www.vinted.${domain || "es"}`;
+      const allItems: any[] = [];
+      let page = 1;
+
+      // Fetch all pages of the wardrobe (same as Blackstock: server proxies Vinted)
+      while (page <= 5) {
+        const url = `${base}/api/v2/wardrobe/${encodeURIComponent(String(vinted_id))}/items?page=${page}&per_page=96&order=newest_first`;
+        const headers: Record<string, string> = {
+          "Accept": "application/json",
+          "X-Requested-With": "XMLHttpRequest",
+          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        };
+        if (session_cookie) headers["Cookie"] = session_cookie;
+        if (bearerToken) headers["Authorization"] = `Bearer ${bearerToken}`;
+
+        let vintedRes: globalThis.Response;
+        try {
+          vintedRes = await fetch(url, { headers, signal: AbortSignal.timeout(12000) });
+        } catch (fetchErr: any) {
+          console.warn(`[fetch-inventory] fetch error page ${page}:`, fetchErr?.message);
+          break;
+        }
+        if (!vintedRes.ok) {
+          console.warn(`[fetch-inventory] Vinted HTTP ${vintedRes.status} for account ${accountId} page ${page}`);
+          break;
+        }
+        const data = await vintedRes.json().catch(() => null);
+        const pageItems: any[] = data?.items || data?.wardrobe_items || [];
+        if (!pageItems.length) break;
+
+        for (const it of pageItems) {
+          allItems.push({
+            id:        String(it.id || ""),
+            title:     it.title || "",
+            price:     Number(it.price_numeric || it.price?.amount || it.price || 0),
+            status:    it.status || "active",
+            image_url: it.photos?.[0]?.full_size_url || it.photos?.[0]?.url || it.photo?.full_size_url || it.photo?.url || null,
+            url:       it.url || `${base}/items/${it.id}`,
+          });
+        }
+        if (pageItems.length < 96) break;
+        page++;
+      }
+
+      if (!allItems.length) {
+        return res.json({ ok: true, upserted: 0, total: 0, message: "no_items_found" });
+      }
+
+      // Upsert all items into vinted_inventory
+      let upserted = 0;
+      for (const item of allItems) {
+        if (!item.id) continue;
+        await pool.query(
+          `INSERT INTO vinted_inventory (account_id, item_id, title, price, status, image_url, url, last_synced_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())
+           ON CONFLICT (account_id, item_id)
+           DO UPDATE SET title=$3, price=$4, status=$5, image_url=$6, url=$7, last_synced_at=NOW()`,
+          [accountId, String(item.id), item.title || "", Number(item.price) || 0, item.status || "active", item.image_url || null, item.url || null]
+        );
+        upserted++;
+      }
+
+      // Update items_count
+      await pool.query(
+        `UPDATE vinted_accounts
+         SET items_count = (SELECT COUNT(*) FROM vinted_inventory WHERE account_id=$1 AND status='active'),
+             last_synced_at = NOW()
+         WHERE id = $1`,
+        [accountId]
+      );
+
+      console.log(`[fetch-inventory] account ${accountId} → upserted ${upserted} items`);
+      res.json({ ok: true, upserted, total: allItems.length });
+    } catch (e: any) {
+      console.error("[fetch-inventory] error:", e.message);
       res.status(500).json({ ok: false, error: e.message });
     }
   });

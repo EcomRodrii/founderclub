@@ -276,6 +276,9 @@ export async function initDB() {
     `ALTER TABLE vinted_accounts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`,
     `CREATE UNIQUE INDEX IF NOT EXISTS vinted_accounts_user_vid_idx ON vinted_accounts(user_id, vinted_id) WHERE vinted_id IS NOT NULL`,
 
+    // ── vinted_accounts: session_cookie = full cookie string for server-side Vinted calls ─
+    `ALTER TABLE vinted_accounts ADD COLUMN IF NOT EXISTS session_cookie TEXT`,
+
     // ── Extension HWID sessions ────────────────────────────────────────────────
     `CREATE TABLE IF NOT EXISTS extension_sessions (
       id TEXT PRIMARY KEY,
