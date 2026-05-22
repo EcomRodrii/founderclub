@@ -288,10 +288,13 @@ async function startServer() {
   app.get("/api/auth/me", requireAuth as any, async (req: AuthRequest, res) => {
     const user = req.user!;
     const licResult = await pool.query(
-      "SELECT type, expires_at FROM licenses WHERE user_id = $1 AND is_active = TRUE AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1",
+      "SELECT id, type, expires_at, features FROM licenses WHERE user_id = $1 AND is_active = TRUE AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1",
       [user.id]
     );
-    res.json({ user, license: licResult.rows[0] || null });
+    const license = licResult.rows[0] || null;
+    // Admins always have full access
+    if (license && user.is_admin) license.features = ['all'];
+    res.json({ user, license });
   });
 
   // ── License Routes ──────────────────────────────────────────────────────────
@@ -398,6 +401,18 @@ async function startServer() {
       "UPDATE licenses SET hwid = NULL, ip = NULL WHERE id = $1 RETURNING *",
       [req.params.id]
     );
+    res.json(result.rows[0]);
+  });
+
+  app.patch("/api/admin/licenses/:id/features", requireAdmin as any, async (req, res) => {
+    const { features } = req.body;
+    if (!Array.isArray(features)) return res.status(400).json({ error: "features debe ser un array" });
+    const clean: string[] = Array.from(new Set(['photos', ...features.map(String)]));
+    const result = await pool.query(
+      "UPDATE licenses SET features = $1 WHERE id = $2 RETURNING *",
+      [clean, req.params.id]
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: "Licencia no encontrada" });
     res.json(result.rows[0]);
   });
 

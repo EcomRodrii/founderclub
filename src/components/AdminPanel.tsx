@@ -336,13 +336,15 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
               <table className="w-full text-sm min-w-[600px]">
                 <thead>
                   <tr className="border-b border-zinc-800">
-                    {['Clave', 'Tipo', 'Usuario', 'Expira', 'HWID', 'IP', 'Activa', 'Acciones'].map(h => (
+                    {['Clave', 'Tipo', 'Usuario', 'Expira', 'HWID', 'IP', 'Acceso', 'Activa', 'Acciones'].map(h => (
                       <th key={h} className="text-left text-xs text-zinc-500 font-medium px-4 py-3">{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {licenses.map(l => (
+                  {licenses.map(l => {
+                    const hasAcademia = (l.features || []).includes('academia') || (l.features || []).includes('all');
+                    return (
                     <tr key={l.id} className={`border-b border-zinc-800/60 hover:bg-zinc-800/30 transition ${!l.is_active ? 'opacity-50' : ''}`}>
                       <td className="px-4 py-3 font-mono text-xs text-zinc-300 flex items-center">
                         {l.key}<CopyButton text={l.key} />
@@ -352,6 +354,22 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
                       <td className="px-4 py-3 text-xs text-zinc-400">{formatDate(l.expires_at)}</td>
                       <td className="px-4 py-3 text-xs text-zinc-500 max-w-[100px] truncate" title={l.hwid || ''}>{truncate(l.hwid, 12)}</td>
                       <td className="px-4 py-3 text-xs text-zinc-500">{l.ip || '—'}</td>
+                      <td className="px-4 py-3">
+                        <button
+                          onClick={async () => {
+                            const newFeatures = hasAcademia ? ['photos'] : ['photos', 'academia'];
+                            await client.patch(`/api/admin/licenses/${l.id}/features`, { features: newFeatures });
+                            loadTab('licenses');
+                          }}
+                          className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-all ${
+                            hasAcademia
+                              ? 'bg-amber-500/10 border-amber-500/30 text-amber-400 hover:bg-amber-500/20'
+                              : 'bg-zinc-800 border-zinc-700 text-zinc-500 hover:border-zinc-500 hover:text-zinc-300'
+                          }`}
+                        >
+                          {hasAcademia ? '🎓 Academia' : '👻 Solo Fantasma'}
+                        </button>
+                      </td>
                       <td className="px-4 py-3">
                         <span className={`text-xs font-medium ${l.is_active ? 'text-acid' : 'text-red-400'}`}>
                           {l.is_active ? 'Sí' : 'No'}
@@ -383,7 +401,8 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
                         </div>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
               {licenses.length === 0 && !loading && (

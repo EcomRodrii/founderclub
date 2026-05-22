@@ -242,6 +242,8 @@ export async function initDB() {
     `ALTER TABLE bazooka_jobs ADD COLUMN IF NOT EXISTS error TEXT`,
     `ALTER TABLE bazooka_jobs ALTER COLUMN vinted_cookies DROP NOT NULL`,
     `CREATE INDEX IF NOT EXISTS idx_bazooka_jobs_pending ON bazooka_jobs(status, created_at) WHERE status = 'pending'`,
+    // Permisos por licencia: features define qué secciones puede ver el usuario
+    `ALTER TABLE licenses ADD COLUMN IF NOT EXISTS features TEXT[] NOT NULL DEFAULT ARRAY['photos']::TEXT[]`,
   ];
   for (const sql of migrations) {
     await pool.query(sql).catch(() => {}); // silently ignore if column already exists

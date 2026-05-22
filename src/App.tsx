@@ -5,7 +5,7 @@ import {
   CheckCircle2, AlertCircle, ShieldCheck,
   ChevronRight, LayoutGrid, List as ListIcon,
   HelpCircle, Copy, Check, Scissors, Key, LogOut, TrendingUp,
-  Image as ImageIcon, Terminal as TerminalIcon
+  Image as ImageIcon, Terminal as TerminalIcon, Ghost, GraduationCap
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import TongueEditor from './components/TongueEditor';
@@ -13,6 +13,46 @@ import AuthPage from './components/AuthPage';
 import AdminPanel from './components/AdminPanel';
 import ProfitControl from './components/ProfitControl';
 import ImageUniquifier from './components/ImageUniquifier';
+
+// ─── Permission helpers ───────────────────────────────────────────────────────
+
+type TabId = 'mine' | 'tongues' | 'profits' | 'fantasma';
+
+function computeAllowed(license: any, isAdmin: boolean): Set<TabId> {
+  if (isAdmin) return new Set(['mine', 'tongues', 'profits', 'fantasma']);
+  const features: string[] = license?.features || ['photos'];
+  const allowed = new Set<TabId>(['fantasma']); // siempre libre
+  if (features.includes('all') || features.includes('academia')) {
+    (['mine', 'tongues', 'profits'] as TabId[]).forEach(t => allowed.add(t));
+  }
+  return allowed;
+}
+
+function LockedTab() {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="flex flex-col items-center justify-center min-h-[50vh] gap-6 text-center px-4"
+    >
+      <Lock className="w-8 h-8 text-white/15" />
+      <div className="space-y-2">
+        <h2 className="text-2xl md:text-3xl font-display text-white/60">Acceso restringido</h2>
+        <p className="text-sm text-white/30 max-w-sm leading-relaxed">
+          Necesitas estar en la <span className="text-amber-400 font-semibold">academia de Lamine</span> para acceder a esta sección.
+        </p>
+      </div>
+      <a
+        href="https://lamine.academy"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="flex items-center gap-2 px-6 py-3 bg-amber-500/10 border border-amber-500/30 text-amber-400 rounded-2xl text-sm font-semibold hover:bg-amber-500/20 transition-all"
+      >
+        <GraduationCap className="w-4 h-4" /> Unirse a la academia
+      </a>
+    </motion.div>
+  );
+}
 
 // ─── Auth wrapper ─────────────────────────────────────────────────────────────
 
@@ -190,7 +230,8 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
   const [userId, setUserId] = useState<string>(() => localStorage.getItem('vinted_user_id') || '3152763908');
   const [domain, setDomain] = useState<string>(() => localStorage.getItem('vinted_domain') || 'es');
   const [profileUrl, setProfileUrl] = useState('https://www.vinted.es/member/3152763908');
-  const [activeTab, setActiveTab] = useState<'mine' | 'tongues' | 'profits' | 'photos'>('mine');
+  const allowed = computeAllowed(license, !!user?.is_admin);
+  const [activeTab, setActiveTab] = useState<TabId>(() => allowed.has('mine') ? 'mine' : 'fantasma');
   
   const [items, setItems] = useState<VintedItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -446,13 +487,17 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
             { id: 'config', icon: <Settings className="w-5 h-5" />, label: 'Config', action: () => setMobileSidebarOpen(o => !o) },
             { id: 'profits', icon: <TrendingUp className="w-5 h-5" />, label: 'Control', action: () => { setActiveTab('profits'); setMobileSidebarOpen(false); } },
             { id: 'tongues', icon: <Scissors className="w-5 h-5" />, label: 'Lengüeta', action: () => { setActiveTab('tongues'); setMobileSidebarOpen(false); } },
-            { id: 'photos', icon: <ImageIcon className="w-5 h-5" />, label: 'Fotos', action: () => { setActiveTab('photos'); setMobileSidebarOpen(false); } },
+            { id: 'fantasma', icon: <Ghost className="w-5 h-5" />, label: 'Fantasma', action: () => { setActiveTab('fantasma'); setMobileSidebarOpen(false); } },
           ].map(item => {
             const isActive = item.id === 'config' ? mobileSidebarOpen : (item.id !== 'config' && activeTab === item.id);
+            const isLocked = item.id !== 'config' && item.id !== 'fantasma' && !allowed.has(item.id as TabId);
             return (
               <button key={item.id} onClick={item.action}
-                className={`flex flex-col items-center gap-1 px-2 py-1.5 rounded-xl transition-all ${isActive ? 'text-acid' : 'text-muted'}`}>
-                {item.icon}
+                className={`flex flex-col items-center gap-1 px-2 py-1.5 rounded-xl transition-all ${isActive ? 'text-acid' : isLocked ? 'text-white/20' : 'text-muted'}`}>
+                <div className="relative">
+                  {item.icon}
+                  {isLocked && <Lock className="absolute -top-1 -right-1 w-2.5 h-2.5 text-white/30" />}
+                </div>
                 <span className="text-[10px] font-medium uppercase tracking-wider">{item.label}</span>
               </button>
             );
@@ -460,9 +505,9 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
         </div>
       </div>
 
-      <main className={`max-w-7xl mx-auto px-3 py-4 lg:p-6 pb-24 lg:pb-6 grid grid-cols-1 gap-8 ${['profits','tongues','photos'].includes(activeTab) ? '' : 'lg:grid-cols-[380px_1fr]'}`}>
+      <main className={`max-w-7xl mx-auto px-3 py-4 lg:p-6 pb-24 lg:pb-6 grid grid-cols-1 gap-8 ${['profits','tongues','fantasma'].includes(activeTab) ? '' : 'lg:grid-cols-[380px_1fr]'}`}>
         {/* Sidebar Configuration — desktop only, oculta en pestañas de pantalla completa */}
-        <div className={`space-y-6 ${['profits','tongues','photos'].includes(activeTab) ? 'hidden' : 'hidden lg:block'}`}>
+        <div className={`space-y-6 ${['profits','tongues','fantasma'].includes(activeTab) ? 'hidden' : 'hidden lg:block'}`}>
           <section className="bg-[#141414] border border-white/5 rounded-2xl p-6 shadow-xl relative overflow-hidden group">
             <div className="absolute top-0 left-0 w-1 h-full bg-acid opacity-50 group-hover:opacity-100 transition-opacity" />
 
@@ -616,21 +661,27 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
                 {[
                   { id: 'mine', label: 'Mis Productos' },
                   { id: 'tongues', label: 'Cambiar Lengüeta' },
-                  { id: 'photos', label: 'Fotos Únicas' },
                   { id: 'profits', label: 'Beneficios' },
-                ].map(t => (
-                  <button
-                    key={t.id}
-                    onClick={() => setActiveTab(t.id as any)}
-                    className={`px-4 min-h-[40px] rounded-full text-[0.78rem] font-bold uppercase tracking-[0.14em] border transition ease-hub ${
-                      activeTab === t.id
-                        ? 'bg-acid-soft border-acid text-acid'
-                        : 'bg-white/[0.03] border-white/10 text-muted-strong hover:border-acid hover:text-acid'
-                    }`}
-                  >
-                    {t.label}
-                  </button>
-                ))}
+                  { id: 'fantasma', label: '👻 Fantasma' },
+                ].map(t => {
+                  const isLocked = t.id !== 'fantasma' && !allowed.has(t.id as TabId);
+                  return (
+                    <button
+                      key={t.id}
+                      onClick={() => setActiveTab(t.id as TabId)}
+                      className={`flex items-center gap-1.5 px-4 min-h-[40px] rounded-full text-[0.78rem] font-bold uppercase tracking-[0.14em] border transition ease-hub ${
+                        activeTab === t.id
+                          ? 'bg-acid-soft border-acid text-acid'
+                          : isLocked
+                          ? 'bg-white/[0.02] border-white/5 text-white/20 cursor-pointer'
+                          : 'bg-white/[0.03] border-white/10 text-muted-strong hover:border-acid hover:text-acid'
+                      }`}
+                    >
+                      {isLocked && <Lock className="w-3 h-3" />}
+                      {t.label}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
@@ -646,7 +697,9 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
             )}
           </div>
 
-          {activeTab === 'mine' && (
+          {activeTab === 'mine' && !allowed.has('mine') && <LockedTab />}
+
+          {activeTab === 'mine' && allowed.has('mine') && (
             <>
               {!items.length && !loading && (
                 <div className="h-[500px] border border-dashed border-white/10 rounded-3xl flex flex-col items-center justify-center text-center px-10">
@@ -733,7 +786,9 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
             </>
           )}
 
-          {activeTab === 'profits' && (
+          {activeTab === 'profits' && !allowed.has('profits') && <LockedTab />}
+
+          {activeTab === 'profits' && allowed.has('profits') && (
             <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
               <div className="space-y-2">
                 <h2 className="text-3xl md:text-4xl font-display tracking-[0.02em] text-white">
@@ -745,7 +800,9 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
             </motion.div>
           )}
 
-          {activeTab === 'tongues' && (
+          {activeTab === 'tongues' && !allowed.has('tongues') && <LockedTab />}
+
+          {activeTab === 'tongues' && allowed.has('tongues') && (
             <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
               <div className="bg-[#0f0f0f] border border-white/5 rounded-[2.5rem] p-8 md:p-12 shadow-2xl relative overflow-hidden group">
                 <div className="absolute top-0 right-0 p-8 opacity-5">
@@ -764,15 +821,20 @@ function MainApp({ token, user, license, onLogout, onAdmin }: { token: string; u
             </motion.div>
           )}
 
-          {activeTab === 'photos' && (
+          {activeTab === 'fantasma' && (
             <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
-              <div className="space-y-2">
-                <h2 className="text-3xl md:text-4xl font-display tracking-[0.02em] text-white">
-                  FOTOS <span className="text-acid">ÚNICAS</span>
-                </h2>
-                <p className="text-sm text-white/40 font-medium uppercase tracking-[0.3em]">Anti-Detección · Hash Único · Sin EXIF</p>
+              <div className="flex items-center gap-3">
+                <Ghost className="w-8 h-8 text-amber-400" />
+                <div className="space-y-1">
+                  <h2 className="text-3xl md:text-4xl font-display tracking-[0.02em] text-white">
+                    FANTASMA
+                  </h2>
+                  <p className="text-sm text-white/40 font-medium uppercase tracking-[0.3em]">Anti-Detección · Hash Único · Sin EXIF</p>
+                </div>
               </div>
-              <ImageUniquifier />
+              <div className="bg-[#0d1012] border border-white/[0.08] rounded-[28px] p-6 md:p-10 shadow-2xl">
+                <ImageUniquifier />
+              </div>
             </motion.div>
           )}
 
