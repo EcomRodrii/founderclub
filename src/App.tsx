@@ -36,7 +36,7 @@ function LockedPage() {
         </p>
       </div>
       <a
-        href="https://lamine.academy"
+        href="https://www.skool.com/lamineresell/plans"
         target="_blank"
         rel="noopener noreferrer"
         className="inline-flex items-center gap-2 bg-[#d4ff00] hover:bg-[#b3da00] text-black font-bold px-6 py-3 rounded-xl transition shadow-[0_12px_32px_-8px_rgba(212,255,0,0.35)]"
