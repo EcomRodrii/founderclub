@@ -765,10 +765,11 @@ interface RepostConfig extends ModeConfig {
   editDescription: 'auto' | 'manual';
 }
 
-// Base común (heredado del modo NORMAL pero sin crop simétrico cuando hay frame por eje).
+// Base común (heredado del modo NORMAL).
+// cropPctMin/Max activo para romper pHash incluso sin marco visible.
 const REPOST_BASE: Omit<ModeConfig, 'id' | 'label' | 'desc'> = {
   trimMin: 1, trimMax: 2,
-  cropPctMin: 0, cropPctMax: 0,
+  cropPctMin: 0.5, cropPctMax: 1.5,   // crop invisible ±1.5% → rompe pHash
   pixelNoiseMax: 1,
   blockNoiseMax: 2, blockSize: 20,
   lineWarpMax: 0,
@@ -802,27 +803,30 @@ function makeConfig(partial: Partial<ModeConfig> & Pick<ModeConfig, 'id' | 'labe
   } as RepostConfig;
 }
 
-// Presets iniciales (8 filas mirroring el screenshot del Restocker).
+// Presets iniciales — marcos reducidos a 1-2% (imperceptibles en Vinted).
+// La unicidad real viene del crop invisible + ruido por bloques, no del marco.
 const DEFAULT_CONFIGS: RepostConfig[] = [
-  makeConfig({ id: 'normal', label: '#1', desc: 'Sesgar X+Y suave + marco 5%',  skewX: 0.5,  skewY: 0.5,  frameVPct: 5, frameHPct: 5 }),
-  makeConfig({ id: 'normal', label: '#2', desc: 'Sesgar X+Y inverso + marco 5%', skewX: -0.5, skewY: -0.5, frameVPct: 5, frameHPct: 5 }),
-  makeConfig({ id: 'normal', label: '#3', desc: 'Rotar +2° + marco 3/1/4%',     rotateDegMax: 2,  frameVPct: 1, frameHPct: 4 }),
-  makeConfig({ id: 'normal', label: '#4', desc: 'Rotar -2° + marco 3/1/4%',     rotateDegMax: 2,  frameVPct: 1, frameHPct: 4 }),
-  makeConfig({ id: 'normal', label: '#5', desc: 'Marco simple 5%',              frameVPct: 5, frameHPct: 5 }),
-  makeConfig({ id: 'normal', label: '#6', desc: 'Marco 10% + ajuste sutil',     frameVPct: 10, frameHPct: 10, skewX: -0.5, skewY: -0.2 }),
-  makeConfig({ id: 'normal', label: '#7', desc: 'Marco solo horizontal 10%',    frameVPct: 0, frameHPct: 10, skewY: -0.2 }),
-  makeConfig({ id: 'normal', label: '#8', desc: 'Marco solo vertical 10%',      frameVPct: 10, frameHPct: 0, skewX: -0.5 }),
+  makeConfig({ id: 'normal', label: '#1', desc: 'Sesgar X+Y suave + marco 1%',   skewX: 0.5,  skewY: 0.5,  frameVPct: 1, frameHPct: 1 }),
+  makeConfig({ id: 'normal', label: '#2', desc: 'Sesgar X+Y inverso + marco 1%', skewX: -0.5, skewY: -0.5, frameVPct: 1, frameHPct: 1 }),
+  makeConfig({ id: 'normal', label: '#3', desc: 'Rotar +2° + marco sutil',       rotateDegMax: 2, frameVPct: 1, frameHPct: 1 }),
+  makeConfig({ id: 'normal', label: '#4', desc: 'Rotar -2° + marco sutil',       rotateDegMax: 2, frameVPct: 1, frameHPct: 1 }),
+  makeConfig({ id: 'normal', label: '#5', desc: 'Sin sesgar + marco 2%',         frameVPct: 2, frameHPct: 2 }),
+  makeConfig({ id: 'normal', label: '#6', desc: 'Sesgar sutil + marco 2%',       frameVPct: 2, frameHPct: 2, skewX: -0.5, skewY: -0.2 }),
+  makeConfig({ id: 'normal', label: '#7', desc: 'Sesgar Y + sin marco',          frameVPct: 0, frameHPct: 0, skewY: -0.3 }),
+  makeConfig({ id: 'normal', label: '#8', desc: 'Sesgar X + sin marco',          frameVPct: 0, frameHPct: 0, skewX: -0.5 }),
 ];
 
 function summarizeConfig(c: RepostConfig): string {
   const parts: string[] = [];
-  if (c.skewX || c.skewY) parts.push(`Sesgar X: ${c.skewX ?? 0} Sesgar Y: ${c.skewY ?? 0}`);
-  if (c.rotateDegMax) parts.push(`Rotar: ${c.rotateDegMax > 0 ? '±' : ''}${c.rotateDegMax}°`);
+  if (c.skewX || c.skewY) parts.push(`Sesgar X: ${c.skewX ?? 0}  Y: ${c.skewY ?? 0}`);
+  if (c.rotateDegMax) parts.push(`Rotar ±${c.rotateDegMax}°`);
   const fv = c.frameVPct ?? 0, fh = c.frameHPct ?? 0;
-  if (fv === fh && fv > 0) parts.push(`Tamaño de marco simple: ${fv}%`);
-  else if (fv || fh) parts.push(`Marco vertical: ${fv}%, horizontal: ${fh}%`);
+  if (fv === fh && fv > 0) parts.push(`Marco ${fv}%`);
+  else if (fv || fh) parts.push(`Marco V:${fv}% H:${fh}%`);
   if (c.flipChance > 0) parts.push('Flip 50%');
-  return parts.join(' · ') || 'Sin modificaciones';
+  // Siempre muestra el crop invisible
+  parts.push(`Crop invisible + ruido ±${c.blockNoiseMax}`);
+  return parts.join(' · ');
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────

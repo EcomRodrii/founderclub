@@ -326,10 +326,13 @@ async function startServer() {
   app.get("/api/auth/me", requireAuth as any, async (req: AuthRequest, res) => {
     const user = req.user!;
     const licResult = await pool.query(
-      "SELECT key, type, expires_at FROM licenses WHERE user_id = $1 AND is_active = TRUE AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1",
+      "SELECT id, key, type, expires_at, features FROM licenses WHERE user_id = $1 AND is_active = TRUE AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1",
       [user.id]
     );
-    res.json({ user, license: licResult.rows[0] || null });
+    const lic = licResult.rows[0] || null;
+    // Admins tienen acceso total
+    if (lic && user.is_admin) lic.features = ['all'];
+    res.json({ user, license: lic });
   });
 
   // ── License Routes ──────────────────────────────────────────────────────────
@@ -392,7 +395,9 @@ async function startServer() {
 
   app.get("/api/admin/licenses", requireAdmin as any, async (_req, res) => {
     const result = await pool.query(`
-      SELECT l.*, u.username, u.email
+      SELECT l.id, l.key, l.type, l.expires_at, l.is_active, l.activated_at,
+             l.hwid, l.ip, l.created_at, l.features,
+             u.username, u.email
       FROM licenses l
       LEFT JOIN users u ON u.id = l.user_id
       ORDER BY l.created_at DESC
@@ -461,6 +466,21 @@ async function startServer() {
       ).catch(() => {});
     }
     res.json(lic);
+  });
+
+  // ── Editar permisos (features) de una licencia ──────────────────────────────
+  // Body: { features: ['photos'] }  o  { features: ['photos','academia'] }
+  app.patch("/api/admin/licenses/:id/features", requireAdmin as any, async (req, res) => {
+    const { features } = req.body;
+    if (!Array.isArray(features)) return res.status(400).json({ error: "features debe ser un array" });
+    // Siempre incluir 'photos' (Fantasma) — es el mínimo gratuito
+    const clean: string[] = Array.from(new Set(['photos', ...features.map(String)]));
+    const result = await pool.query(
+      "UPDATE licenses SET features = $1 WHERE id = $2 RETURNING *",
+      [clean, req.params.id]
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: "Licencia no encontrada" });
+    res.json(result.rows[0]);
   });
 
   app.get("/api/admin/sessions", requireAdmin as any, async (_req, res) => {

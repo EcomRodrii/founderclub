@@ -2,8 +2,8 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   LayoutDashboard, Users, Package, ShoppingBag, Zap, Settings,
-  LogOut, ShieldCheck, Scissors, Image as ImageIcon, TrendingUp,
-  MoreHorizontal, X,
+  LogOut, ShieldCheck, Scissors, Ghost, TrendingUp,
+  MoreHorizontal, X, Lock,
 } from 'lucide-react';
 
 export type Page =
@@ -14,43 +14,61 @@ interface SidebarProps {
   currentPage: Page;
   onNavigate: (page: Page) => void;
   user: { username: string; email: string; is_admin?: boolean };
+  allowedPages: Set<Page>;
   onLogout: () => void;
   onAdmin?: () => void;
 }
 
 const NAV_MAIN: { id: Page; label: string; icon: React.ReactNode }[] = [
   { id: 'dashboard', label: 'Dashboard',  icon: <LayoutDashboard className="w-[18px] h-[18px]" /> },
-  { id: 'accounts',  label: 'Cuentas',   icon: <Users            className="w-[18px] h-[18px]" /> },
-  { id: 'inventory', label: 'Inventario',icon: <Package          className="w-[18px] h-[18px]" /> },
-  { id: 'orders',    label: 'Pedidos',   icon: <ShoppingBag      className="w-[18px] h-[18px]" /> },
+  { id: 'accounts',  label: 'Cuentas',    icon: <Users           className="w-[18px] h-[18px]" /> },
+  { id: 'inventory', label: 'Inventario', icon: <Package         className="w-[18px] h-[18px]" /> },
+  { id: 'orders',    label: 'Pedidos',    icon: <ShoppingBag     className="w-[18px] h-[18px]" /> },
 ];
 
 const NAV_TOOLS: { id: Page; label: string; icon: React.ReactNode }[] = [
-  { id: 'profits', label: 'Beneficios',   icon: <TrendingUp  className="w-[18px] h-[18px]" /> },
-  { id: 'tongue',  label: 'Lengüeta',     icon: <Scissors    className="w-[18px] h-[18px]" /> },
-  { id: 'photos',  label: 'Foto única',   icon: <ImageIcon   className="w-[18px] h-[18px]" /> },
-  { id: 'boost',   label: 'Boost',        icon: <Zap         className="w-[18px] h-[18px]" /> },
-  { id: 'settings',label: 'Configuración',icon: <Settings    className="w-[18px] h-[18px]" /> },
+  { id: 'profits', label: 'Beneficios',    icon: <TrendingUp className="w-[18px] h-[18px]" /> },
+  { id: 'tongue',  label: 'Lengüeta',      icon: <Scissors   className="w-[18px] h-[18px]" /> },
+  { id: 'photos',  label: 'Fantasma',      icon: <Ghost      className="w-[18px] h-[18px]" /> },
+  { id: 'boost',   label: 'Boost',         icon: <Zap        className="w-[18px] h-[18px]" /> },
+  { id: 'settings',label: 'Configuración', icon: <Settings   className="w-[18px] h-[18px]" /> },
 ];
 
-function NavBtn({ item, active, onNavigate }: { item: { id: Page; label: string; icon: React.ReactNode }; active: boolean; onNavigate: (p: Page) => void }) {
+function NavBtn({
+  item, active, locked, onNavigate,
+}: {
+  item: { id: Page; label: string; icon: React.ReactNode };
+  active: boolean;
+  locked: boolean;
+  onNavigate: (p: Page) => void;
+}) {
   return (
     <button
       onClick={() => onNavigate(item.id)}
+      title={locked ? 'Necesitas estar en la academia de Lamine' : undefined}
       className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[0.86rem] font-medium transition-all group ${
-        active ? 'bg-[#d4ff00]/10 text-[#d4ff00]' : 'text-[#888880] hover:text-[#f2f2ef] hover:bg-white/[0.04]'
+        locked
+          ? 'text-[#444440] cursor-pointer hover:bg-white/[0.02]'
+          : active
+            ? 'bg-[#d4ff00]/10 text-[#d4ff00]'
+            : 'text-[#888880] hover:text-[#f2f2ef] hover:bg-white/[0.04]'
       }`}
     >
-      <span className={active ? 'text-[#d4ff00]' : 'text-[#555550] group-hover:text-[#f2f2ef] transition-colors'}>
+      <span className={
+        locked ? 'text-[#333330]' :
+        active  ? 'text-[#d4ff00]' :
+        'text-[#555550] group-hover:text-[#f2f2ef] transition-colors'
+      }>
         {item.icon}
       </span>
-      {item.label}
-      {active && <motion.span layoutId="sidebar-indicator" className="ml-auto w-1 h-4 rounded-full bg-[#d4ff00]" />}
+      <span className={locked ? 'opacity-40' : ''}>{item.label}</span>
+      {locked && <Lock className="ml-auto w-3 h-3 text-[#333330]" />}
+      {!locked && active && <motion.span layoutId="sidebar-indicator" className="ml-auto w-1 h-4 rounded-full bg-[#d4ff00]" />}
     </button>
   );
 }
 
-export default function Sidebar({ currentPage, onNavigate, user, onLogout, onAdmin }: SidebarProps) {
+export default function Sidebar({ currentPage, onNavigate, user, allowedPages, onLogout, onAdmin }: SidebarProps) {
   const initials = user.username.slice(0, 2).toUpperCase();
 
   return (
@@ -63,12 +81,24 @@ export default function Sidebar({ currentPage, onNavigate, user, onLogout, onAdm
 
       {/* Nav */}
       <nav className="flex-1 px-3 overflow-y-auto space-y-0.5">
-        {NAV_MAIN.map(item => <NavBtn key={item.id} item={item} active={currentPage === item.id} onNavigate={onNavigate} />)}
+        {NAV_MAIN.map(item => (
+          <NavBtn key={item.id} item={item}
+            active={currentPage === item.id}
+            locked={!allowedPages.has(item.id)}
+            onNavigate={onNavigate}
+          />
+        ))}
 
         <div className="pt-3 pb-1 px-3">
           <span className="text-[10px] uppercase tracking-widest text-[#444440] font-semibold">Herramientas</span>
         </div>
-        {NAV_TOOLS.map(item => <NavBtn key={item.id} item={item} active={currentPage === item.id} onNavigate={onNavigate} />)}
+        {NAV_TOOLS.map(item => (
+          <NavBtn key={item.id} item={item}
+            active={currentPage === item.id}
+            locked={!allowedPages.has(item.id)}
+            onNavigate={onNavigate}
+          />
+        ))}
       </nav>
 
       {/* Footer */}
@@ -98,21 +128,27 @@ export default function Sidebar({ currentPage, onNavigate, user, onLogout, onAdm
 /* ── Mobile bottom tab bar ─────────────────────────────────────────────────── */
 
 const MOBILE_MAIN: { id: Page; label: string; icon: React.ReactNode }[] = [
-  { id: 'dashboard', label: 'Inicio',   icon: <LayoutDashboard className="w-5 h-5" /> },
-  { id: 'inventory', label: 'Items',    icon: <Package          className="w-5 h-5" /> },
-  { id: 'orders',    label: 'Pedidos',  icon: <ShoppingBag      className="w-5 h-5" /> },
-  { id: 'profits',   label: 'Beneficios', icon: <TrendingUp     className="w-5 h-5" /> },
+  { id: 'dashboard', label: 'Inicio',      icon: <LayoutDashboard className="w-5 h-5" /> },
+  { id: 'inventory', label: 'Items',       icon: <Package          className="w-5 h-5" /> },
+  { id: 'orders',    label: 'Pedidos',     icon: <ShoppingBag      className="w-5 h-5" /> },
+  { id: 'profits',   label: 'Beneficios',  icon: <TrendingUp       className="w-5 h-5" /> },
 ];
 
 const MOBILE_MORE: { id: Page; label: string; icon: React.ReactNode }[] = [
-  { id: 'tongue',   label: 'Lengüeta',   icon: <Scissors   className="w-5 h-5" /> },
-  { id: 'photos',   label: 'Foto única', icon: <ImageIcon  className="w-5 h-5" /> },
-  { id: 'accounts', label: 'Cuentas',    icon: <Users      className="w-5 h-5" /> },
-  { id: 'boost',    label: 'Boost',      icon: <Zap        className="w-5 h-5" /> },
-  { id: 'settings', label: 'Config',     icon: <Settings   className="w-5 h-5" /> },
+  { id: 'tongue',   label: 'Lengüeta', icon: <Scissors className="w-5 h-5" /> },
+  { id: 'photos',   label: 'Fantasma', icon: <Ghost    className="w-5 h-5" /> },
+  { id: 'accounts', label: 'Cuentas',  icon: <Users    className="w-5 h-5" /> },
+  { id: 'boost',    label: 'Boost',    icon: <Zap      className="w-5 h-5" /> },
+  { id: 'settings', label: 'Config',   icon: <Settings className="w-5 h-5" /> },
 ];
 
-export function MobileTabBar({ currentPage, onNavigate }: { currentPage: Page; onNavigate: (p: Page) => void }) {
+export function MobileTabBar({
+  currentPage, onNavigate, allowedPages,
+}: {
+  currentPage: Page;
+  onNavigate: (p: Page) => void;
+  allowedPages: Set<Page>;
+}) {
   const [showMore, setShowMore] = useState(false);
   const inMore = MOBILE_MORE.some(i => i.id === currentPage);
 
@@ -135,12 +171,18 @@ export function MobileTabBar({ currentPage, onNavigate }: { currentPage: Page; o
               <div className="w-8 h-1 bg-white/15 rounded-full mx-auto mb-4" />
               <div className="grid grid-cols-5 gap-1 mb-2">
                 {MOBILE_MORE.map(item => {
-                  const active = currentPage === item.id;
+                  const active  = currentPage === item.id;
+                  const locked  = !allowedPages.has(item.id);
                   return (
                     <button key={item.id} onClick={() => { onNavigate(item.id); setShowMore(false); }}
-                      className={`flex flex-col items-center gap-1.5 p-3 rounded-2xl transition-all ${active ? 'bg-[#d4ff00]/10 text-[#d4ff00]' : 'text-[#888880] hover:text-[#f2f2ef] hover:bg-white/[0.04]'}`}>
+                      className={`relative flex flex-col items-center gap-1.5 p-3 rounded-2xl transition-all ${
+                        locked   ? 'text-[#333330]' :
+                        active   ? 'bg-[#d4ff00]/10 text-[#d4ff00]' :
+                        'text-[#888880] hover:text-[#f2f2ef] hover:bg-white/[0.04]'
+                      }`}>
                       {item.icon}
-                      <span className="text-[10px] font-medium text-center leading-tight">{item.label}</span>
+                      <span className={`text-[10px] font-medium text-center leading-tight ${locked ? 'opacity-30' : ''}`}>{item.label}</span>
+                      {locked && <Lock className="absolute top-1.5 right-1.5 w-2.5 h-2.5 text-[#444440]" />}
                     </button>
                   );
                 })}
@@ -155,11 +197,15 @@ export function MobileTabBar({ currentPage, onNavigate }: { currentPage: Page; o
         <div className="flex items-center justify-around px-1 py-2 pb-[max(8px,env(safe-area-inset-bottom))]">
           {MOBILE_MAIN.map(item => {
             const active = currentPage === item.id;
+            const locked = !allowedPages.has(item.id);
             return (
               <button key={item.id} onClick={() => { onNavigate(item.id); setShowMore(false); }}
-                className={`flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-xl transition-all ${active ? 'text-[#d4ff00]' : 'text-[#555550]'}`}>
+                className={`relative flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-xl transition-all ${
+                  locked ? 'text-[#333330]' : active ? 'text-[#d4ff00]' : 'text-[#555550]'
+                }`}>
                 {item.icon}
                 <span className="text-[9px] font-medium uppercase tracking-wider">{item.label}</span>
+                {locked && <Lock className="absolute top-0.5 right-0.5 w-2 h-2 text-[#444440]" />}
               </button>
             );
           })}

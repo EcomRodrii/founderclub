@@ -1,10 +1,52 @@
 import React, { useState, useEffect } from 'react';
-import { Key, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Key, AlertCircle, CheckCircle2, Lock, GraduationCap } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 import AuthPage from './components/AuthPage';
 import AdminPanel from './components/AdminPanel';
 import Sidebar, { MobileTabBar, type Page } from './components/Sidebar';
+
+// ─── Permisos ─────────────────────────────────────────────────────────────────
+// 'photos' = Fantasma — siempre disponible para todos
+// 'academia' = desbloquea todo lo demás
+
+const ALL_PAGES: Page[] = ['dashboard', 'accounts', 'inventory', 'orders', 'profits', 'tongue', 'photos', 'boost', 'settings'];
+
+function computeAllowedPages(license: any, isAdmin: boolean): Set<Page> {
+  if (isAdmin) return new Set(ALL_PAGES);
+  const features: string[] = license?.features || ['photos'];
+  const pages = new Set<Page>(['photos']); // mínimo gratuito
+  if (features.includes('all') || features.includes('academia')) {
+    ALL_PAGES.forEach(p => pages.add(p));
+  }
+  return pages;
+}
+
+// ─── Pantalla de acceso bloqueado ─────────────────────────────────────────────
+function LockedPage() {
+  return (
+    <div className="flex flex-col items-center justify-center min-h-[65vh] gap-6 text-center px-4">
+      <div className="w-16 h-16 rounded-2xl bg-white/[0.04] border border-white/[0.08] flex items-center justify-center">
+        <Lock className="w-7 h-7 text-white/20" />
+      </div>
+      <div>
+        <h2 className="text-xl font-bold text-[#f2f2ef]">Acceso restringido</h2>
+        <p className="text-[#888880] mt-2 max-w-xs leading-relaxed">
+          Necesitas estar en la <span className="text-[#d4ff00] font-semibold">academia de Lamine</span> para acceder a esta sección.
+        </p>
+      </div>
+      <a
+        href="https://lamine.academy"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-2 bg-[#d4ff00] hover:bg-[#b3da00] text-black font-bold px-6 py-3 rounded-xl transition shadow-[0_12px_32px_-8px_rgba(212,255,0,0.35)]"
+      >
+        <GraduationCap className="w-4 h-4" />
+        Unirse a la academia
+      </a>
+    </div>
+  );
+}
 
 import DashboardPage  from './components/pages/DashboardPage';
 import AccountsPage   from './components/pages/AccountsPage';
@@ -189,7 +231,9 @@ function Dashboard({
   onLogout: () => void;
   onAdmin?: () => void;
 }) {
-  const [page, setPage] = useState<Page>('dashboard');
+  const allowedPages = computeAllowedPages(license, !!user?.is_admin);
+  // Página inicial: si tiene acceso a dashboard → dashboard, si no → photos (Fantasma)
+  const [page, setPage] = useState<Page>(() => allowedPages.has('dashboard') ? 'dashboard' : 'photos');
 
   // Share token with Chrome extension so it doesn't need a separate login
   useEffect(() => {
@@ -198,13 +242,16 @@ function Dashboard({
   }, [token]);
 
   const renderPage = () => {
+    // Gate: si la página no está permitida, mostrar pantalla de bloqueo
+    if (!allowedPages.has(page)) return <LockedPage />;
+
     switch (page) {
       case 'dashboard':  return <DashboardPage   token={token} />;
       case 'accounts':   return <AccountsPage    token={token} />;
       case 'inventory':  return <InventoryPage   token={token} />;
       case 'orders':     return <OrdersPage      token={token} />;
       case 'boost':      return <BoostPage       token={token} />;
-      case 'profits':    return <ProfitControl token={token} />;
+      case 'profits':    return <ProfitControl   token={token} />;
       case 'tongue':     return <TongueEditor />;
       case 'photos':     return <ImageUniquifier />;
       case 'settings':   return (
@@ -219,6 +266,7 @@ function Dashboard({
         currentPage={page}
         onNavigate={setPage}
         user={user}
+        allowedPages={allowedPages}
         onLogout={onLogout}
         onAdmin={onAdmin}
       />
@@ -239,7 +287,7 @@ function Dashboard({
         </div>
       </main>
 
-      <MobileTabBar currentPage={page} onNavigate={setPage} />
+      <MobileTabBar currentPage={page} onNavigate={setPage} allowedPages={allowedPages} />
     </div>
   );
 }

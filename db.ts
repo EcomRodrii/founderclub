@@ -292,6 +292,10 @@ export async function initDB() {
     )`,
     `CREATE INDEX IF NOT EXISTS idx_ext_sessions_license ON extension_sessions(license_key)`,
     `CREATE INDEX IF NOT EXISTS idx_ext_sessions_hwid ON extension_sessions(hwid)`,
+
+    // ── Permisos por licencia: features define qué secciones puede ver el usuario ─
+    // Default: solo 'photos' (Fantasma). Academia desbloquea todo.
+    `ALTER TABLE licenses ADD COLUMN IF NOT EXISTS features TEXT[] NOT NULL DEFAULT ARRAY['photos']::TEXT[]`,
   ];
   for (const sql of migrations) {
     await pool.query(sql).catch(() => {}); // silently ignore if column already exists
