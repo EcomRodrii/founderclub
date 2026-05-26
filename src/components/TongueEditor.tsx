@@ -3,7 +3,7 @@ import {
   Upload, Scissors, Info, RefreshCcw,
   CheckCircle2, AlertCircle, ScanText,
   Image as ImageIcon, Download, Copy,
-  ArrowRight, Camera
+  ArrowRight, Camera, Eye, X, BellOff
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -96,6 +96,9 @@ Ausencia de Branding: No incluir el logo del tigre ni la palabra "Onitsuka". La 
 Soporte: Fondo blanco mate con textura de tejido sintético, bordes termosellados y costura perimetral que la une a la lengüeta.
 Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
   
+  const [showDownloadWarning, setShowDownloadWarning] = useState(false);
+  const [neverWarn, setNeverWarn] = useState(() => localStorage.getItem('tongue_no_warn') === '1');
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
 
@@ -205,31 +208,24 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
     }
   };
 
-  const handleDownload = async () => {
+  const executeDownload = async () => {
     if (!generatedImage) return;
-
     try {
       setStatus("Preparando descarga...");
       const img = new Image();
       img.crossOrigin = "anonymous";
-      
       await new Promise((resolve, reject) => {
         img.onload = resolve;
         img.onerror = () => reject(new Error("Error al cargar la imagen."));
         img.src = generatedImage;
       });
-
       const canvas = document.createElement('canvas');
       canvas.width = img.width;
       canvas.height = img.height;
       const ctx = canvas.getContext('2d');
       if (!ctx) throw new Error("No se pudo obtener el contexto del canvas.");
-
       ctx.drawImage(img, 0, 0);
-      
-      // We convert to a high-quality JPEG to strip all AI metadata and ensure a clean, raw-looking file
       const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
-      
       const link = document.createElement('a');
       const ts = Math.floor(Date.now() / 1000);
       link.href = dataUrl;
@@ -237,12 +233,16 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      
       setStatus("Imagen descargada con éxito.");
     } catch (err) {
       console.error("Download fail:", err);
       setError("Fallo al descargar. Intenta copiar la imagen.");
     }
+  };
+
+  const handleDownload = () => {
+    if (neverWarn) { executeDownload(); return; }
+    setShowDownloadWarning(true);
   };
 
   const generateModifiedTongue = async () => {
@@ -279,6 +279,91 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
 
   return (
     <div className="space-y-6">
+
+      {/* ── Aviso descarga ─────────────────────────────────────────────────── */}
+      <AnimatePresence>
+        {showDownloadWarning && (
+          <>
+            {/* Backdrop */}
+            <motion.div
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm"
+              onClick={() => setShowDownloadWarning(false)}
+            />
+
+            {/* Modal */}
+            <motion.div
+              initial={{ opacity: 0, scale: 0.92, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.94, y: 8 }}
+              transition={{ type: 'spring', damping: 28, stiffness: 340 }}
+              className="fixed inset-x-4 bottom-6 sm:inset-auto sm:left-1/2 sm:-translate-x-1/2 sm:bottom-auto sm:top-1/2 sm:-translate-y-1/2 z-50 w-auto sm:w-full sm:max-w-md"
+            >
+              <div className="bg-[#141414] border border-[#d4ff00]/25 rounded-[24px] p-6 shadow-[0_32px_80px_rgba(0,0,0,0.7)]">
+                {/* Header */}
+                <div className="flex items-start justify-between gap-3 mb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-[#d4ff00]/10 border border-[#d4ff00]/20 flex items-center justify-center shrink-0">
+                      <Eye className="w-5 h-5 text-[#d4ff00]" />
+                    </div>
+                    <h3 className="text-[#f2f2ef] font-bold text-base leading-tight">
+                      Ojo chaval,<br />
+                      <span className="text-[#d4ff00]">revisa antes de subir</span>
+                    </h3>
+                  </div>
+                  <button
+                    onClick={() => setShowDownloadWarning(false)}
+                    className="text-[#555550] hover:text-[#f2f2ef] transition-colors shrink-0 mt-0.5"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                {/* Message */}
+                <p className="text-[#888880] text-sm leading-relaxed mb-5">
+                  Antes de subir la imagen a Vinted,{' '}
+                  <span className="text-[#f2f2ef] font-medium">comprueba que la lengüeta esté perfecta</span>
+                  {' '}— que los códigos se lean bien, que el fondo esté limpio y que no haya artefactos raros.
+                  Si la subes con fallos te podrían bloquear igual.
+                </p>
+
+                {/* Actions */}
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <button
+                    onClick={() => {
+                      setShowDownloadWarning(false);
+                      executeDownload();
+                    }}
+                    className="flex-1 bg-[#d4ff00] hover:bg-[#b3da00] text-black font-bold py-2.5 px-4 rounded-xl text-sm transition flex items-center justify-center gap-2"
+                  >
+                    <Download className="w-4 h-4" /> Entendido, descargar
+                  </button>
+                  <button
+                    onClick={() => setShowDownloadWarning(false)}
+                    className="flex-1 bg-white/[0.06] hover:bg-white/[0.1] text-[#888880] hover:text-[#f2f2ef] font-medium py-2.5 px-4 rounded-xl text-sm transition"
+                  >
+                    Revisar primero
+                  </button>
+                </div>
+
+                {/* Never show again */}
+                <button
+                  onClick={() => {
+                    localStorage.setItem('tongue_no_warn', '1');
+                    setNeverWarn(true);
+                    setShowDownloadWarning(false);
+                    executeDownload();
+                  }}
+                  className="w-full mt-3 flex items-center justify-center gap-1.5 text-[#444440] hover:text-[#666660] text-xs transition py-1"
+                >
+                  <BellOff className="w-3 h-3" /> No volver a mostrar este aviso
+                </button>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
       <div className="flex gap-2">
         {([
           { key: 'ADIDAS', label: 'ADIDAS' },
