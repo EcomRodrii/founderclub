@@ -2061,11 +2061,10 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
       }
 
       const IMG_MODELS = [
-        "gemini-2.5-flash-image",
+        "gemini-2.0-flash-preview-image-generation",
         "gemini-2.0-flash-exp-image-generation",
-        "gemini-2.0-flash-preview-image-generation"
       ];
-      const MAX_RETRIES_PER_MODEL = 3;
+      const MAX_RETRIES_PER_MODEL = 2;
       let lastErr = "";
       let lastTextResponse = "";
 
@@ -2081,16 +2080,36 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
           };
           if (aspectRatio) body.generationConfig.imageConfig = { aspectRatio };
 
-          const r = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-            { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
-          );
-          const data = await r.json();
-          if (!r.ok) {
+          let r: Awaited<ReturnType<typeof fetch>>;
+          let data: any;
+          try {
+            const ctrl = new AbortController();
+            const genTimer = setTimeout(() => ctrl.abort(), 90_000);
+            try {
+              r = await fetch(
+                `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+                { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: ctrl.signal }
+              );
+            } finally {
+              clearTimeout(genTimer);
+            }
+            data = await r.json();
+          } catch (fetchErr: any) {
+            lastErr = fetchErr.message || String(fetchErr);
+            console.error(`[tongue] ${model} attempt ${attempt} fetch error (timeout/abort?):`, lastErr);
+            // Treat as transient — continue to next attempt / next model.
+            continue;
+          }
+
+          if (!r!.ok) {
             lastErr = JSON.stringify(data);
             console.error(`[tongue] ${model} attempt ${attempt} HTTP error:`, lastErr.slice(0, 300));
-            // Si el modelo no existe (404) o es 400 mal formado, no reintentar este modelo.
-            if (r.status === 404 || r.status === 400) break;
+            // 404 / 400: model invalid or bad request — skip to next model immediately.
+            if (r!.status === 404 || r!.status === 400) break;
+            // 429: quota / rate-limit — wait 2 s then retry the same model.
+            if (r!.status === 429) {
+              await new Promise(resolve => setTimeout(resolve, 2000));
+            }
             continue;
           }
           // Busca primera parte con inlineData (la imagen).
