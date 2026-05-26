@@ -1944,13 +1944,12 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
   }
 
   // Prefacio fijo que va SIEMPRE al inicio de cualquier prompt de generación.
-  // Obliga a Gemini a leer y retener los datos originales de la imagen
-  // (SKU, tallas, etc.) antes de aplicar las instrucciones de edición.
   const TONGUE_PREAMBLE =
     `Te adjunto la imagen de la etiqueta/lengueta. ` +
-    `Lee bien todos los datos originales (especialmente el SKU y las tallas) ` +
-    `para mantenerlos exactamente iguales. ` +
-    `Ahora, aplica las siguientes instrucciones de edición en alta precisión sobre esta imagen:`;
+    `REGLA CRÍTICA: los valores que aparecen en las instrucciones de SUSTITUCIÓN a continuación ` +
+    `son los CORRECTOS y tienen PRIORIDAD ABSOLUTA sobre lo que veas en la imagen. ` +
+    `Si la imagen muestra un valor diferente al indicado, IGNORA lo de la imagen y usa el valor de las instrucciones. ` +
+    `Ahora aplica las siguientes instrucciones en alta precisión:`;
 
   function buildTonguePrompt(brand: string, d: any, customPrompt: string): string {
     const sizes = d.sizes || {};
@@ -1969,8 +1968,8 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
         `  · FACTORY / LVL "${d.lvl}"`,
         `  · Tabla de tallas: US ${sizes.us}  UK ${sizes.uk}  FR ${sizes.fr}  JP ${sizes.jp}`,
         ``,
-        `SUSTITUYE únicamente estos textos por los nuevos valores indicados:`,
-        `  · FECHA → "${d.date}"`,
+        `SUSTITUYE únicamente estos textos por los nuevos valores indicados (usa EXACTAMENTE estos valores, no los de la imagen):`,
+        `  · FECHA: borra la fecha que aparece en la imagen y escribe "${d.date}" en su lugar`,
         `  · Brand Serial de abajo a la izquierda → "${d.brandSerial}"`,
         `  · Reference (la que empieza por #) → "${d.reference}"`,
         ``,
@@ -1989,8 +1988,8 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
         `  · SKU "${d.sku}"`,
         `  · Tabla de tallas con los separadores verticales | : US ${sizes.us} | UK ${sizes.uk} | FR ${sizes.fr} | JP ${sizes.jp}`,
         ``,
-        `SUSTITUYE solo:`,
-        `  · Fecha → "${d.date}"`,
+        `SUSTITUYE solo (usa EXACTAMENTE estos valores, no los de la imagen):`,
+        `  · Fecha: borra la fecha que aparece en la imagen y escribe "${d.date}" en su lugar`,
         `  · Tracking code (1 letra + 6 dígitos) → "${d.reference}"`,
         `  · Serial number (15 alfanuméricos en mayúsculas) → "${d.brandSerial}"`,
         ``,
@@ -2010,8 +2009,8 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
         `  · Tabla de tallas: US ${sizes.us}  UK ${sizes.uk}  FR ${sizes.fr}  CM ${sizes.jp}`,
         `  · Texto país "MADE IN INDONESIA / FABRIQUE EN INDONESIE"`,
         ``,
-        `SUSTITUYE solo:`,
-        `  · Fecha → "${d.date}"`,
+        `SUSTITUYE solo (usa EXACTAMENTE estos valores, no los de la imagen):`,
+        `  · Fecha: borra la fecha que aparece en la imagen y escribe "${d.date}" en su lugar`,
         `  · Batch Code (formato F + 6 dígitos) → "${d.reference}"`,
         `  · Unit Serial (15 alfanuméricos en mayúsculas) → "${d.brandSerial}"`,
         ``,
@@ -2031,8 +2030,8 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
       `  · Factory "${d.lvl}"`,
       `  · Tabla de tallas: US ${sizes.us}  UK ${sizes.uk}  EU ${sizes.fr}  CM ${sizes.jp}`,
       ``,
-      `SUSTITUYE exactamente estos códigos:`,
-      `  · Fecha → "${d.date}"`,
+      `SUSTITUYE exactamente estos códigos (usa EXACTAMENTE estos valores, no los de la imagen):`,
+      `  · Fecha: borra la fecha que aparece en la imagen y escribe "${d.date}" en su lugar`,
       `  · Serial 1 (12 dígitos) → "${d.reference}"`,
       `  · Serial 2 (7 dígitos) → "${d.reference2}"`,
       `  · Brand code → "${d.brandSerial}"`,
