@@ -2051,6 +2051,11 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
 
     const brandPrompt = buildTonguePrompt(brand, detections, customPrompt || "");
 
+    // Deadline global: 110s total para toda la operación (Railway timeout ~120s)
+    const GLOBAL_DEADLINE = Date.now() + 110_000;
+    // Timeout por intento: 45s (suficiente para modelos rápidos, falla rápido en colgados)
+    const ATTEMPT_TIMEOUT_MS = 45_000;
+
     try {
       const parts: any[] = [{ text: brandPrompt }];
       let aspectRatio: string | null = null;
@@ -2061,24 +2066,28 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
         if (dims && dims.w > 0 && dims.h > 0) aspectRatio = pickGeminiAspect(dims.w, dims.h);
       }
 
+      // Modelos en orden de preferencia — los más nuevos primero
       const IMG_MODELS = [
-        "gemini-3.1-flash-image-preview",          // Gemini 3.1 — mejor edición de imagen
-        "gemini-3-pro-image-preview",              // Gemini 3 Pro — máxima calidad
-        "gemini-2.5-flash-image",                  // Gemini 2.5 Flash Image
-        "gemini-2.0-flash-preview-image-generation", // fallback 2.0
-        "gemini-2.0-flash-exp-image-generation",   // fallback 2.0 exp
+        "gemini-3.1-flash-image-preview",
+        "gemini-2.5-flash-image",
+        "gemini-2.0-flash-preview-image-generation",
+        "gemini-2.0-flash-exp-image-generation",
       ];
-      const MAX_RETRIES_PER_MODEL = 2;
+      const MAX_RETRIES_PER_MODEL = 1; // 1 intento por modelo = falla rápido y prueba el siguiente
       let lastErr = "";
       let lastTextResponse = "";
 
       for (const model of IMG_MODELS) {
+        // Si se nos acaba el tiempo global, parar ya
+        if (Date.now() >= GLOBAL_DEADLINE) break;
+
         for (let attempt = 1; attempt <= MAX_RETRIES_PER_MODEL; attempt++) {
+          if (Date.now() >= GLOBAL_DEADLINE) break;
+
           const body: any = {
             contents: [{ parts }],
             generationConfig: {
               responseModalities: ["TEXT", "IMAGE"],
-              // Temperature baja para consistencia. Ligero variation cada attempt.
               temperature: 0.35 + (attempt - 1) * 0.1,
             },
           };
@@ -2088,7 +2097,10 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
           let data: any;
           try {
             const ctrl = new AbortController();
-            const genTimer = setTimeout(() => ctrl.abort(), 90_000);
+            // Timeout = mínimo entre el límite del intento y el deadline global
+            const msLeft = Math.max(5000, GLOBAL_DEADLINE - Date.now());
+            const effectiveTimeout = Math.min(ATTEMPT_TIMEOUT_MS, msLeft);
+            const genTimer = setTimeout(() => ctrl.abort(), effectiveTimeout);
             try {
               r = await fetch(
                 `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
@@ -2100,35 +2112,31 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
             data = await r.json();
           } catch (fetchErr: any) {
             lastErr = fetchErr.message || String(fetchErr);
-            console.error(`[tongue] ${model} attempt ${attempt} fetch error (timeout/abort?):`, lastErr);
-            // Treat as transient — continue to next attempt / next model.
+            console.error(`[tongue] ${model} attempt ${attempt} fetch error:`, lastErr);
             continue;
           }
 
           if (!r!.ok) {
             lastErr = JSON.stringify(data);
             console.error(`[tongue] ${model} attempt ${attempt} HTTP error:`, lastErr.slice(0, 300));
-            // 404 / 400: model invalid or bad request — skip to next model immediately.
             if (r!.status === 404 || r!.status === 400) break;
-            // 429: quota / rate-limit — wait 2 s then retry the same model.
-            if (r!.status === 429) {
-              await new Promise(resolve => setTimeout(resolve, 2000));
-            }
+            if (r!.status === 429) await new Promise(resolve => setTimeout(resolve, 2000));
             continue;
           }
-          // Busca primera parte con inlineData (la imagen).
+
+          // Busca primera parte con inlineData (la imagen)
           const partsResp = data.candidates?.[0]?.content?.parts || [];
           for (const p of partsResp) {
             if (p.inlineData?.data) {
-              return res.json({ image: `data:image/png;base64,${p.inlineData.data}`, model, attempts: attempt, aspectRatio });
+              return res.json({ image: `data:image/png;base64,${p.inlineData.data}`, model, attempt, aspectRatio });
             }
             if (p.text) lastTextResponse = p.text.slice(0, 200);
           }
-          console.warn(`[tongue] ${model} attempt ${attempt}: sin imagen, sólo texto:`, lastTextResponse);
+          console.warn(`[tongue] ${model} attempt ${attempt}: sin imagen, texto:`, lastTextResponse.slice(0, 100));
         }
       }
 
-      console.error("[tongue] todos los modelos fallaron. Último texto:", lastTextResponse, "Último error:", lastErr.slice(0, 300));
+      console.error("[tongue] todos los modelos fallaron. lastText:", lastTextResponse, "lastErr:", lastErr.slice(0, 200));
       res.status(422).json({
         error: lastTextResponse
           ? `Gemini respondió texto en vez de imagen: ${lastTextResponse.slice(0, 120)}…`
