@@ -1769,10 +1769,11 @@ Si no ves algún dato, pon "". Solo el JSON, sin explicaciones.`;
 
     // Modelos con soporte multimodal (imagen) — no soportan googleSearch
     const OCR_MODELS = [
-      "gemini-2.5-flash-preview-05-20",
+      "gemini-3.1-flash-image-preview",   // Gemini 3.1 — mejor OCR disponible
+      "gemini-3-pro-image-preview",        // Gemini 3 Pro — máxima precisión
+      "gemini-2.5-flash-image",            // Gemini 2.5 Flash Image
       "gemini-2.5-flash",
       "gemini-2.0-flash",
-      "gemini-2.0-flash-lite",
     ];
 
     async function geminiCall(model: string, body: object, timeoutMs = 45000): Promise<any> {
@@ -1833,7 +1834,7 @@ Si no ves algún dato, pon "". Solo el JSON, sin explicaciones.`;
 
       if (sku && sku !== "Desconocido" && sku !== "") {
         // Intentar con varios modelos que soporten google_search grounding
-        const SEARCH_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"];
+        const SEARCH_MODELS = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-2.0-flash"];
         for (const searchModel of SEARCH_MODELS) {
           try {
             // Construir query con toda la info disponible para máxima precisión
@@ -2061,8 +2062,11 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
       }
 
       const IMG_MODELS = [
-        "gemini-2.0-flash-preview-image-generation",
-        "gemini-2.0-flash-exp-image-generation",
+        "gemini-3.1-flash-image-preview",          // Gemini 3.1 — mejor edición de imagen
+        "gemini-3-pro-image-preview",              // Gemini 3 Pro — máxima calidad
+        "gemini-2.5-flash-image",                  // Gemini 2.5 Flash Image
+        "gemini-2.0-flash-preview-image-generation", // fallback 2.0
+        "gemini-2.0-flash-exp-image-generation",   // fallback 2.0 exp
       ];
       const MAX_RETRIES_PER_MODEL = 2;
       let lastErr = "";
