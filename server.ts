@@ -232,27 +232,94 @@ async function startServer() {
     }
   });
 
+  // ── Helper: migración lazy desde ak47 ──────────────────────────────────────
+  // Si el usuario no existe en Postgres, intentamos validar contra ak47.
+  // Si ak47 acepta, creamos el usuario aquí transparentemente y le damos acceso.
+  const AK47_LEGACY_URL = process.env.AK47_LEGACY_URL || 'https://ak47-worker-backend-production.up.railway.app';
+
+  async function tryLazyMigrateFromAk47(email: string, password: string): Promise<{ id: number; email: string; username: string; is_admin: boolean } | null> {
+    try {
+      const r = await fetch(`${AK47_LEGACY_URL}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+        signal: AbortSignal.timeout(6000),
+      });
+      if (!r.ok) return null;
+      const data = await r.json() as any;
+      if (!data?.ok || !data?.token) return null;
+
+      // Usuario válido en ak47 → crear en Postgres
+      const username = email.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '').slice(0, 20) || 'user';
+      const bcryptMod = await import('bcryptjs');
+      const bcrypt_ = bcryptMod.default ?? bcryptMod;
+      const hash = await bcrypt_.hash(password, 12);
+      const ins = await pool.query(
+        `INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3)
+         ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash
+         RETURNING id, username, email, is_admin`,
+        [username, email, hash]
+      );
+      const newUser = ins.rows[0];
+
+      // Si tenía licencia activa en ak47, darle acceso academia en founderclub
+      if (data?.license?.status === 'active') {
+        const key = `AK47-MIGR-${Date.now()}-${Math.random().toString(36).slice(2,8).toUpperCase()}`;
+        await pool.query(
+          `INSERT INTO licenses (key, user_id, type, is_active, features)
+           VALUES ($1, $2, 'monthly', TRUE, ARRAY['all']::TEXT[])
+           ON CONFLICT DO NOTHING`,
+          [key, newUser.id]
+        );
+        console.log(`[lazy-migrate] ${email} migrado desde ak47 con licencia activa`);
+      } else {
+        console.log(`[lazy-migrate] ${email} migrado desde ak47 sin licencia`);
+      }
+      return newUser;
+    } catch (_) {
+      return null; // ak47 no disponible o error — no bloquear login
+    }
+  }
+
   app.post("/auth/login", authLimiter, async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password)
       return res.status(400).json({ ok: false, error: "email_and_password_required" });
     try {
-      const result = await pool.query("SELECT * FROM users WHERE email = $1", [email.trim().toLowerCase()]);
-      const user = result.rows[0];
-      if (!user || !(await bcrypt.compare(password, user.password_hash)))
+      let userRow = (await pool.query("SELECT * FROM users WHERE email = $1", [email.trim().toLowerCase()])).rows[0];
+
+      if (!userRow) {
+        // No está en Postgres → intentar migración lazy desde ak47
+        userRow = await tryLazyMigrateFromAk47(email.trim().toLowerCase(), password) as any;
+        if (!userRow) return res.status(401).json({ ok: false, error: "invalid_credentials" });
+        // La contraseña ya fue validada por ak47, darle token directo
+        const token = jwt.sign({ id: userRow.id }, JWT_SECRET, { expiresIn: "30d" });
+        const licRes = await pool.query(
+          "SELECT type, expires_at, features FROM licenses WHERE user_id=$1 AND is_active=TRUE AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1",
+          [userRow.id]
+        );
+        const lic = licRes.rows[0];
+        return res.json({
+          ok: true, token,
+          user: { id: userRow.id, email: userRow.email, username: userRow.username, role: userRow.is_admin ? "admin" : "user" },
+          license: { status: lic ? "active" : "inactive", type: lic?.type || null },
+        });
+      }
+
+      if (!(await bcrypt.compare(password, userRow.password_hash)))
         return res.status(401).json({ ok: false, error: "invalid_credentials" });
-      const token = jwt.sign({ id: user.id }, JWT_SECRET, { expiresIn: "30d" });
-      // Verificar si tiene licencia activa
+
+      const token = jwt.sign({ id: userRow.id }, JWT_SECRET, { expiresIn: "30d" });
       const licRes = await pool.query(
         "SELECT type, expires_at FROM licenses WHERE user_id=$1 AND is_active=TRUE AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1",
-        [user.id]
+        [userRow.id]
       );
       const lic = licRes.rows[0];
-      const licenseStatus = (lic || user.is_admin) ? "active" : "inactive";
+      const licenseStatus = (lic || userRow.is_admin) ? "active" : "inactive";
       res.json({
         ok: true, token,
-        user: { id: user.id, email: user.email, username: user.username, role: user.is_admin ? "admin" : "user" },
-        license: { status: licenseStatus, type: lic?.type || (user.is_admin ? "admin" : null) },
+        user: { id: userRow.id, email: userRow.email, username: userRow.username, role: userRow.is_admin ? "admin" : "user" },
+        license: { status: licenseStatus, type: lic?.type || (userRow.is_admin ? "admin" : null) },
       });
     } catch (err: any) {
       res.status(500).json({ ok: false, error: "server_error" });
