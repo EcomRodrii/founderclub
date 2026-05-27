@@ -3471,6 +3471,51 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
     }
   });
 
+  // ── Boost dashboard endpoints (required by BoostPage) ──────────────────────
+  // GET /api/boost/requests — lista de jobs de boost del usuario
+  app.get('/api/boost/requests', requireLicense as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const r = await pool.query(
+        `SELECT id, status, created_at, account_login, items_count
+         FROM boost_requests
+         WHERE user_id = $1
+         ORDER BY created_at DESC
+         LIMIT 50`,
+        [req.user!.id]
+      );
+      res.json(r.rows);
+    } catch (e: any) {
+      console.error('[boost/requests]', e.message);
+      res.json([]); // devolver array vacío antes que error → UI muestra "sin jobs"
+    }
+  });
+
+  // GET /api/boost/stats — estadísticas de boost del usuario
+  app.get('/api/boost/stats', requireLicense as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const r = await pool.query(
+        `SELECT
+           COUNT(*)::int                                               AS total,
+           COUNT(*) FILTER (WHERE status = 'completed')::int         AS completed,
+           COUNT(*) FILTER (WHERE status IN ('pending','running'))::int AS pending,
+           COUNT(*) FILTER (WHERE status = 'failed')::int            AS failed
+         FROM boost_requests
+         WHERE user_id = $1`,
+        [req.user!.id]
+      );
+      const row = r.rows[0] || {};
+      res.json({
+        total:     row.total     ?? 0,
+        completed: row.completed ?? 0,
+        pending:   row.pending   ?? 0,
+        failed:    row.failed    ?? 0,
+      });
+    } catch (e: any) {
+      console.error('[boost/stats]', e.message);
+      res.json({ total: 0, completed: 0, pending: 0, failed: 0 });
+    }
+  });
+
   // 8. Admin: bazooka workers probe (real data)
   app.get("/api/admin/bazooka-workers-probe", requireAdmin as any, async (_req: AuthRequest, res: Response) => {
     try {

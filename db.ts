@@ -296,6 +296,21 @@ export async function initDB() {
     // ── Permisos por licencia: features define qué secciones puede ver el usuario ─
     // Default: solo 'photos' (Fantasma). Academia desbloquea todo.
     `ALTER TABLE licenses ADD COLUMN IF NOT EXISTS features TEXT[] NOT NULL DEFAULT ARRAY['photos']::TEXT[]`,
+
+    // ── Tabla de jobs de Boost (automatización de subida de artículos) ────────
+    `CREATE TABLE IF NOT EXISTS boost_requests (
+      id           SERIAL PRIMARY KEY,
+      user_id      INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      account_id   INTEGER REFERENCES vinted_accounts(id) ON DELETE SET NULL,
+      account_login VARCHAR(100),
+      items_count  INTEGER DEFAULT 0,
+      status       VARCHAR(20) DEFAULT 'pending',
+      note         TEXT,
+      error_msg    TEXT,
+      created_at   TIMESTAMP DEFAULT NOW(),
+      updated_at   TIMESTAMP DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_boost_requests_user ON boost_requests(user_id, created_at DESC)`,
   ];
   for (const sql of migrations) {
     await pool.query(sql).catch(() => {}); // silently ignore if column already exists
