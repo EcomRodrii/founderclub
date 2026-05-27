@@ -4331,6 +4331,109 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
     app.get("*", (_req, res) => res.sendFile(path.join(distPath, "index.html")));
   }
 
+  // ── Política de privacidad (requerida por Chrome Web Store) ─────────────────
+  app.get(['/privacy', '/privacy-policy', '/politica-privacidad'], (_req, res) => {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(`<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Política de Privacidad — Lamine HUB</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0a0a0a;color:#d4d4cf;line-height:1.7;padding:40px 20px}
+    .wrap{max-width:760px;margin:0 auto}
+    h1{font-size:2rem;color:#f2f2ef;margin-bottom:8px}
+    h2{font-size:1.1rem;color:#d4ff00;margin:32px 0 10px;text-transform:uppercase;letter-spacing:.08em}
+    p,li{font-size:.95rem;color:#aaa;margin-bottom:10px}
+    ul{padding-left:20px;margin-bottom:10px}
+    a{color:#d4ff00;text-decoration:none}
+    .meta{font-size:.8rem;color:#555;margin-bottom:40px}
+    .card{background:#161616;border:1px solid rgba(255,255,255,.07);border-radius:16px;padding:24px;margin-bottom:16px}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Política de Privacidad</h1>
+  <p class="meta">Extensión: <strong>Lamine HUB</strong> · Última actualización: ${new Date().toLocaleDateString('es-ES', { year:'numeric', month:'long', day:'numeric' })}</p>
+
+  <div class="card">
+    <h2>1. Quién somos</h2>
+    <p>Lamine HUB es una extensión de Chrome desarrollada para ayudar a vendedores de Vinted a analizar el mercado y gestionar su actividad. El servicio está operado por LamineResell. Contacto: <a href="mailto:soporte@lamineresell.es">soporte@lamineresell.es</a></p>
+  </div>
+
+  <div class="card">
+    <h2>2. Qué datos recogemos</h2>
+    <ul>
+      <li><strong>Cuenta de usuario:</strong> dirección de email y contraseña cifrada (bcrypt) para autenticar el acceso a la extensión.</li>
+      <li><strong>Sesión de Vinted:</strong> token de autenticación de tu cuenta de Vinted, leído de las cookies del navegador exclusivamente para realizar llamadas a la API de Vinted en tu nombre (sincronizar artículos, ver pedidos, analizar el mercado).</li>
+      <li><strong>Datos de actividad en Vinted:</strong> artículos publicados, precios, ventas y estadísticas de rendimiento que tú mismo has generado en Vinted.</li>
+      <li><strong>Identificador de dispositivo (HWID):</strong> huella anónima del navegador para proteger tu licencia frente a usos no autorizados. No contiene datos personales identificables.</li>
+      <li><strong>Preferencias locales:</strong> configuración de la extensión almacenada en el almacenamiento local de Chrome (nunca se envía a terceros).</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>3. Para qué usamos tus datos</h2>
+    <ul>
+      <li>Autenticar tu acceso y validar tu licencia.</li>
+      <li>Sincronizar tu inventario de Vinted y mostrarte estadísticas de análisis de mercado.</li>
+      <li>Proteger tu cuenta frente a accesos desde dispositivos no autorizados.</li>
+      <li>Mejorar la fiabilidad y el rendimiento del servicio.</li>
+    </ul>
+    <p>No vendemos, cedemos ni compartimos tus datos personales con terceros con fines comerciales.</p>
+  </div>
+
+  <div class="card">
+    <h2>4. Permisos de la extensión y por qué son necesarios</h2>
+    <ul>
+      <li><strong>cookies:</strong> leer el token de sesión de Vinted para autenticar las llamadas a la API de Vinted en tu nombre.</li>
+      <li><strong>tabs / webNavigation:</strong> detectar cuándo estás navegando por Vinted para activar las funciones de análisis en el momento correcto.</li>
+      <li><strong>storage / unlimitedStorage:</strong> guardar tu configuración, caché de datos de mercado y preferencias localmente en tu navegador.</li>
+      <li><strong>scripting:</strong> inyectar la interfaz de la extensión en las páginas de Vinted.</li>
+      <li><strong>downloads:</strong> descargar etiquetas de envío generadas por Vinted.</li>
+      <li><strong>notifications:</strong> notificarte sobre nuevas oportunidades de mercado o alertas de precio.</li>
+      <li><strong>declarativeNetRequest:</strong> redirigir ciertas peticiones de imágenes para mejorar la velocidad de carga.</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>5. Dónde se almacenan tus datos</h2>
+    <p>Los datos de cuenta y licencia se almacenan en una base de datos PostgreSQL alojada en Railway (UE). El token de sesión de Vinted se procesa en memoria durante las operaciones y no se almacena de forma persistente en nuestros servidores.</p>
+    <p>Los datos de configuración y preferencias se almacenan localmente en tu navegador Chrome mediante la API <code>chrome.storage.local</code>.</p>
+  </div>
+
+  <div class="card">
+    <h2>6. Retención y eliminación</h2>
+    <p>Conservamos tus datos mientras tu cuenta esté activa. Puedes solicitar la eliminación completa de tu cuenta y datos en cualquier momento escribiendo a <a href="mailto:soporte@lamineresell.es">soporte@lamineresell.es</a>. Procederemos a la eliminación en un plazo máximo de 30 días.</p>
+  </div>
+
+  <div class="card">
+    <h2>7. Seguridad</h2>
+    <p>Las contraseñas se almacenan siempre cifradas con bcrypt. Toda la comunicación entre la extensión y nuestros servidores se realiza mediante HTTPS/TLS. El acceso a los datos de cuenta está protegido por tokens JWT de corta duración.</p>
+  </div>
+
+  <div class="card">
+    <h2>8. Menores de edad</h2>
+    <p>Este servicio no está dirigido a menores de 16 años. No recogemos conscientemente datos de menores.</p>
+  </div>
+
+  <div class="card">
+    <h2>9. Cambios en esta política</h2>
+    <p>Podemos actualizar esta política ocasionalmente. Los cambios significativos se comunicarán en el panel de la extensión. La fecha de la última modificación siempre estará visible en la cabecera de esta página.</p>
+  </div>
+
+  <div class="card">
+    <h2>10. Contacto</h2>
+    <p>Para cualquier consulta sobre privacidad: <a href="mailto:soporte@lamineresell.es">soporte@lamineresell.es</a></p>
+    <p>Comunidad y soporte: <a href="https://www.skool.com/lamineresell" target="_blank">skool.com/lamineresell</a></p>
+  </div>
+</div>
+</body>
+</html>`);
+  });
+
   app.listen(PORT, "0.0.0.0", () => console.log(`Server running on http://localhost:${PORT}`));
 }
 
