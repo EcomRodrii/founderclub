@@ -1834,16 +1834,15 @@ Extrae EXACTAMENTE los datos que ves impresos. Devuelve SOLO un JSON puro sin ma
 }
 Si no ves algún dato, pon "". Solo el JSON, sin explicaciones.`;
 
-    // Modelos con soporte multimodal (imagen) — no soportan googleSearch
+    // Modelos confirmados con soporte multimodal (imagen+texto)
     const OCR_MODELS = [
-      "gemini-3.1-flash-image-preview",   // Gemini 3.1 — mejor OCR disponible
-      "gemini-3-pro-image-preview",        // Gemini 3 Pro — máxima precisión
-      "gemini-2.5-flash-image",            // Gemini 2.5 Flash Image
       "gemini-2.5-flash",
+      "gemini-2.5-pro",
       "gemini-2.0-flash",
+      "gemini-1.5-flash",
     ];
 
-    async function geminiCall(model: string, body: object, timeoutMs = 45000): Promise<any> {
+    async function geminiCall(model: string, body: object, timeoutMs = 30000): Promise<any> {
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), timeoutMs);
       try {
@@ -1901,7 +1900,7 @@ Si no ves algún dato, pon "". Solo el JSON, sin explicaciones.`;
 
       if (sku && sku !== "Desconocido" && sku !== "") {
         // Intentar con varios modelos que soporten google_search grounding
-        const SEARCH_MODELS = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-2.0-flash"];
+        const SEARCH_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"];
         for (const searchModel of SEARCH_MODELS) {
           try {
             // Construir query con toda la info disponible para máxima precisión
@@ -1922,7 +1921,7 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
             const searchData = await geminiCall(searchModel, {
               contents: [{ parts: [{ text: searchPrompt }] }],
               tools: [{ google_search: {} }]
-            }, 25000);
+            }, 18000);
 
             const searchText = searchData.candidates?.[0]?.content?.parts?.find((p: any) => p.text)?.text || "";
             console.log(`[OCR] Search ${searchModel} raw:`, searchText.slice(0, 300));
@@ -2124,10 +2123,10 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
 
     const brandPrompt = buildTonguePrompt(brand, detections, customPrompt || "");
 
-    // Deadline global: 110s total para toda la operación (Railway timeout ~120s)
-    const GLOBAL_DEADLINE = Date.now() + 110_000;
-    // Timeout por intento: 45s (suficiente para modelos rápidos, falla rápido en colgados)
-    const ATTEMPT_TIMEOUT_MS = 45_000;
+    // Deadline global: 90s (margen seguro bajo Railway timeout de ~120s)
+    const GLOBAL_DEADLINE = Date.now() + 90_000;
+    // Timeout por intento: 35s — falla rápido y prueba el siguiente modelo
+    const ATTEMPT_TIMEOUT_MS = 35_000;
 
     try {
       const parts: any[] = [{ text: brandPrompt }];
@@ -2139,14 +2138,12 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
         if (dims && dims.w > 0 && dims.h > 0) aspectRatio = pickGeminiAspect(dims.w, dims.h);
       }
 
-      // Modelos en orden de preferencia — los más nuevos primero
+      // Modelos confirmados con generación de imagen
       const IMG_MODELS = [
-        "gemini-3.1-flash-image-preview",
-        "gemini-2.5-flash-image",
         "gemini-2.0-flash-preview-image-generation",
         "gemini-2.0-flash-exp-image-generation",
       ];
-      const MAX_RETRIES_PER_MODEL = 1; // 1 intento por modelo = falla rápido y prueba el siguiente
+      const MAX_RETRIES_PER_MODEL = 2; // 2 intentos por modelo antes de pasar al siguiente
       let lastErr = "";
       let lastTextResponse = "";
 
@@ -2190,10 +2187,13 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
           }
 
           if (!r!.ok) {
-            lastErr = JSON.stringify(data);
-            console.error(`[tongue] ${model} attempt ${attempt} HTTP error:`, lastErr.slice(0, 300));
-            if (r!.status === 404 || r!.status === 400) break;
-            if (r!.status === 429) await new Promise(resolve => setTimeout(resolve, 2000));
+            lastErr = data?.error?.message || `HTTP ${r!.status}`;
+            console.error(`[tongue] ${model} attempt ${attempt} HTTP ${r!.status}:`, lastErr.slice(0, 200));
+            if (r!.status === 429) {
+              // Rate limit — espera exponencial antes de reintentar
+              await new Promise(resolve => setTimeout(resolve, attempt * 4000));
+            }
+            // No hacer break: siempre continuar al siguiente intento/modelo
             continue;
           }
 
@@ -2452,40 +2452,59 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
     prompt: string, imageBase64: string | null, aspectRatio: string | null,
     globalDeadline: number, attemptTimeout: number, apiKey: string
   ): Promise<{ image: string; model: string } | null> {
+    // Solo modelos confirmados con soporte de generación de imagen
     const IMG_MODELS = [
-      "gemini-3.1-flash-image-preview",
-      "gemini-2.5-flash-image",
       "gemini-2.0-flash-preview-image-generation",
       "gemini-2.0-flash-exp-image-generation",
     ];
+    const MAX_RETRIES = 2;
     const parts: any[] = [{ text: prompt }];
     if (imageBase64) {
       const b64 = imageBase64.includes(",") ? imageBase64.split(",")[1] : imageBase64;
       parts.unshift({ inlineData: { mimeType: "image/jpeg", data: b64 } });
     }
     for (const model of IMG_MODELS) {
-      if (Date.now() >= globalDeadline) break;
-      const body: any = {
-        contents: [{ parts }],
-        generationConfig: { responseModalities: ["TEXT", "IMAGE"], temperature: 0.35 },
-      };
-      if (aspectRatio) body.generationConfig.imageConfig = { aspectRatio };
-      try {
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), Math.min(attemptTimeout, Math.max(5000, globalDeadline - Date.now())));
-        let r: any, data: any;
+      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        if (Date.now() >= globalDeadline) return null;
+        const body: any = {
+          contents: [{ parts }],
+          generationConfig: {
+            responseModalities: ["TEXT", "IMAGE"],
+            temperature: 0.35 + (attempt - 1) * 0.1,
+          },
+        };
+        if (aspectRatio) body.generationConfig.imageConfig = { aspectRatio };
         try {
-          r = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-            { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: ctrl.signal }
-          );
-          data = await r.json();
-        } finally { clearTimeout(timer); }
-        if (!r.ok) { if (r.status === 404 || r.status === 400) break; continue; }
-        for (const p of (data.candidates?.[0]?.content?.parts || [])) {
-          if (p.inlineData?.data) return { image: `data:image/png;base64,${p.inlineData.data}`, model };
+          const ctrl = new AbortController();
+          const effectiveTimeout = Math.min(attemptTimeout, Math.max(5000, globalDeadline - Date.now()));
+          const timer = setTimeout(() => ctrl.abort(), effectiveTimeout);
+          let r: any, data: any;
+          try {
+            r = await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+              { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: ctrl.signal }
+            );
+            data = await r.json();
+          } finally { clearTimeout(timer); }
+
+          if (!r.ok) {
+            console.error(`[imggen] ${model} attempt ${attempt} HTTP ${r.status}:`, JSON.stringify(data).slice(0, 200));
+            if (r.status === 429) await new Promise(res => setTimeout(res, attempt * 4000));
+            continue; // siempre continuar — nunca break para no saltarse modelos restantes
+          }
+
+          for (const p of (data.candidates?.[0]?.content?.parts || [])) {
+            if (p.inlineData?.data) {
+              console.log(`[imggen] ${model} attempt ${attempt} OK`);
+              return { image: `data:image/png;base64,${p.inlineData.data}`, model };
+            }
+          }
+          console.warn(`[imggen] ${model} attempt ${attempt}: sin imagen en respuesta`);
+        } catch (err: any) {
+          console.error(`[imggen] ${model} attempt ${attempt} error:`, err.message?.slice(0, 100));
+          continue;
         }
-      } catch { continue; }
+      }
     }
     return null;
   }
@@ -2510,7 +2529,7 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
       if (dims && dims.w > 0 && dims.h > 0) aspectRatio = pickGeminiAspect(dims.w, dims.h);
     }
 
-    const result = await runGeminiImageGeneration(prompt, imageBase64, aspectRatio, Date.now() + 110_000, 45_000, apiKey);
+    const result = await runGeminiImageGeneration(prompt, imageBase64, aspectRatio, Date.now() + 90_000, 35_000, apiKey);
     if (!result) return res.status(503).json({ error: "No se pudo generar la imagen de caja. Inténtalo de nuevo." });
 
     res.json({ ...result, barcodeValue });
@@ -2524,7 +2543,7 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY no configurada" });
 
-    const GLOBAL_DEADLINE = Date.now() + 110_000;
+    const GLOBAL_DEADLINE = Date.now() + 90_000;
 
     // Get admin prompts
     const [tpRes, bpRes] = await Promise.all([

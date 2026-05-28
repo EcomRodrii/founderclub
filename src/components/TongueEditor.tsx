@@ -231,16 +231,27 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
 
   const runOCR = async (base64Image: string) => {
     setLoading(true);
-    setStatus('Analizando lengueta con OCR...');
     setError(null);
+    setDetections(null);
+    setStatus('Leyendo lengüeta...');
     try {
       const res = await authFetch('/api/tongue/analyze', { imageBase64: base64Image, brand: activeBrand });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Error en el servidor');
+      if (!res.ok) {
+        // Error claro según código HTTP
+        if (res.status === 429) throw new Error('Demasiadas peticiones. Espera un momento e inténtalo de nuevo.');
+        if (res.status === 503) throw new Error('Servicio no disponible. Inténtalo en unos segundos.');
+        throw new Error(data.error || `Error del servidor (${res.status})`);
+      }
       setDetections(data);
-      setStatus('Datos extraídos correctamente.');
+      setStatus('✓ Datos extraídos');
     } catch (err: any) {
-      setError('Error en el análisis OCR: ' + err.message);
+      const msg = err.message || String(err);
+      if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
+        setError('Sin conexión. Comprueba tu internet e inténtalo de nuevo.');
+      } else {
+        setError(msg);
+      }
     } finally {
       setLoading(false);
     }
@@ -341,8 +352,8 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
   const generateModifiedTongue = async () => {
     if (!detections) return;
     setLoading(true);
-    setStatus('Generando nueva imagen de lengueta...');
     setError(null);
+    setStatus('Generando lengüeta...');
     try {
       const res = await authFetch('/api/tongue/generate', {
         imageBase64: originalImage,
@@ -351,19 +362,23 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
         customPrompt: activeBrand === 'ADIDAS' ? customPromptAdidas : activeBrand === 'ASICS' ? customPromptAsics : activeBrand === 'ONITSUKA' ? customPromptOnitsuka : customPromptNB,
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Error en el servidor');
+      if (!res.ok) {
+        if (res.status === 429) throw new Error('Demasiadas peticiones. Espera unos segundos.');
+        if (res.status === 422) throw new Error(data.error || 'Gemini no generó imagen. Inténtalo de nuevo.');
+        throw new Error(data.error || `Error (${res.status}). Inténtalo de nuevo.`);
+      }
       if (data.image) {
         setGeneratedImage(data.image);
-        setStatus('¡Lengüeta generada con éxito!');
+        setStatus('✓ Lengüeta generada');
       } else {
-        setError('El modelo no devolvió imagen. Intenta de nuevo.');
+        throw new Error('Sin imagen en la respuesta. Inténtalo de nuevo.');
       }
     } catch (err: any) {
       const msg = err.message || String(err);
-      if (msg.toLowerCase().includes('quota') || msg.includes('429')) {
-        setError('Límite de uso alcanzado. Espera unos minutos e inténtalo de nuevo.');
+      if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
+        setError('Sin conexión. Comprueba tu internet.');
       } else {
-        setError('Error al generar la imagen: ' + msg);
+        setError(msg);
       }
     } finally {
       setLoading(false);
@@ -374,6 +389,7 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
     if (!detections) return;
     setLoadingBox(true);
     setBoxImage(null);
+    setError(null);
     try {
       const res = await authFetch('/api/box/generate', {
         imageBase64: boxOriginalImage,
@@ -382,14 +398,22 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
         customPrompt: '',
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Error en el servidor');
+      if (!res.ok) {
+        if (res.status === 429) throw new Error('Demasiadas peticiones. Espera unos segundos.');
+        throw new Error(data.error || `Error (${res.status}). Inténtalo de nuevo.`);
+      }
       if (data.image) {
         setBoxImage(data.image);
       } else {
-        setError('El modelo no devolvió imagen de caja.');
+        throw new Error('Sin imagen en la respuesta. Inténtalo de nuevo.');
       }
     } catch (err: any) {
-      setError('Error al generar caja: ' + err.message);
+      const msg = err.message || String(err);
+      if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
+        setError('Sin conexión. Comprueba tu internet.');
+      } else {
+        setError(msg);
+      }
     } finally {
       setLoadingBox(false);
     }
@@ -607,9 +631,19 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
         </div>
 
         {error && (
-          <div className="flex items-start gap-2 py-3 px-4 bg-red-500/10 border border-red-500/20 rounded-2xl">
+          <div className="flex items-start gap-3 py-3 px-4 bg-red-500/10 border border-red-500/20 rounded-2xl">
             <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
-            <p className="text-[11px] text-red-400">{error}</p>
+            <div className="flex-1 min-w-0">
+              <p className="text-[11px] text-red-400 leading-relaxed">{error}</p>
+              {originalImage && (
+                <button
+                  onClick={() => runOCR(originalImage)}
+                  className="mt-2 text-[10px] text-red-300 hover:text-white border border-red-500/30 hover:border-red-400/50 rounded-lg px-2.5 py-1 transition flex items-center gap-1.5"
+                >
+                  <RefreshCcw className="w-3 h-3" /> Reintentar análisis
+                </button>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -774,10 +808,14 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
                         className="flex-1 py-2.5 bg-acid text-black font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 hover:bg-acid/90 transition">
                         <Download className="w-3.5 h-3.5" /> Descargar
                       </button>
+                      <button onClick={generateModifiedTongue} disabled={loading}
+                        className="p-2.5 bg-white/8 hover:bg-white/12 border border-white/10 text-white/40 hover:text-white rounded-xl transition disabled:opacity-30"
+                        title="Regenerar">
+                        <RefreshCcw className="w-3.5 h-3.5" />
+                      </button>
                       <button onClick={() => {
                         fetch(generatedImage).then(r => r.blob()).then(blob => {
                           navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-                          setStatus("Copiada");
                         });
                       }}
                         className="p-2.5 bg-white/8 hover:bg-white/12 border border-white/10 text-white/50 rounded-xl transition">
@@ -788,7 +826,7 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
                 ) : (
                   <div className="h-32 flex flex-col items-center justify-center gap-2 w-full">
                     <RefreshCcw className="w-6 h-6 text-acid animate-spin" />
-                    <span className="text-[10px] text-white/30 uppercase tracking-widest">Generando...</span>
+                    <span className="text-[10px] text-white/40 uppercase tracking-widest">{status || 'Generando...'}</span>
                   </div>
                 )}
               </div>
@@ -801,15 +839,22 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
                 {boxImage ? (
                   <>
                     <img src={boxImage} className="max-w-full rounded-xl border border-white/10 shadow-lg" alt="Etiqueta caja" />
-                    <button onClick={handleDownloadBox}
-                      className="w-full py-2.5 bg-white text-black font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 hover:bg-acid transition">
-                      <Download className="w-3.5 h-3.5" /> Descargar
-                    </button>
+                    <div className="flex gap-2 w-full">
+                      <button onClick={handleDownloadBox}
+                        className="flex-1 py-2.5 bg-white text-black font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 hover:bg-acid transition">
+                        <Download className="w-3.5 h-3.5" /> Descargar
+                      </button>
+                      <button onClick={generateBoxLabel} disabled={loadingBox}
+                        className="p-2.5 bg-white/8 hover:bg-white/12 border border-white/10 text-white/40 hover:text-white rounded-xl transition disabled:opacity-30"
+                        title="Regenerar">
+                        <RefreshCcw className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </>
                 ) : (
                   <div className="h-32 flex flex-col items-center justify-center gap-2 w-full">
                     <RefreshCcw className="w-6 h-6 text-white/40 animate-spin" />
-                    <span className="text-[10px] text-white/30 uppercase tracking-widest">Generando...</span>
+                    <span className="text-[10px] text-white/30 uppercase tracking-widest">Generando caja...</span>
                   </div>
                 )}
               </div>
