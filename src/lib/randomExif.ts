@@ -100,3 +100,27 @@ export async function injectRandomExif(jpegDataUrl: string): Promise<string> {
     return jpegDataUrl;
   }
 }
+
+// Clona los metadatos EXIF de una foto real (sourceJpegDataUrl) e inyecta
+// exactamente los mismos metadatos en el JPEG de destino.
+// Si la fuente no tiene EXIF de cámara o el proceso falla, recurre a
+// injectRandomExif como fallback silencioso.
+export async function cloneExifFrom(
+  sourceJpegDataUrl: string,
+  targetJpegDataUrl: string
+): Promise<string> {
+  try {
+    const piexif = await loadPiexif();
+    const srcExif = piexif.load(sourceJpegDataUrl);
+    // Verificar que la fuente tiene EXIF real de cámara (tiene campo Make)
+    const hasMake = srcExif['0th']?.[piexif.ImageIFD.Make];
+    if (!hasMake) {
+      console.warn('[exif] fuente sin EXIF de cámara, usando EXIF aleatorio');
+      return injectRandomExif(targetJpegDataUrl);
+    }
+    return piexif.insert(piexif.dump(srcExif), targetJpegDataUrl);
+  } catch (err) {
+    console.warn('[exif] clon EXIF falló, usando EXIF aleatorio:', err);
+    return injectRandomExif(targetJpegDataUrl);
+  }
+}

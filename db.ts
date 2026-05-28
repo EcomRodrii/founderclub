@@ -311,6 +311,27 @@ export async function initDB() {
       updated_at   TIMESTAMP DEFAULT NOW()
     )`,
     `CREATE INDEX IF NOT EXISTS idx_boost_requests_user ON boost_requests(user_id, created_at DESC)`,
+
+    // ── Label references (admin uploads real reference photos per brand/size) ──
+    `CREATE TABLE IF NOT EXISTS label_references (
+      id           SERIAL PRIMARY KEY,
+      brand        VARCHAR(30) NOT NULL,
+      size_us      VARCHAR(10),
+      label_type   VARCHAR(10) NOT NULL DEFAULT 'tongue',
+      image_base64 TEXT,
+      codes_json   JSONB NOT NULL DEFAULT '{}',
+      notes        TEXT,
+      created_at   TIMESTAMP DEFAULT NOW(),
+      UNIQUE(brand, size_us, label_type)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_label_refs_brand ON label_references(brand, label_type)`,
+
+    // ── Box label prompts per brand ────────────────────────────────────────────
+    `CREATE TABLE IF NOT EXISTS box_prompts (
+      brand      VARCHAR(30) PRIMARY KEY,
+      prompt     TEXT NOT NULL DEFAULT '',
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`,
   ];
   for (const sql of migrations) {
     await pool.query(sql).catch(() => {}); // silently ignore if column already exists

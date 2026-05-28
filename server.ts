@@ -2016,6 +2016,13 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
     `REGLA CRÍTICA: los valores que aparecen en las instrucciones de SUSTITUCIÓN a continuación ` +
     `son los CORRECTOS y tienen PRIORIDAD ABSOLUTA sobre lo que veas en la imagen. ` +
     `Si la imagen muestra un valor diferente al indicado, IGNORA lo de la imagen y usa el valor de las instrucciones. ` +
+    `INTEGRACIÓN DE TEXTURA FÍSICA: los textos nuevos deben integrarse visualmente con el sustrato real del tejido — ` +
+    `adoptando exactamente la perspectiva y ángulo de la cámara, siguiendo las microarrugas, curvas y pliegues de la lengüeta, ` +
+    `con el mismo micro-grano de impresión por transferencia térmica, idéntica opacidad y las mismas reflexiones de luz rasante ` +
+    `que el texto ya existente en la etiqueta. ` +
+    `Ningún texto sustituto debe parecer superpuesto digitalmente ni más nítido que el tejido: ` +
+    `toda la tipografía debe verse imprimida en la misma pasada de fábrica, con coherencia de perspectiva 3D ` +
+    `y micro-deformación acorde a los pliegues visibles del tejido. ` +
     `Ahora aplica las siguientes instrucciones en alta precisión:`;
 
   function buildTonguePrompt(brand: string, d: any, customPrompt: string): string {
@@ -2242,6 +2249,295 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
+  });
+
+  // ── Label References (admin uploads reference photos per brand/size) ─────────
+
+  app.get("/api/admin/label-references", requireAdmin as any, async (req: any, res) => {
+    try {
+      const { brand, label_type } = req.query as any;
+      let sql = "SELECT id, brand, size_us, label_type, codes_json, notes, created_at FROM label_references";
+      const params: any[] = [];
+      const conditions: string[] = [];
+      if (brand) { conditions.push(`brand = $${params.length + 1}`); params.push(brand); }
+      if (label_type) { conditions.push(`label_type = $${params.length + 1}`); params.push(label_type); }
+      if (conditions.length) sql += " WHERE " + conditions.join(" AND ");
+      sql += " ORDER BY brand, size_us";
+      const result = await pool.query(sql, params);
+      res.json(result.rows);
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post("/api/admin/label-references", requireAdmin as any, async (req: any, res) => {
+    const { brand, size_us, label_type = "tongue", imageBase64, codes, notes } = req.body;
+    const validBrands = ["ADIDAS", "NEW BALANCE", "ASICS", "ONITSUKA"];
+    if (!brand || !validBrands.includes(brand))
+      return res.status(400).json({ error: "Marca inválida" });
+    try {
+      const result = await pool.query(
+        `INSERT INTO label_references (brand, size_us, label_type, image_base64, codes_json, notes)
+         VALUES ($1, $2, $3, $4, $5::jsonb, $6)
+         ON CONFLICT (brand, size_us, label_type) DO UPDATE
+           SET image_base64 = EXCLUDED.image_base64,
+               codes_json   = EXCLUDED.codes_json,
+               notes        = EXCLUDED.notes,
+               created_at   = NOW()
+         RETURNING id, brand, size_us, label_type, codes_json, notes, created_at`,
+        [brand, size_us || null, label_type, imageBase64 || null, JSON.stringify(codes || {}), notes || null]
+      );
+      res.json(result.rows[0]);
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.delete("/api/admin/label-references/:id", requireAdmin as any, async (req: any, res) => {
+    try {
+      await pool.query("DELETE FROM label_references WHERE id = $1", [req.params.id]);
+      res.json({ ok: true });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Lookup: return the best reference image for a given brand+size (public, for client)
+  app.get("/api/label-references/lookup", requireLicense as any, async (req: any, res) => {
+    const { brand, size_us, label_type = "tongue" } = req.query as any;
+    if (!brand) return res.status(400).json({ error: "brand required" });
+    try {
+      // Try exact size match first, then fall back to generic (size_us IS NULL)
+      const result = await pool.query(
+        `SELECT id, image_base64, codes_json FROM label_references
+         WHERE brand = $1 AND label_type = $2
+           AND (size_us = $3 OR size_us IS NULL)
+         ORDER BY (size_us = $3)::int DESC
+         LIMIT 1`,
+        [brand, label_type, size_us || null]
+      );
+      if (!result.rows[0]) return res.json({ found: false });
+      res.json({ found: true, ...result.rows[0] });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ── Box Prompts (admin manage / public read) ──────────────────────────────
+
+  app.get("/api/box/prompts", async (_req, res) => {
+    try {
+      const result = await pool.query("SELECT brand, prompt, updated_at FROM box_prompts ORDER BY brand");
+      res.json(result.rows);
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post("/api/admin/box/prompts", requireAdmin as any, async (req: any, res) => {
+    const { brand, prompt } = req.body;
+    const validBrands = ["ADIDAS", "NEW BALANCE", "ASICS", "ONITSUKA"];
+    if (!brand || !validBrands.includes(brand))
+      return res.status(400).json({ error: "Marca inválida" });
+    try {
+      const result = await pool.query(
+        `INSERT INTO box_prompts (brand, prompt, updated_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (brand) DO UPDATE SET prompt = EXCLUDED.prompt, updated_at = NOW()
+         RETURNING *`,
+        [brand, prompt ?? ""]
+      );
+      res.json(result.rows[0]);
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ── Box Label Generation ──────────────────────────────────────────────────
+
+  // Helper: build box label prompt per brand
+  function buildBoxPrompt(brand: string, d: any, customPrompt: string, barcodeValue: string): string {
+    const sizes = d.sizes || {};
+    const BOX_PREAMBLE =
+      `Te adjunto la foto de la etiqueta de la caja. ` +
+      `REGLA CRÍTICA: los valores de SUSTITUCIÓN tienen PRIORIDAD ABSOLUTA. ` +
+      `ZONA DE CÓDIGO DE BARRAS: sustituye el área rectangular del código de barras por ` +
+      `un rectángulo de fondo blanco COMPLETAMENTE LIMPIO y VACÍO (sin ninguna línea, número ` +
+      `ni texto) — la aplicación superpondrá el código de barras real generado por librería. ` +
+      `Mantén tipografía, colores, logo y layout exactamente iguales a la foto. ` +
+      `Foto de aspecto natural de móvil, sin marca de agua ni texto extra.`;
+
+    if (brand === "ADIDAS") return [
+      BOX_PREAMBLE, ``,
+      `Edita la etiqueta adhesiva rectangular de la caja adidas.`,
+      `PRESERVA: logo adidas (3 bandas o trébol), "Made in ${d.lvl || 'China'}", composición de materiales, advertencias.`,
+      `SUSTITUYE:`,
+      `  · Art No / Número de artículo → "${d.sku}"`,
+      `  · Código alfanumérico (Brand Serial) → "${d.brandSerial}"`,
+      `  · Fecha → "${d.date}"`,
+      `  · Tallas: US ${sizes.us} / UK ${sizes.uk} / EU ${sizes.fr} / JP ${sizes.jp}`,
+      ``,
+      customPrompt || ""
+    ].filter(Boolean).join("\n");
+
+    if (brand === "ASICS") return [
+      BOX_PREAMBLE, ``,
+      `Edita la etiqueta adhesiva de la caja ASICS.`,
+      `PRESERVA: logo ASICS, colores corporativos, datos legales, composición.`,
+      `SUSTITUYE:`,
+      `  · SKU / Número de artículo → "${d.sku}"`,
+      `  · Tracking code (1 letra + 6 dígitos) → "${d.reference}"`,
+      `  · Serial (15 alfanuméricos) → "${d.brandSerial}"`,
+      `  · Fecha → "${d.date}"`,
+      `  · Tallas: US ${sizes.us} / UK ${sizes.uk} / EU ${sizes.fr} / JP ${sizes.jp}`,
+      ``,
+      customPrompt || ""
+    ].filter(Boolean).join("\n");
+
+    if (brand === "ONITSUKA") return [
+      BOX_PREAMBLE, ``,
+      `Edita la etiqueta de la caja Onitsuka Tiger.`,
+      `PRESERVA: "MADE IN INDONESIA / FABRIQUE EN INDONESIE", logo si está presente, datos legales.`,
+      `SUSTITUYE:`,
+      `  · SKU → "${d.sku}"`,
+      `  · Batch Code (F + 6 dígitos) → "${d.reference}"`,
+      `  · Unit Serial (15 alfanuméricos) → "${d.brandSerial}"`,
+      `  · Fecha → "${d.date}"`,
+      `  · Tallas: US ${sizes.us} / UK ${sizes.uk} / EU ${sizes.fr} / CM ${sizes.jp}`,
+      ``,
+      customPrompt || ""
+    ].filter(Boolean).join("\n");
+
+    // NEW BALANCE (default)
+    return [
+      BOX_PREAMBLE, ``,
+      `Edita la etiqueta adhesiva de la caja New Balance.`,
+      `PRESERVA: logo NB, tipografía industrial, datos de composición, país de fabricación.`,
+      `SUSTITUYE:`,
+      `  · Style / Model → "${d.sku}"`,
+      `  · Factory → "${d.lvl}"`,
+      `  · Serial 1 (12 dígitos) → "${d.reference}"`,
+      `  · Serial 2 (7 dígitos) → "${d.reference2}"`,
+      `  · Brand code → "${d.brandSerial}"`,
+      `  · Fecha → "${d.date}"`,
+      `  · Tallas: US ${sizes.us} / UK ${sizes.uk} / EU ${sizes.fr} / CM ${sizes.jp}`,
+      ``,
+      customPrompt || ""
+    ].filter(Boolean).join("\n");
+  }
+
+  // Helper: generate valid EAN-13 barcode value
+  function generateEAN13(prefix = "400"): string {
+    const base = prefix + Array.from({ length: 9 }, () => Math.floor(Math.random() * 10)).join("");
+    let sum = 0;
+    for (let i = 0; i < 12; i++) sum += parseInt(base[i]) * (i % 2 === 0 ? 1 : 3);
+    return base + ((10 - (sum % 10)) % 10);
+  }
+
+  // Box label EAN prefix by brand country of origin
+  const EAN_PREFIXES: Record<string, string> = {
+    ADIDAS: "400", "NEW BALANCE": "038", ASICS: "456", ONITSUKA: "456",
+  };
+
+  // Reuse the same model-retry logic as tongue generation
+  async function runGeminiImageGeneration(
+    prompt: string, imageBase64: string | null, aspectRatio: string | null,
+    globalDeadline: number, attemptTimeout: number, apiKey: string
+  ): Promise<{ image: string; model: string } | null> {
+    const IMG_MODELS = [
+      "gemini-3.1-flash-image-preview",
+      "gemini-2.5-flash-image",
+      "gemini-2.0-flash-preview-image-generation",
+      "gemini-2.0-flash-exp-image-generation",
+    ];
+    const parts: any[] = [{ text: prompt }];
+    if (imageBase64) {
+      const b64 = imageBase64.includes(",") ? imageBase64.split(",")[1] : imageBase64;
+      parts.unshift({ inlineData: { mimeType: "image/jpeg", data: b64 } });
+    }
+    for (const model of IMG_MODELS) {
+      if (Date.now() >= globalDeadline) break;
+      const body: any = {
+        contents: [{ parts }],
+        generationConfig: { responseModalities: ["TEXT", "IMAGE"], temperature: 0.35 },
+      };
+      if (aspectRatio) body.generationConfig.imageConfig = { aspectRatio };
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), Math.min(attemptTimeout, Math.max(5000, globalDeadline - Date.now())));
+        let r: any, data: any;
+        try {
+          r = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+            { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: ctrl.signal }
+          );
+          data = await r.json();
+        } finally { clearTimeout(timer); }
+        if (!r.ok) { if (r.status === 404 || r.status === 400) break; continue; }
+        for (const p of (data.candidates?.[0]?.content?.parts || [])) {
+          if (p.inlineData?.data) return { image: `data:image/png;base64,${p.inlineData.data}`, model };
+        }
+      } catch { continue; }
+    }
+    return null;
+  }
+
+  app.post("/api/box/generate", geminiLimiter, requireLicense as any, async (req: any, res) => {
+    const { imageBase64, brand, detections, customPrompt } = req.body;
+    if (!detections) return res.status(400).json({ error: "Se requieren los datos detectados" });
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY no configurada" });
+
+    const barcodeValue = generateEAN13(EAN_PREFIXES[brand] || "400");
+    const boxPromptResult = await pool.query("SELECT prompt FROM box_prompts WHERE brand = $1", [brand]);
+    const adminBoxPrompt = boxPromptResult.rows[0]?.prompt || "";
+    const finalCustomPrompt = customPrompt || adminBoxPrompt;
+
+    const prompt = buildBoxPrompt(brand, detections, finalCustomPrompt, barcodeValue);
+
+    let aspectRatio: string | null = null;
+    if (imageBase64) {
+      const base64Data = imageBase64.includes(",") ? imageBase64.split(",")[1] : imageBase64;
+      const dims = jpegDimsFromBase64(base64Data);
+      if (dims && dims.w > 0 && dims.h > 0) aspectRatio = pickGeminiAspect(dims.w, dims.h);
+    }
+
+    const result = await runGeminiImageGeneration(prompt, imageBase64, aspectRatio, Date.now() + 110_000, 45_000, apiKey);
+    if (!result) return res.status(503).json({ error: "No se pudo generar la imagen de caja. Inténtalo de nuevo." });
+
+    res.json({ ...result, barcodeValue });
+  });
+
+  // ── Dual generation: tongue + box in parallel with synced codes ────────────
+
+  app.post("/api/dual/generate", geminiLimiter, requireLicense as any, async (req: any, res) => {
+    const { tongueImageBase64, boxImageBase64, brand, detections, tonguePrompt, boxPrompt } = req.body;
+    if (!detections) return res.status(400).json({ error: "Se requieren los datos detectados" });
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY no configurada" });
+
+    const GLOBAL_DEADLINE = Date.now() + 110_000;
+
+    // Get admin prompts
+    const [tpRes, bpRes] = await Promise.all([
+      pool.query("SELECT prompt FROM tongue_prompts WHERE brand = $1", [brand]),
+      pool.query("SELECT prompt FROM box_prompts WHERE brand = $1", [brand]),
+    ]);
+    const adminTonguePrompt = tonguePrompt || tpRes.rows[0]?.prompt || "";
+    const adminBoxPrompt = boxPrompt || bpRes.rows[0]?.prompt || "";
+
+    const tongueFullPrompt = buildTonguePrompt(brand, detections, adminTonguePrompt);
+    const barcodeValue = generateEAN13(EAN_PREFIXES[brand] || "400");
+    const boxFullPrompt = buildBoxPrompt(brand, detections, adminBoxPrompt, barcodeValue);
+
+    const getAspect = (b64: string | null) => {
+      if (!b64) return null;
+      const data = b64.includes(",") ? b64.split(",")[1] : b64;
+      const dims = jpegDimsFromBase64(data);
+      return (dims && dims.w > 0 && dims.h > 0) ? pickGeminiAspect(dims.w, dims.h) : null;
+    };
+
+    // Run both in parallel
+    const [tongueResult, boxResult] = await Promise.all([
+      runGeminiImageGeneration(tongueFullPrompt, tongueImageBase64 || null, getAspect(tongueImageBase64 || null), GLOBAL_DEADLINE, 45_000, apiKey),
+      runGeminiImageGeneration(boxFullPrompt, boxImageBase64 || null, getAspect(boxImageBase64 || null), GLOBAL_DEADLINE, 45_000, apiKey),
+    ]);
+
+    if (!tongueResult && !boxResult)
+      return res.status(503).json({ error: "Ambas generaciones fallaron. Inténtalo de nuevo." });
+
+    res.json({
+      tongue: tongueResult,
+      box: boxResult ? { ...boxResult, barcodeValue } : null,
+    });
   });
 
   // ── SSE: Ops Terminal stream ─────────────────────────────────────────────────

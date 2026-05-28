@@ -6,7 +6,7 @@ import {
   ArrowRight, Camera, Eye, X, BellOff
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { injectRandomExif } from '../lib/randomExif';
+import { injectRandomExif, cloneExifFrom } from '../lib/randomExif';
 
 const authFetch = (url: string, body: any) =>
   fetch(url, {
@@ -36,6 +36,75 @@ interface DetectionResult {
   color: string;
   listingTitle: string;
   listingDescription: string;
+}
+
+// ── Point 2: Film grain / homogenización de compresión ───────────────────
+// Añade ruido de sensor uniforme al canvas antes del toDataURL(). Hace que
+// los píxeles originales y los editados por IA compartan la misma firma
+// estadística, resistiendo análisis forenses de bloques de compresión JPEG.
+async function applyFilmGrain(canvas: HTMLCanvasElement, intensity = 14): Promise<void> {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const { width: w, height: h } = canvas;
+  const imageData = ctx.getImageData(0, 0, w, h);
+  const d = imageData.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const n = (Math.random() - 0.5) * intensity;
+    d[i]   = Math.min(255, Math.max(0, d[i]   + n));          // R
+    d[i+1] = Math.min(255, Math.max(0, d[i+1] + n * 0.97));  // G (ligera variación de canal)
+    d[i+2] = Math.min(255, Math.max(0, d[i+2] + n * 0.95));  // B
+  }
+  ctx.putImageData(imageData, 0, 0);
+}
+
+// ── Point 3: Seriales correlacionados de fábrica ─────────────────────────
+// Los labels generados el mismo día comparten el mismo prefijo de lote
+// (derivado de la fecha con un LCG). Solo el contador de unidad es aleatorio.
+// Esto hace que varias fotos del mismo "envío" sean intrínsecamente coherentes
+// aunque sean imágenes distintas.
+
+function _dayBatchCode(n: number): string {
+  // LCG determinista por día — mismo resultado toda la jornada
+  const t = new Date();
+  let seed = t.getFullYear() * 10000 + (t.getMonth() + 1) * 100 + t.getDate();
+  let result = '';
+  for (let i = 0; i < n; i++) {
+    seed = (seed * 1664525 + 1013904223) & 0x7fffffff;
+    result += Math.abs(seed) % 10;
+  }
+  return result;
+}
+function _rndD(n: number): string {
+  return Array.from({ length: n }, () => Math.floor(Math.random() * 10)).join('');
+}
+function _rndA(n: number): string {
+  const p = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  return Array.from({ length: n }, () => p[Math.floor(Math.random() * p.length)]).join('');
+}
+function _rndAN(n: number): string {
+  const p = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  return Array.from({ length: n }, () => p[Math.floor(Math.random() * p.length)]).join('');
+}
+
+// NEW BALANCE: batch prefix (6) + unit (6) = 12; ref2: batch(4)+unit(3) = 7
+function buildNBRef1(): string      { return _dayBatchCode(6) + _rndD(6); }
+function buildNBRef2(): string      { return _dayBatchCode(4) + _rndD(3); }
+function buildNBBrandCode(): string { return _rndA(4) + _rndD(4) + ' ' + _rndA(3); }
+
+// ADIDAS: # + batch(4) + unit(5) = #XXXXXXXXX
+function buildAdidasRef(): string         { return '#' + _dayBatchCode(4) + _rndD(5); }
+function buildAdidasBrandSerial(): string { return _rndAN(7) + '<' + _rndD(5); }
+
+// ASICS: 1 letra + 6 dígitos; serial 15 chars (6 letras + 9 dígitos)
+function buildAsicsRef(): string         { return _rndA(1) + _rndD(6); }
+function buildAsicsBrandSerial(): string { return _rndA(6) + _rndD(9); }
+
+// ONITSUKA: F + batch(3) + unit(3) = F000000; serial 15 chars
+function buildOnitsukaRef(): string { return 'F' + _dayBatchCode(3) + _rndD(3); }
+function buildOnitsukaBrandSerial(): string {
+  const regions = ['PI', 'AS', 'EU', 'US'];
+  const region = regions[new Date().getDay() % regions.length];
+  return (region + _rndAN(13)).slice(0, 15);
 }
 
 export default function TongueEditor() {
@@ -99,9 +168,21 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
   
   const [showDownloadWarning, setShowDownloadWarning] = useState(false);
   const [neverWarn, setNeverWarn] = useState(() => localStorage.getItem('tongue_no_warn') === '1');
+  // Point 4: foto real cuyo EXIF se clona en la descarga
+  const [exifSourceUrl, setExifSourceUrl] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
+  const exifInputRef = useRef<HTMLInputElement>(null);
+
+  // ── Box label state ──────────────────────────────────────────────────────
+  const [boxOriginalImage, setBoxOriginalImage] = useState<string | null>(null);
+  const [boxImage, setBoxImage] = useState<string | null>(null);
+  const [boxCompositeImage, setBoxCompositeImage] = useState<string | null>(null);
+  const [boxBarcodeValue, setBoxBarcodeValue] = useState<string | null>(null);
+  const [loadingBox, setLoadingBox] = useState(false);
+  const [loadingBarcode, setLoadingBarcode] = useState(false);
+  const boxFileInputRef = useRef<HTMLInputElement>(null);
 
   // Load admin-defined prompts from server on mount
   useEffect(() => {
@@ -166,46 +247,31 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
   const generateRandomReference = () => {
     if (!detections) return;
     if (activeBrand === 'NEW BALANCE') {
-      let res = '';
-      for (let i = 0; i < 12; i++) res += Math.floor(Math.random() * 10);
-      setDetections({ ...detections, reference: res });
+      setDetections({ ...detections, reference: buildNBRef1() });
     } else if (activeBrand === 'ONITSUKA') {
-      const batchCode = 'F' + Math.floor(Math.random() * 1000000).toString().padStart(6, '0');
-      setDetections({ ...detections, reference: batchCode });
+      setDetections({ ...detections, reference: buildOnitsukaRef() });
+    } else if (activeBrand === 'ASICS') {
+      setDetections({ ...detections, reference: buildAsicsRef() });
     } else {
-      const randomNum = Math.floor(100000000 + Math.random() * 900000000);
-      setDetections({ ...detections, reference: `#${randomNum}` });
+      setDetections({ ...detections, reference: buildAdidasRef() });
     }
   };
 
   const generateRandomReference2 = () => {
     if (!detections) return;
-    let res = '';
-    for (let i = 0; i < 7; i++) res += Math.floor(Math.random() * 10);
-    setDetections({ ...detections, reference2: res });
+    setDetections({ ...detections, reference2: buildNBRef2() });
   };
 
   const generateRandomBrandSerial = () => {
     if (!detections) return;
     if (activeBrand === 'NEW BALANCE') {
-      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-      const nums = '0123456789';
-      let p1 = ''; for(let i=0; i<4; i++) p1 += chars.charAt(Math.floor(Math.random()*chars.length));
-      let p2 = ''; for(let i=0; i<4; i++) p2 += nums.charAt(Math.floor(Math.random()*nums.length));
-      let p3 = ''; for(let i=0; i<3; i++) p3 += chars.charAt(Math.floor(Math.random()*chars.length));
-      setDetections({ ...detections, brandSerial: `${p1}${p2} ${p3}` });
-    } else if (activeBrand === 'ONITSUKA' || activeBrand === 'ASICS') {
-      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-      let result = '';
-      for (let i = 0; i < 15; i++) result += chars.charAt(Math.floor(Math.random() * chars.length));
-      setDetections({ ...detections, brandSerial: result });
+      setDetections({ ...detections, brandSerial: buildNBBrandCode() });
+    } else if (activeBrand === 'ONITSUKA') {
+      setDetections({ ...detections, brandSerial: buildOnitsukaBrandSerial() });
+    } else if (activeBrand === 'ASICS') {
+      setDetections({ ...detections, brandSerial: buildAsicsBrandSerial() });
     } else {
-      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-      let result = '';
-      for (let i = 0; i < 7; i++) result += chars.charAt(Math.floor(Math.random() * chars.length));
-      result += '<';
-      for (let i = 0; i < 5; i++) result += Math.floor(Math.random() * 10);
-      setDetections({ ...detections, brandSerial: result });
+      setDetections({ ...detections, brandSerial: buildAdidasBrandSerial() });
     }
   };
 
@@ -226,14 +292,20 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
       const ctx = canvas.getContext('2d');
       if (!ctx) throw new Error("No se pudo obtener el contexto del canvas.");
       ctx.drawImage(img, 0, 0);
-      const rawDataUrl = canvas.toDataURL('image/jpeg', 0.95);
-      // Inyectar EXIF aleatorio realista (elimina metadata AI de Gemini,
-      // sustituye por datos creíbles de cámara móvil).
-      const dataUrl = await injectRandomExif(rawDataUrl);
+      // Point 2: homogenización — ruido de sensor uniforme antes de recodificar
+      await applyFilmGrain(canvas);
+      // Calidad 0.87 = foto de móvil típica (0.95 parece procesada por app)
+      const rawDataUrl = canvas.toDataURL('image/jpeg', 0.87);
+      // Point 4: clonar EXIF de foto real si el usuario la aportó,
+      // si no inyectar metadatos de cámara aleatorios (elimina metadata AI).
+      const dataUrl = exifSourceUrl
+        ? await cloneExifFrom(exifSourceUrl, rawDataUrl)
+        : await injectRandomExif(rawDataUrl);
       const link = document.createElement('a');
       const ts = Math.floor(Date.now() / 1000);
+      const brandSlug = activeBrand.replace(/\s+/g, '_');
       link.href = dataUrl;
-      link.download = `IMG_NB_RECON_${ts}.jpg`;
+      link.download = `IMG_${brandSlug}_RECON_${ts}.jpg`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -278,6 +350,77 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
       }
     } finally {
       setLoading(false);
+    }
+  };
+
+  const generateBoxLabel = async () => {
+    if (!detections) return;
+    setLoadingBox(true);
+    setBoxImage(null);
+    setBoxCompositeImage(null);
+    setBoxBarcodeValue(null);
+    try {
+      const res = await authFetch('/api/box/generate', {
+        imageBase64: boxOriginalImage,
+        brand: activeBrand,
+        detections,
+        customPrompt: '',
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Error en el servidor');
+      if (data.image) {
+        setBoxImage(data.image);
+        setBoxBarcodeValue(data.barcodeValue || null);
+      } else {
+        setError('El modelo no devolvió imagen de caja.');
+      }
+    } catch (err: any) {
+      setError('Error al generar caja: ' + err.message);
+    } finally {
+      setLoadingBox(false);
+    }
+  };
+
+  const applyBarcodeToBox = async () => {
+    if (!boxImage || !boxBarcodeValue) return;
+    setLoadingBarcode(true);
+    try {
+      const { overlayBarcode } = await import('../lib/barcodeClient');
+      const composite = await overlayBarcode(boxImage, boxBarcodeValue);
+      setBoxCompositeImage(composite);
+    } catch (err: any) {
+      setError('Error al pegar código de barras: ' + err.message);
+    } finally {
+      setLoadingBarcode(false);
+    }
+  };
+
+  const handleDownloadBox = async () => {
+    const src = boxCompositeImage || boxImage;
+    if (!src) return;
+    try {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = src; });
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      canvas.getContext('2d')!.drawImage(img, 0, 0);
+      await applyFilmGrain(canvas);
+      const rawUrl = canvas.toDataURL('image/jpeg', 0.87);
+      const finalUrl = exifSourceUrl
+        ? await cloneExifFrom(exifSourceUrl, rawUrl)
+        : await injectRandomExif(rawUrl);
+      const link = document.createElement('a');
+      const ts = Math.floor(Date.now() / 1000);
+      const brandSlug = activeBrand.replace(/\s+/g, '_');
+      link.href = finalUrl;
+      link.download = `IMG_${brandSlug}_BOX_${ts}.jpg`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err) {
+      setError('Error al descargar etiqueta de caja.');
     }
   };
 
@@ -446,6 +589,20 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
               accept="image/*"
               capture="environment"
               onChange={handleFileUpload}
+            />
+            {/* Fuente EXIF real (Point 4) */}
+            <input
+              type="file"
+              ref={exifInputRef}
+              className="hidden"
+              accept="image/jpeg,image/jpg"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onloadend = () => setExifSourceUrl(reader.result as string);
+                reader.readAsDataURL(file);
+              }}
             />
           </div>
 
@@ -702,6 +859,29 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
                        </button>
                     </div>
                     <p className="text-[10px] text-white/20 uppercase tracking-widest font-mono">Archivo Reconstruido - Alta Fidelidad</p>
+                    {/* Point 4: clonar EXIF de una foto real */}
+                    <div className="flex items-center justify-center gap-2">
+                      <button
+                        onClick={() => exifInputRef.current?.click()}
+                        className={`text-[10px] px-3 py-1.5 rounded-lg border transition-all flex items-center gap-1.5 ${
+                          exifSourceUrl
+                            ? 'border-acid/60 text-acid bg-acid-soft'
+                            : 'border-white/10 text-white/20 hover:text-white/50 hover:border-white/20'
+                        }`}
+                      >
+                        <Camera className="w-3 h-3" />
+                        {exifSourceUrl ? 'EXIF real activo ✓' : 'Clonar EXIF de foto real'}
+                      </button>
+                      {exifSourceUrl && (
+                        <button
+                          onClick={() => setExifSourceUrl(null)}
+                          className="text-white/20 hover:text-red-400 transition-colors"
+                          title="Quitar fuente EXIF"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </motion.div>
               ) : (
@@ -727,11 +907,137 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
         </div>
       </div>
 
+      {/* ── Box Label Section ────────────────────────────────────────────── */}
+      <div className="border-t border-white/10 pt-6 space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-bold text-white/80 uppercase tracking-widest">Etiqueta de Caja</h3>
+            <p className="text-[10px] text-white/30 mt-0.5">Genera la etiqueta de la caja con códigos sincronizados con la lengüeta</p>
+          </div>
+          {boxImage && (
+            <span className="text-[9px] px-2 py-1 rounded-full bg-acid-soft border border-acid/30 text-acid uppercase tracking-widest">
+              Lista
+            </span>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          {/* Box upload */}
+          <div className="space-y-4">
+            <div
+              className={`h-[200px] border-2 border-dashed rounded-3xl flex flex-col items-center justify-center transition-all overflow-hidden relative ${
+                boxOriginalImage ? 'border-acid/50 bg-black' : 'border-white/10 bg-white/5'
+              }`}
+            >
+              {boxOriginalImage ? (
+                <img src={boxOriginalImage} className="w-full h-full object-contain opacity-60" />
+              ) : (
+                <>
+                  <ImageIcon className="w-8 h-8 text-white/10 mb-3" />
+                  <p className="text-xs text-white/30 mb-3">Foto de la caja</p>
+                  <button
+                    type="button"
+                    onClick={() => boxFileInputRef.current?.click()}
+                    className="flex items-center gap-2 bg-white/5 hover:bg-white/10 border border-white/10 text-white/50 px-4 py-2 rounded-xl text-xs font-medium transition"
+                  >
+                    <Upload className="w-3.5 h-3.5" /> Subir foto de caja
+                  </button>
+                </>
+              )}
+              {boxOriginalImage && (
+                <button
+                  type="button"
+                  onClick={() => boxFileInputRef.current?.click()}
+                  className="absolute bottom-3 right-3 bg-black/60 border border-white/10 text-white/50 p-2 rounded-lg"
+                >
+                  <RefreshCcw className="w-3.5 h-3.5" />
+                </button>
+              )}
+              <input
+                type="file"
+                ref={boxFileInputRef}
+                className="hidden"
+                accept="image/*"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  const reader = new FileReader();
+                  reader.onloadend = async () => {
+                    const compressed = await compressImage(reader.result as string);
+                    setBoxOriginalImage(compressed);
+                  };
+                  reader.readAsDataURL(file);
+                }}
+              />
+            </div>
+
+            {detections && (
+              <button
+                onClick={generateBoxLabel}
+                disabled={loadingBox || !detections}
+                className="w-full py-3.5 bg-white/10 hover:bg-white/15 text-white font-bold rounded-2xl border border-white/10 hover:border-white/20 transition-all flex items-center justify-center gap-2"
+              >
+                {loadingBox ? <RefreshCcw className="w-4 h-4 animate-spin" /> : <Scissors className="w-4 h-4" />}
+                GENERAR ETIQUETA CAJA
+              </button>
+            )}
+            {!detections && (
+              <p className="text-center text-[10px] text-white/20 py-2">
+                Analiza primero la lengüeta para sincronizar los códigos
+              </p>
+            )}
+          </div>
+
+          {/* Box result */}
+          <div className="bg-[#141414] border border-white/5 rounded-3xl p-6 flex flex-col items-center justify-center relative overflow-hidden min-h-[250px]">
+            {boxImage ? (
+              <div className="space-y-4 w-full text-center">
+                <img src={boxCompositeImage || boxImage} className="max-w-full rounded-xl border border-white/10 shadow-lg" alt="Box label" />
+                <div className="flex flex-col items-center gap-3">
+                  <div className="flex gap-2 flex-wrap justify-center">
+                    <button
+                      onClick={handleDownloadBox}
+                      className="px-5 py-2.5 bg-white text-black font-bold rounded-xl hover:bg-acid transition-colors flex items-center gap-2 text-sm"
+                    >
+                      <Download className="w-3.5 h-3.5" /> Descargar Caja
+                    </button>
+                    <button
+                      onClick={applyBarcodeToBox}
+                      disabled={!boxBarcodeValue || loadingBarcode}
+                      className="px-5 py-2.5 bg-white/10 hover:bg-white/15 text-white font-bold rounded-xl border border-white/10 transition-colors flex items-center gap-2 text-sm"
+                    >
+                      {loadingBarcode ? <RefreshCcw className="w-3.5 h-3.5 animate-spin" /> : <ArrowRight className="w-3.5 h-3.5" />}
+                      Pegar Código de Barras
+                    </button>
+                  </div>
+                  {boxBarcodeValue && (
+                    <p className="text-[9px] text-white/30 font-mono">
+                      EAN: {boxBarcodeValue}
+                    </p>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="text-center opacity-20 space-y-3">
+                <ImageIcon className="w-10 h-10 mx-auto" />
+                <p className="text-xs">La etiqueta de caja aparecerá aquí</p>
+              </div>
+            )}
+            {loadingBox && (
+              <div className="absolute inset-0 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center gap-4">
+                <RefreshCcw className="w-8 h-8 text-acid animate-spin" />
+                <p className="text-xs font-bold text-white uppercase tracking-widest">Generando etiqueta caja...</p>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
       <div className="bg-acid-soft border border-acid rounded-2xl p-4 flex gap-4 text-acid text-[11px] leading-relaxed">
         <Info className="w-5 h-5 flex-shrink-0 text-acid" />
         <p>
-          Este módulo utiliza Vision-AI para detectar y reconstruir etiquetas de calzado. Al regenerar, 
-          Gemini crea una versión sintética limpia basada en los datos extraídos para asegurar neutralidad 
+          Este módulo utiliza Vision-AI para detectar y reconstruir etiquetas de calzado. Al regenerar,
+          Gemini crea una versión sintética limpia basada en los datos extraídos para asegurar neutralidad
           en auditorías visuales.
         </p>
       </div>
