@@ -3,7 +3,9 @@ import {
   Upload, Scissors, Info, RefreshCcw,
   CheckCircle2, AlertCircle, ScanText,
   Image as ImageIcon, Download, Copy,
-  ArrowRight, Camera, Eye, X, BellOff
+  ArrowRight, Camera, Eye, X, BellOff,
+  ChevronDown, ChevronUp, Shuffle, Package,
+  Zap
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { injectRandomExif, cloneExifFrom } from '../lib/randomExif';
@@ -181,6 +183,9 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
   const [loadingBox, setLoadingBox] = useState(false);
   const boxFileInputRef = useRef<HTMLInputElement>(null);
 
+  // ── UI state ─────────────────────────────────────────────────────────────
+  const [showAllData, setShowAllData] = useState(false);
+
   // Load admin-defined prompts from server on mount
   useEffect(() => {
     fetch('/api/tongue/prompts')
@@ -270,6 +275,21 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
     } else {
       setDetections({ ...detections, brandSerial: buildAdidasBrandSerial() });
     }
+  };
+
+  const handleRandomizeAll = () => {
+    if (!detections) return;
+    const n = { ...detections };
+    if (activeBrand === 'NEW BALANCE') {
+      n.reference = buildNBRef1(); n.reference2 = buildNBRef2(); n.brandSerial = buildNBBrandCode();
+    } else if (activeBrand === 'ONITSUKA') {
+      n.reference = buildOnitsukaRef(); n.brandSerial = buildOnitsukaBrandSerial();
+    } else if (activeBrand === 'ASICS') {
+      n.reference = buildAsicsRef(); n.brandSerial = buildAsicsBrandSerial();
+    } else {
+      n.reference = buildAdidasRef(); n.brandSerial = buildAdidasBrandSerial();
+    }
+    setDetections(n);
   };
 
   const executeDownload = async () => {
@@ -403,85 +423,78 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
     }
   };
 
-  return (
-    <div className="space-y-6">
+  // hidden file inputs (shared across sections)
+  const fileInputs = (
+    <>
+      <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileUpload} />
+      <input type="file" ref={cameraInputRef} className="hidden" accept="image/*" capture="environment" onChange={handleFileUpload} />
+      <input type="file" ref={exifInputRef} className="hidden" accept="image/jpeg,image/jpg"
+        onChange={(e) => {
+          const file = e.target.files?.[0]; if (!file) return;
+          const reader = new FileReader();
+          reader.onloadend = () => setExifSourceUrl(reader.result as string);
+          reader.readAsDataURL(file);
+        }}
+      />
+      <input type="file" ref={boxFileInputRef} className="hidden" accept="image/*"
+        onChange={(e) => {
+          const file = e.target.files?.[0]; if (!file) return;
+          const reader = new FileReader();
+          reader.onloadend = async () => { const c = await compressImage(reader.result as string); setBoxOriginalImage(c); };
+          reader.readAsDataURL(file);
+        }}
+      />
+    </>
+  );
 
-      {/* ── Aviso descarga ─────────────────────────────────────────────────── */}
+  return (
+    <div className="space-y-4 max-w-xl mx-auto">
+      {fileInputs}
+
+      {/* ── Aviso descarga ───────────────────────────────────────────────── */}
       <AnimatePresence>
         {showDownloadWarning && (
           <>
-            {/* Backdrop */}
-            <motion.div
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm"
-              onClick={() => setShowDownloadWarning(false)}
-            />
-
-            {/* Modal */}
+              onClick={() => setShowDownloadWarning(false)} />
             <motion.div
-              initial={{ opacity: 0, scale: 0.92, y: 16 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
+              initial={{ opacity: 0, scale: 0.92, y: 16 }} animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.94, y: 8 }}
               transition={{ type: 'spring', damping: 28, stiffness: 340 }}
               className="fixed inset-x-4 bottom-6 sm:inset-auto sm:left-1/2 sm:-translate-x-1/2 sm:bottom-auto sm:top-1/2 sm:-translate-y-1/2 z-50 w-auto sm:w-full sm:max-w-md"
             >
               <div className="bg-[#141414] border border-[#d4ff00]/25 rounded-[24px] p-6 shadow-[0_32px_80px_rgba(0,0,0,0.7)]">
-                {/* Header */}
                 <div className="flex items-start justify-between gap-3 mb-4">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-xl bg-[#d4ff00]/10 border border-[#d4ff00]/20 flex items-center justify-center shrink-0">
                       <Eye className="w-5 h-5 text-[#d4ff00]" />
                     </div>
                     <h3 className="text-[#f2f2ef] font-bold text-base leading-tight">
-                      Ojo chaval,<br />
-                      <span className="text-[#d4ff00]">revisa antes de subir</span>
+                      Ojo chaval,<br /><span className="text-[#d4ff00]">revisa antes de subir</span>
                     </h3>
                   </div>
-                  <button
-                    onClick={() => setShowDownloadWarning(false)}
-                    className="text-[#555550] hover:text-[#f2f2ef] transition-colors shrink-0 mt-0.5"
-                  >
+                  <button onClick={() => setShowDownloadWarning(false)} className="text-[#555550] hover:text-[#f2f2ef] transition-colors shrink-0 mt-0.5">
                     <X className="w-5 h-5" />
                   </button>
                 </div>
-
-                {/* Message */}
                 <p className="text-[#888880] text-sm leading-relaxed mb-5">
-                  Antes de subir la imagen a Vinted,{' '}
+                  Antes de subir a Vinted,{' '}
                   <span className="text-[#f2f2ef] font-medium">comprueba que la lengüeta esté perfecta</span>
-                  {' '}— que los códigos se lean bien, que el fondo esté limpio y que no haya artefactos raros.
-                  Si la subes con fallos te podrían bloquear igual.
+                  {' '}— códigos legibles, fondo limpio, sin artefactos raros.
                 </p>
-
-                {/* Actions */}
                 <div className="flex flex-col sm:flex-row gap-2">
-                  <button
-                    onClick={() => {
-                      setShowDownloadWarning(false);
-                      executeDownload();
-                    }}
-                    className="flex-1 bg-[#d4ff00] hover:bg-[#b3da00] text-black font-bold py-2.5 px-4 rounded-xl text-sm transition flex items-center justify-center gap-2"
-                  >
+                  <button onClick={() => { setShowDownloadWarning(false); executeDownload(); }}
+                    className="flex-1 bg-[#d4ff00] hover:bg-[#b3da00] text-black font-bold py-2.5 px-4 rounded-xl text-sm transition flex items-center justify-center gap-2">
                     <Download className="w-4 h-4" /> Entendido, descargar
                   </button>
-                  <button
-                    onClick={() => setShowDownloadWarning(false)}
-                    className="flex-1 bg-white/[0.06] hover:bg-white/[0.1] text-[#888880] hover:text-[#f2f2ef] font-medium py-2.5 px-4 rounded-xl text-sm transition"
-                  >
+                  <button onClick={() => setShowDownloadWarning(false)}
+                    className="flex-1 bg-white/[0.06] hover:bg-white/[0.1] text-[#888880] hover:text-[#f2f2ef] font-medium py-2.5 px-4 rounded-xl text-sm transition">
                     Revisar primero
                   </button>
                 </div>
-
-                {/* Never show again */}
-                <button
-                  onClick={() => {
-                    localStorage.setItem('tongue_no_warn', '1');
-                    setNeverWarn(true);
-                    setShowDownloadWarning(false);
-                    executeDownload();
-                  }}
-                  className="w-full mt-3 flex items-center justify-center gap-1.5 text-[#444440] hover:text-[#666660] text-xs transition py-1"
-                >
+                <button onClick={() => { localStorage.setItem('tongue_no_warn', '1'); setNeverWarn(true); setShowDownloadWarning(false); executeDownload(); }}
+                  className="w-full mt-3 flex items-center justify-center gap-1.5 text-[#444440] hover:text-[#666660] text-xs transition py-1">
                   <BellOff className="w-3 h-3" /> No volver a mostrar este aviso
                 </button>
               </div>
@@ -490,523 +503,359 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
         )}
       </AnimatePresence>
 
+      {/* ── MARCA ────────────────────────────────────────────────────────── */}
       <div className="flex gap-2">
         {([
-          { key: 'ADIDAS', label: 'ADIDAS' },
-          { key: 'NEW BALANCE', label: 'NEW BALANCE' },
-          { key: 'ASICS', label: 'ASICS' },
-          { key: 'ONITSUKA', label: 'ONITSUKA' },
+          { key: 'ADIDAS', label: 'Adidas' },
+          { key: 'NEW BALANCE', label: 'NB' },
+          { key: 'ASICS', label: 'Asics' },
+          { key: 'ONITSUKA', label: 'Onitsuka' },
         ] as { key: 'ADIDAS' | 'NEW BALANCE' | 'ASICS' | 'ONITSUKA'; label: string }[]).map(({ key, label }) => (
-          <button
-            key={key}
-            onClick={() => setActiveBrand(key)}
-            className={`flex-1 py-3 rounded-2xl border-2 transition-all font-bold tracking-wider text-xs flex items-center justify-center ${
+          <button key={key} onClick={() => setActiveBrand(key)}
+            className={`flex-1 py-2.5 rounded-2xl border-2 transition-all font-bold tracking-wide text-xs ${
               activeBrand === key
                 ? 'bg-acid border-acid text-black shadow-acid'
                 : 'bg-white/5 border-white/10 text-white/40 hover:bg-white/10 hover:border-white/20'
-            }`}
-          >
+            }`}>
             {label}
           </button>
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {/* Left Side: Upload & OCR */}
-        <div className="space-y-6">
-          <div
-            className={`h-[240px] lg:h-[300px] border-2 border-dashed rounded-3xl flex flex-col items-center justify-center transition-all overflow-hidden relative ${
-              originalImage ? 'border-acid bg-black' : 'border-white/10 bg-white/5'
-            }`}
-          >
-            {originalImage ? (
-              <img src={originalImage} className="w-full h-full object-contain opacity-60" />
-            ) : (
-              <>
-                <ImageIcon className="w-10 h-10 text-white/10 mb-4" />
-                <p className="text-sm text-white/40 font-medium mb-4">Selecciona la lengueta</p>
-                <div className="flex gap-3">
-                  <button
-                    type="button"
-                    onClick={() => cameraInputRef.current?.click()}
-                    className="flex items-center gap-2 bg-acid-soft hover:bg-acid/30 border border-acid text-acid px-4 py-2.5 rounded-xl text-sm font-medium transition"
-                  >
-                    <Camera className="w-4 h-4" /> Cámara
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="flex items-center gap-2 bg-white/5 hover:bg-white/10 border border-white/10 text-white/50 px-4 py-2.5 rounded-xl text-sm font-medium transition"
-                  >
-                    <Upload className="w-4 h-4" /> Galería
-                  </button>
-                </div>
-              </>
-            )}
-            {originalImage && (
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="absolute bottom-3 right-3 bg-black/60 border border-white/10 text-white/50 p-2 rounded-lg"
-              >
-                <RefreshCcw className="w-3.5 h-3.5" />
-              </button>
-            )}
-            {/* Galería */}
-            <input
-              type="file"
-              ref={fileInputRef}
-              className="hidden"
-              accept="image/*"
-              onChange={handleFileUpload}
-            />
-            {/* Cámara directa */}
-            <input
-              type="file"
-              ref={cameraInputRef}
-              className="hidden"
-              accept="image/*"
-              capture="environment"
-              onChange={handleFileUpload}
-            />
-            {/* Fuente EXIF real (Point 4) */}
-            <input
-              type="file"
-              ref={exifInputRef}
-              className="hidden"
-              accept="image/jpeg,image/jpg"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (!file) return;
-                const reader = new FileReader();
-                reader.onloadend = () => setExifSourceUrl(reader.result as string);
-                reader.readAsDataURL(file);
-              }}
-            />
-          </div>
-
-          <div className="bg-[#141414] border border-white/5 rounded-3xl p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-xs uppercase tracking-[0.2em] font-bold text-white/40">Datos Detectados (OCR)</h3>
-              {detections && (
-                <button onClick={() => setDetections(null)} className="text-[10px] text-acid hover:underline">Limpiar</button>
-              )}
-            </div>
-
-            {loading && !detections && (
-              <div className="py-8 flex flex-col items-center gap-3">
-                <RefreshCcw className="w-6 h-6 text-acid animate-spin" />
-                <span className="text-[10px] text-white/40 animate-pulse uppercase tracking-widest">{status}</span>
-              </div>
-            )}
-
-            {error && !loading && (
-              <div className="py-4 px-4 bg-red-500/10 border border-red-500/30 rounded-2xl">
-                <p className="text-[11px] text-red-400 font-medium">{error}</p>
-              </div>
-            )}
-
-            {!loading && !detections && !error && (
-              <div className="py-8 text-center border border-dashed border-white/5 rounded-2xl">
-                <ScanText className="w-8 h-8 text-white/5 mx-auto mb-2" />
-                <p className="text-[11px] text-white/20">Sube una imagen para extraer los datos</p>
-              </div>
-            )}
-
-            {detections && (
-              <motion.div 
-                initial={{ opacity: 0 }} 
-                animate={{ opacity: 1 }}
-                className="grid grid-cols-2 gap-4"
-              >
-                <div className="space-y-1">
-                  <label className="text-[9px] uppercase text-white/30">Modelo</label>
-                  <input 
-                    value={detections.model} 
-                    onChange={e => setDetections({...detections, model: e.target.value})}
-                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-acid outline-none"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[9px] uppercase text-white/30">SKU / Art No</label>
-                  <input 
-                    value={detections.sku} 
-                    onChange={e => setDetections({...detections, sku: e.target.value})}
-                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-acid outline-none"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <div className="flex justify-between items-center">
-                    <label className="text-[9px] uppercase text-white/30">
-                      {activeBrand === 'ADIDAS' ? 'Referencia #' : activeBrand === 'ONITSUKA' ? 'Código de Lote' : 'Referencia 1 (12d)'}
-                    </label>
-                    <button 
-                      onClick={generateRandomReference}
-                      className="text-[8px] text-acid hover:text-acid uppercase tracking-tighter"
-                    >
-                      [Random]
-                    </button>
-                  </div>
-                  <input 
-                    value={detections.reference} 
-                    onChange={e => setDetections({...detections, reference: e.target.value})}
-                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-acid outline-none font-mono"
-                  />
-                </div>
-
-                <div className={`space-y-1 ${(activeBrand === 'ADIDAS' || activeBrand === 'ONITSUKA' || activeBrand === 'ASICS') ? 'opacity-30 pointer-events-none' : ''}`}>
-                  <div className="flex justify-between items-center">
-                    <label className="text-[9px] uppercase text-white/30">Referencia 2 (7d)</label>
-                    <button 
-                      onClick={generateRandomReference2}
-                      className="text-[8px] text-acid hover:text-acid uppercase tracking-tighter"
-                    >
-                      [Random]
-                    </button>
-                  </div>
-                  <input 
-                    value={detections.reference2 || ''} 
-                    onChange={e => setDetections({...detections, reference2: e.target.value})}
-                    placeholder="Solo NB..."
-                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-acid outline-none font-mono"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <div className="flex justify-between items-center">
-                    <label className="text-[9px] uppercase text-white/30">
-                      Cód. Marca / Alfanumérico
-                    </label>
-                    <button 
-                      onClick={generateRandomBrandSerial}
-                      className="text-[8px] text-acid hover:text-acid uppercase tracking-tighter"
-                    >
-                      [Random]
-                    </button>
-                  </div>
-                  <input 
-                    value={detections.brandSerial} 
-                    onChange={e => setDetections({...detections, brandSerial: e.target.value})}
-                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-acid outline-none font-mono"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[9px] uppercase text-white/30">Fecha</label>
-                  <input 
-                    value={detections.date} 
-                    onChange={e => setDetections({...detections, date: e.target.value})}
-                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-acid outline-none"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[9px] uppercase text-white/30">LVL / Factory</label>
-                  <input 
-                    value={detections.lvl} 
-                    onChange={e => setDetections({...detections, lvl: e.target.value})}
-                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-acid outline-none"
-                  />
-                </div>
-                <div className="col-span-2 grid grid-cols-4 gap-2">
-                  {(['us', 'uk', 'fr', 'jp'] as const).map(size => (
-                    <div key={size} className="space-y-1">
-                      <label className="text-[9px] uppercase text-white/30">{size}</label>
-                      <input 
-                        value={detections.sizes[size]} 
-                        onChange={e => setDetections({...detections, sizes: {...detections.sizes, [size]: e.target.value}})}
-                        className="w-full bg-black/40 border border-white/10 rounded-lg px-2 py-2 text-center text-xs text-white focus:border-acid outline-none uppercase"
-                      />
-                    </div>
-                  ))}
-                </div>
-
-                <div className="col-span-2 space-y-3 pt-4 border-t border-white/5">
-                  <div className="space-y-1">
-                    <div className="flex justify-between items-center">
-                      <label className="text-[9px] uppercase text-acid font-bold">Título del Anuncio (Vinted)</label>
-                      <button 
-                        onClick={() => {
-                          if (detections?.listingTitle) {
-                            navigator.clipboard.writeText(detections.listingTitle);
-                            setStatus("Título copiado al portapapeles");
-                          }
-                        }}
-                        className="flex items-center gap-1 text-[8px] text-white/40 hover:text-white uppercase tracking-tighter"
-                      >
-                        <Copy className="w-2 h-2" /> Copiar
-                      </button>
-                    </div>
-                    <input 
-                      value={detections.listingTitle || ''} 
-                      onChange={e => setDetections({...detections, listingTitle: e.target.value})}
-                      className="w-full bg-acid-soft border border-acid rounded-lg px-3 py-2 text-xs text-white focus:border-acid outline-none"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <div className="flex justify-between items-center">
-                      <label className="text-[9px] uppercase text-acid font-bold">Descripción del Anuncio</label>
-                      <button 
-                        onClick={() => {
-                          if (detections?.listingDescription) {
-                            navigator.clipboard.writeText(detections.listingDescription);
-                            setStatus("Descripción copiada al portapapeles");
-                          }
-                        }}
-                        className="flex items-center gap-1 text-[8px] text-white/40 hover:text-white uppercase tracking-tighter"
-                      >
-                        <Copy className="w-2 h-2" /> Copiar
-                      </button>
-                    </div>
-                    <textarea 
-                      value={detections.listingDescription || ''} 
-                      onChange={e => setDetections({...detections, listingDescription: e.target.value})}
-                      className="w-full bg-acid-soft border border-acid rounded-lg px-3 py-2 text-xs text-white focus:border-acid outline-none h-24 resize-none"
-                    />
-                  </div>
-                </div>
-
-                <div className="col-span-2 space-y-1">
-                  <label className="text-[9px] uppercase text-white/30">
-                    Prompt de Generación ({activeBrand})
-                  </label>
-                  <textarea 
-                    placeholder={`Pega aquí el prompt personalizado de ${activeBrand}...`}
-                    value={activeBrand === 'ADIDAS' ? customPromptAdidas : activeBrand === 'ASICS' ? customPromptAsics : activeBrand === 'ONITSUKA' ? customPromptOnitsuka : customPromptNB}
-                    onChange={e => activeBrand === 'ADIDAS' ? setCustomPromptAdidas(e.target.value) : activeBrand === 'ASICS' ? setCustomPromptAsics(e.target.value) : activeBrand === 'ONITSUKA' ? setCustomPromptOnitsuka(e.target.value) : setCustomPromptNB(e.target.value)}
-                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-acid outline-none h-20 resize-none"
-                  />
-                </div>
-              </motion.div>
-            )}
-
-            {detections && (
-              <button 
-                onClick={generateModifiedTongue}
-                disabled={loading}
-                className="w-full py-4 bg-acid text-black font-bold rounded-2xl hover:bg-acid transition-all shadow-[0_0_30px_rgba(16,185,129,0.2)] flex items-center justify-center gap-2 mt-4"
-              >
-                {loading ? <RefreshCcw className="w-5 h-5 animate-spin" /> : <Scissors className="w-5 h-5" />}
-                REGENERAR LENGÜETA
-              </button>
-            )}
-          </div>
+      {/* ── PASO 1: SUBIR FOTOS ──────────────────────────────────────────── */}
+      <div className="bg-[#141414] border border-white/5 rounded-3xl p-5 space-y-4">
+        <div className="flex items-center gap-2.5">
+          <span className="w-5 h-5 rounded-full bg-acid text-black text-[9px] font-black flex items-center justify-center shrink-0">1</span>
+          <h3 className="text-xs font-bold text-white/50 uppercase tracking-widest">Subir fotos</h3>
         </div>
 
-        {/* Right Side: Result */}
-        <div className="space-y-6">
-          <div className="bg-[#141414] border border-white/5 rounded-3xl p-8 h-full flex flex-col items-center justify-center relative overflow-hidden group min-h-[500px]">
-            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-acid to-transparent" />
-            
-            <AnimatePresence mode="wait">
-              {generatedImage ? (
-                <motion.div 
-                  initial={{ opacity: 0, scale: 0.9 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  className="space-y-6 w-full text-center"
-                >
-                  <div className="relative inline-block mx-auto">
-                    <img 
-                      src={generatedImage} 
-                      className="max-w-full rounded-2xl shadow-[0_30px_60px_rgba(0,0,0,0.5)] border border-white/10" 
-                      alt="Generated"
-                    />
-                    <div className="absolute inset-0 bg-acid-soft opacity-0 group-hover:opacity-100 transition-opacity rounded-2xl pointer-events-none" />
-                  </div>
-                  
-                  <div className="flex flex-col items-center gap-4">
-                    <div className="flex gap-3">
-                       <button 
-                        onClick={handleDownload}
-                        className="px-6 py-3 bg-white text-black font-bold rounded-xl hover:bg-acid transition-colors flex items-center gap-2"
-                       >
-                         <Download className="w-4 h-4" /> Bajar Imagen
-                       </button>
-                       <button 
-                        onClick={() => {
-                          if (generatedImage) {
-                            fetch(generatedImage)
-                              .then(res => res.blob())
-                              .then(blob => {
-                                const item = new ClipboardItem({ "image/png": blob });
-                                navigator.clipboard.write([item]);
-                                setStatus("Imagen copiada al portapapeles");
-                              });
-                          }
-                        }}
-                        className="px-6 py-3 bg-white/10 text-white font-bold rounded-xl hover:bg-white/20 transition-colors flex items-center gap-2"
-                       >
-                         <Copy className="w-4 h-4" /> Copiar
-                       </button>
-                    </div>
-                    <p className="text-[10px] text-white/20 uppercase tracking-widest font-mono">Archivo Reconstruido - Alta Fidelidad</p>
-                    {/* Point 4: clonar EXIF de una foto real */}
-                    <div className="flex items-center justify-center gap-2">
-                      <button
-                        onClick={() => exifInputRef.current?.click()}
-                        className={`text-[10px] px-3 py-1.5 rounded-lg border transition-all flex items-center gap-1.5 ${
-                          exifSourceUrl
-                            ? 'border-acid/60 text-acid bg-acid-soft'
-                            : 'border-white/10 text-white/20 hover:text-white/50 hover:border-white/20'
-                        }`}
-                      >
-                        <Camera className="w-3 h-3" />
-                        {exifSourceUrl ? 'EXIF real activo ✓' : 'Clonar EXIF de foto real'}
-                      </button>
-                      {exifSourceUrl && (
-                        <button
-                          onClick={() => setExifSourceUrl(null)}
-                          className="text-white/20 hover:text-red-400 transition-colors"
-                          title="Quitar fuente EXIF"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </motion.div>
-              ) : (
-                <div className="text-center space-y-6 opacity-20 group-hover:opacity-40 transition-opacity">
-                  <div className="w-24 h-24 bg-white/5 rounded-full flex items-center justify-center mx-auto border border-white/5">
-                    <ImageIcon className="w-12 h-12" />
-                  </div>
-                  <div className="space-y-2">
-                    <h3 className="text-xl font-bold">Vista Previa</h3>
-                    <p className="text-xs max-w-[200px] mx-auto">La nueva lengueta aparecerá aquí después del procesado</p>
-                  </div>
-                </div>
-              )}
-            </AnimatePresence>
-
-            {loading && generatedImage && (
-              <div className="absolute inset-0 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center gap-4 z-10">
-                <RefreshCcw className="w-10 h-10 text-acid animate-spin" />
-                <p className="text-xs font-bold text-white uppercase tracking-widest">{status}</p>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* ── Box Label Section ────────────────────────────────────────────── */}
-      <div className="border-t border-white/10 pt-6 space-y-6">
-        <div className="flex items-center justify-between">
+        <div className="grid grid-cols-2 gap-3">
+          {/* Lengüeta */}
           <div>
-            <h3 className="text-sm font-bold text-white/80 uppercase tracking-widest">Etiqueta de Caja</h3>
-            <p className="text-[10px] text-white/30 mt-0.5">Genera la etiqueta de la caja con códigos sincronizados con la lengüeta</p>
+            <p className="text-[9px] uppercase text-white/30 mb-2 tracking-wider">Lengüeta</p>
+            {originalImage ? (
+              <div className="relative h-32 rounded-2xl overflow-hidden border border-acid/40 bg-black">
+                <img src={originalImage} className="w-full h-full object-contain" />
+                <button onClick={() => fileInputRef.current?.click()}
+                  className="absolute bottom-2 right-2 bg-black/70 border border-white/10 text-white/60 p-1.5 rounded-lg hover:bg-black transition">
+                  <RefreshCcw className="w-3 h-3" />
+                </button>
+                {loading && !detections && (
+                  <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center gap-1.5">
+                    <RefreshCcw className="w-5 h-5 text-acid animate-spin" />
+                    <span className="text-[9px] text-acid uppercase tracking-widest">OCR...</span>
+                  </div>
+                )}
+                {detections && (
+                  <div className="absolute top-2 right-2 w-5 h-5 rounded-full bg-acid flex items-center justify-center">
+                    <CheckCircle2 className="w-3 h-3 text-black" />
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                <button onClick={() => cameraInputRef.current?.click()}
+                  className="h-32 flex flex-col items-center justify-center gap-2 bg-acid-soft hover:bg-acid/20 border-2 border-dashed border-acid/40 rounded-2xl transition">
+                  <Camera className="w-6 h-6 text-acid" />
+                  <span className="text-[10px] font-bold text-acid">Cámara</span>
+                </button>
+                <button onClick={() => fileInputRef.current?.click()}
+                  className="py-2 flex items-center justify-center gap-1.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl transition text-[10px] text-white/40">
+                  <Upload className="w-3 h-3" /> Galería
+                </button>
+              </div>
+            )}
           </div>
-          {boxImage && (
-            <span className="text-[9px] px-2 py-1 rounded-full bg-acid-soft border border-acid/30 text-acid uppercase tracking-widest">
-              Lista
-            </span>
+
+          {/* Caja */}
+          <div>
+            <p className="text-[9px] uppercase text-white/30 mb-2 tracking-wider">Caja <span className="text-white/15 normal-case font-normal">(opcional)</span></p>
+            {boxOriginalImage ? (
+              <div className="relative h-32 rounded-2xl overflow-hidden border border-white/15 bg-black">
+                <img src={boxOriginalImage} className="w-full h-full object-contain opacity-75" />
+                <button onClick={() => boxFileInputRef.current?.click()}
+                  className="absolute bottom-2 right-2 bg-black/70 border border-white/10 text-white/60 p-1.5 rounded-lg hover:bg-black transition">
+                  <RefreshCcw className="w-3 h-3" />
+                </button>
+              </div>
+            ) : (
+              <button onClick={() => boxFileInputRef.current?.click()}
+                className="w-full h-[9.5rem] flex flex-col items-center justify-center gap-2 bg-white/3 hover:bg-white/6 border-2 border-dashed border-white/10 hover:border-white/20 rounded-2xl transition">
+                <Package className="w-6 h-6 text-white/20" />
+                <span className="text-[10px] text-white/25">Subir foto caja</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* EXIF opcional */}
+        <div className="flex items-center gap-2 pt-1">
+          <button onClick={() => exifInputRef.current?.click()}
+            className={`flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-lg border transition-all ${
+              exifSourceUrl
+                ? 'border-acid/50 text-acid bg-acid-soft'
+                : 'border-white/8 text-white/20 hover:text-white/40 hover:border-white/15'
+            }`}>
+            <Camera className="w-3 h-3" />
+            {exifSourceUrl ? 'EXIF real activo ✓' : 'Clonar EXIF de foto real'}
+          </button>
+          {exifSourceUrl && (
+            <button onClick={() => setExifSourceUrl(null)} className="text-white/20 hover:text-red-400 transition-colors">
+              <X className="w-3.5 h-3.5" />
+            </button>
           )}
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Box upload */}
-          <div className="space-y-4">
-            <div
-              className={`h-[200px] border-2 border-dashed rounded-3xl flex flex-col items-center justify-center transition-all overflow-hidden relative ${
-                boxOriginalImage ? 'border-acid/50 bg-black' : 'border-white/10 bg-white/5'
-              }`}
-            >
-              {boxOriginalImage ? (
-                <img src={boxOriginalImage} className="w-full h-full object-contain opacity-60" />
-              ) : (
-                <>
-                  <ImageIcon className="w-8 h-8 text-white/10 mb-3" />
-                  <p className="text-xs text-white/30 mb-3">Foto de la caja</p>
-                  <button
-                    type="button"
-                    onClick={() => boxFileInputRef.current?.click()}
-                    className="flex items-center gap-2 bg-white/5 hover:bg-white/10 border border-white/10 text-white/50 px-4 py-2 rounded-xl text-xs font-medium transition"
-                  >
-                    <Upload className="w-3.5 h-3.5" /> Subir foto de caja
-                  </button>
-                </>
-              )}
-              {boxOriginalImage && (
-                <button
-                  type="button"
-                  onClick={() => boxFileInputRef.current?.click()}
-                  className="absolute bottom-3 right-3 bg-black/60 border border-white/10 text-white/50 p-2 rounded-lg"
-                >
-                  <RefreshCcw className="w-3.5 h-3.5" />
-                </button>
-              )}
-              <input
-                type="file"
-                ref={boxFileInputRef}
-                className="hidden"
-                accept="image/*"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (!file) return;
-                  const reader = new FileReader();
-                  reader.onloadend = async () => {
-                    const compressed = await compressImage(reader.result as string);
-                    setBoxOriginalImage(compressed);
-                  };
-                  reader.readAsDataURL(file);
-                }}
-              />
+        {error && (
+          <div className="flex items-start gap-2 py-3 px-4 bg-red-500/10 border border-red-500/20 rounded-2xl">
+            <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+            <p className="text-[11px] text-red-400">{error}</p>
+          </div>
+        )}
+      </div>
+
+      {/* ── PASO 2: CÓDIGOS ──────────────────────────────────────────────── */}
+      <AnimatePresence>
+        {detections && (
+          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+            className="bg-[#141414] border border-white/5 rounded-3xl p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <span className="w-5 h-5 rounded-full bg-acid text-black text-[9px] font-black flex items-center justify-center shrink-0">2</span>
+                <h3 className="text-xs font-bold text-white/50 uppercase tracking-widest">Códigos a cambiar</h3>
+              </div>
+              <button onClick={handleRandomizeAll}
+                className="flex items-center gap-1.5 text-[10px] font-bold text-black bg-acid hover:bg-acid/80 rounded-xl px-3 py-2 transition">
+                <Shuffle className="w-3 h-3" /> Aleatorizar
+              </button>
             </div>
 
-            {detections && (
-              <button
-                onClick={generateBoxLabel}
-                disabled={loadingBox || !detections}
-                className="w-full py-3.5 bg-white/10 hover:bg-white/15 text-white font-bold rounded-2xl border border-white/10 hover:border-white/20 transition-all flex items-center justify-center gap-2"
-              >
-                {loadingBox ? <RefreshCcw className="w-4 h-4 animate-spin" /> : <Scissors className="w-4 h-4" />}
-                GENERAR ETIQUETA CAJA
+            {/* Campos clave */}
+            <div className="space-y-3">
+              <div className="flex gap-3 items-end">
+                <div className="flex-1 space-y-1">
+                  <label className="text-[9px] uppercase text-white/30 tracking-wider">
+                    {activeBrand === 'ADIDAS' ? 'Referencia #' : activeBrand === 'ONITSUKA' ? 'Código de Lote' : 'Referencia 1'}
+                  </label>
+                  <input value={detections.reference}
+                    onChange={e => setDetections({ ...detections, reference: e.target.value })}
+                    className="w-full bg-black/50 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white focus:border-acid outline-none font-mono" />
+                </div>
+                <button onClick={generateRandomReference}
+                  className="mb-0.5 p-2.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl transition">
+                  <Shuffle className="w-3.5 h-3.5 text-white/40" />
+                </button>
+              </div>
+
+              {activeBrand === 'NEW BALANCE' && (
+                <div className="flex gap-3 items-end">
+                  <div className="flex-1 space-y-1">
+                    <label className="text-[9px] uppercase text-white/30 tracking-wider">Referencia 2</label>
+                    <input value={detections.reference2 || ''}
+                      onChange={e => setDetections({ ...detections, reference2: e.target.value })}
+                      className="w-full bg-black/50 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white focus:border-acid outline-none font-mono" />
+                  </div>
+                  <button onClick={generateRandomReference2}
+                    className="mb-0.5 p-2.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl transition">
+                    <Shuffle className="w-3.5 h-3.5 text-white/40" />
+                  </button>
+                </div>
+              )}
+
+              <div className="flex gap-3 items-end">
+                <div className="flex-1 space-y-1">
+                  <label className="text-[9px] uppercase text-white/30 tracking-wider">Serial / Cód. Marca</label>
+                  <input value={detections.brandSerial}
+                    onChange={e => setDetections({ ...detections, brandSerial: e.target.value })}
+                    className="w-full bg-black/50 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white focus:border-acid outline-none font-mono" />
+                </div>
+                <button onClick={generateRandomBrandSerial}
+                  className="mb-0.5 p-2.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl transition">
+                  <Shuffle className="w-3.5 h-3.5 text-white/40" />
+                </button>
+              </div>
+            </div>
+
+            {/* Acordeón: datos secundarios */}
+            <button onClick={() => setShowAllData(v => !v)}
+              className="w-full flex items-center justify-between text-[10px] text-white/25 hover:text-white/45 transition pt-1">
+              <span>Modelo, SKU, tallas, fecha...</span>
+              {showAllData ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+            </button>
+
+            <AnimatePresence>
+              {showAllData && (
+                <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
+                  <div className="grid grid-cols-2 gap-3 pt-3 border-t border-white/5">
+                    {[
+                      { label: 'Modelo', key: 'model' as const },
+                      { label: 'SKU / Art No', key: 'sku' as const },
+                      { label: 'Fecha', key: 'date' as const },
+                      { label: 'LVL / Factory', key: 'lvl' as const },
+                    ].map(({ label, key }) => (
+                      <div key={key} className="space-y-1">
+                        <label className="text-[9px] uppercase text-white/25">{label}</label>
+                        <input value={(detections as any)[key] || ''}
+                          onChange={e => setDetections({ ...detections, [key]: e.target.value })}
+                          className="w-full bg-black/40 border border-white/8 rounded-lg px-3 py-2 text-xs text-white focus:border-acid outline-none" />
+                      </div>
+                    ))}
+                    <div className="col-span-2 grid grid-cols-4 gap-2">
+                      {(['us', 'uk', 'fr', 'jp'] as const).map(size => (
+                        <div key={size} className="space-y-1">
+                          <label className="text-[9px] uppercase text-white/25">{size}</label>
+                          <input value={detections.sizes[size]}
+                            onChange={e => setDetections({ ...detections, sizes: { ...detections.sizes, [size]: e.target.value } })}
+                            className="w-full bg-black/40 border border-white/8 rounded-lg px-2 py-2 text-center text-xs text-white focus:border-acid outline-none uppercase" />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── PASO 3: GENERAR ──────────────────────────────────────────────── */}
+      <AnimatePresence>
+        {detections && (
+          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-3">
+            <div className="flex items-center gap-2.5">
+              <span className="w-5 h-5 rounded-full bg-acid text-black text-[9px] font-black flex items-center justify-center shrink-0">3</span>
+              <h3 className="text-xs font-bold text-white/50 uppercase tracking-widest">Generar</h3>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <button onClick={generateModifiedTongue} disabled={loading}
+                className="py-5 bg-acid hover:bg-acid/90 text-black font-black rounded-2xl flex flex-col items-center gap-2 transition disabled:opacity-50">
+                {loading
+                  ? <RefreshCcw className="w-5 h-5 animate-spin" />
+                  : <Scissors className="w-5 h-5" />}
+                <span className="text-xs tracking-wider">LENGÜETA</span>
               </button>
-            )}
-            {!detections && (
-              <p className="text-center text-[10px] text-white/20 py-2">
-                Analiza primero la lengüeta para sincronizar los códigos
+
+              <button onClick={generateBoxLabel} disabled={loadingBox || !detections}
+                className="py-5 bg-white/8 hover:bg-white/12 text-white font-black rounded-2xl flex flex-col items-center gap-2 border border-white/10 hover:border-white/20 transition disabled:opacity-40">
+                {loadingBox
+                  ? <RefreshCcw className="w-5 h-5 animate-spin" />
+                  : <Package className="w-5 h-5 text-white/60" />}
+                <span className="text-xs tracking-wider text-white/70">CAJA</span>
+              </button>
+            </div>
+
+            {!boxOriginalImage && (
+              <p className="text-[9px] text-white/20 text-center">
+                Para la caja, sube la foto en el paso 1
               </p>
             )}
-          </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-          {/* Box result */}
-          <div className="bg-[#141414] border border-white/5 rounded-3xl p-6 flex flex-col items-center justify-center relative overflow-hidden min-h-[250px]">
-            {boxImage ? (
-              <div className="space-y-4 w-full text-center">
-                <img src={boxImage} className="max-w-full rounded-xl border border-white/10 shadow-lg" alt="Box label" />
-                <div className="flex flex-col items-center gap-3">
-                  <div className="flex gap-2 flex-wrap justify-center">
-                    <button
-                      onClick={handleDownloadBox}
-                      className="px-5 py-2.5 bg-white text-black font-bold rounded-xl hover:bg-acid transition-colors flex items-center gap-2 text-sm"
-                    >
-                      <Download className="w-3.5 h-3.5" /> Descargar Caja
-                    </button>
+      {/* ── RESULTADOS ───────────────────────────────────────────────────── */}
+      <AnimatePresence>
+        {(generatedImage || boxImage || (loading && detections) || loadingBox) && (
+          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+            className={`grid gap-4 ${(generatedImage || loading) && (boxImage || loadingBox) ? 'grid-cols-2' : 'grid-cols-1'}`}>
+
+            {/* Lengüeta resultado */}
+            {(generatedImage || (loading && detections)) && (
+              <div className="bg-[#141414] border border-white/5 rounded-3xl p-4 flex flex-col items-center gap-3 relative overflow-hidden">
+                <div className="absolute top-0 left-0 w-full h-0.5 bg-gradient-to-r from-transparent via-acid to-transparent" />
+                <p className="text-[9px] uppercase text-white/30 tracking-widest self-start">Lengüeta</p>
+                {generatedImage ? (
+                  <>
+                    <img src={generatedImage} className="max-w-full rounded-xl border border-white/10 shadow-lg" alt="Lengüeta generada" />
+                    <div className="flex gap-2 w-full">
+                      <button onClick={handleDownload}
+                        className="flex-1 py-2.5 bg-acid text-black font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 hover:bg-acid/90 transition">
+                        <Download className="w-3.5 h-3.5" /> Descargar
+                      </button>
+                      <button onClick={() => {
+                        fetch(generatedImage).then(r => r.blob()).then(blob => {
+                          navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+                          setStatus("Copiada");
+                        });
+                      }}
+                        className="p-2.5 bg-white/8 hover:bg-white/12 border border-white/10 text-white/50 rounded-xl transition">
+                        <Copy className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <div className="h-32 flex flex-col items-center justify-center gap-2 w-full">
+                    <RefreshCcw className="w-6 h-6 text-acid animate-spin" />
+                    <span className="text-[10px] text-white/30 uppercase tracking-widest">Generando...</span>
                   </div>
-                </div>
-              </div>
-            ) : (
-              <div className="text-center opacity-20 space-y-3">
-                <ImageIcon className="w-10 h-10 mx-auto" />
-                <p className="text-xs">La etiqueta de caja aparecerá aquí</p>
+                )}
               </div>
             )}
-            {loadingBox && (
-              <div className="absolute inset-0 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center gap-4">
-                <RefreshCcw className="w-8 h-8 text-acid animate-spin" />
-                <p className="text-xs font-bold text-white uppercase tracking-widest">Generando etiqueta caja...</p>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
 
-      <div className="bg-acid-soft border border-acid rounded-2xl p-4 flex gap-4 text-acid text-[11px] leading-relaxed">
-        <Info className="w-5 h-5 flex-shrink-0 text-acid" />
-        <p>
-          Este módulo utiliza Vision-AI para detectar y reconstruir etiquetas de calzado. Al regenerar,
-          Gemini crea una versión sintética limpia basada en los datos extraídos para asegurar neutralidad
-          en auditorías visuales.
-        </p>
-      </div>
+            {/* Caja resultado */}
+            {(boxImage || loadingBox) && (
+              <div className="bg-[#141414] border border-white/5 rounded-3xl p-4 flex flex-col items-center gap-3 relative overflow-hidden">
+                <p className="text-[9px] uppercase text-white/30 tracking-widest self-start">Caja</p>
+                {boxImage ? (
+                  <>
+                    <img src={boxImage} className="max-w-full rounded-xl border border-white/10 shadow-lg" alt="Etiqueta caja" />
+                    <button onClick={handleDownloadBox}
+                      className="w-full py-2.5 bg-white text-black font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 hover:bg-acid transition">
+                      <Download className="w-3.5 h-3.5" /> Descargar
+                    </button>
+                  </>
+                ) : (
+                  <div className="h-32 flex flex-col items-center justify-center gap-2 w-full">
+                    <RefreshCcw className="w-6 h-6 text-white/40 animate-spin" />
+                    <span className="text-[10px] text-white/30 uppercase tracking-widest">Generando...</span>
+                  </div>
+                )}
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── TEXTO VINTED ─────────────────────────────────────────────────── */}
+      <AnimatePresence>
+        {detections?.listingTitle && (
+          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+            className="bg-[#141414] border border-white/5 rounded-3xl p-5 space-y-4">
+            <div className="flex items-center gap-2">
+              <Zap className="w-4 h-4 text-acid" />
+              <h3 className="text-xs font-bold text-white/50 uppercase tracking-widest">Texto para Vinted</h3>
+            </div>
+
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <label className="text-[9px] uppercase text-acid/80 tracking-wider">Título</label>
+                <button onClick={() => { navigator.clipboard.writeText(detections.listingTitle); setStatus("Título copiado"); }}
+                  className="flex items-center gap-1 text-[9px] text-white/30 hover:text-white transition">
+                  <Copy className="w-2.5 h-2.5" /> Copiar
+                </button>
+              </div>
+              <input value={detections.listingTitle || ''}
+                onChange={e => setDetections({ ...detections, listingTitle: e.target.value })}
+                className="w-full bg-acid-soft border border-acid/30 rounded-xl px-3 py-2.5 text-xs text-white focus:border-acid outline-none" />
+            </div>
+
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <label className="text-[9px] uppercase text-acid/80 tracking-wider">Descripción</label>
+                <button onClick={() => { navigator.clipboard.writeText(detections.listingDescription); setStatus("Descripción copiada"); }}
+                  className="flex items-center gap-1 text-[9px] text-white/30 hover:text-white transition">
+                  <Copy className="w-2.5 h-2.5" /> Copiar
+                </button>
+              </div>
+              <textarea value={detections.listingDescription || ''}
+                onChange={e => setDetections({ ...detections, listingDescription: e.target.value })}
+                className="w-full bg-acid-soft border border-acid/30 rounded-xl px-3 py-2.5 text-xs text-white focus:border-acid outline-none h-24 resize-none" />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
