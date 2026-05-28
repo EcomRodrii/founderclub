@@ -10,15 +10,19 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { injectRandomExif, cloneExifFrom } from '../lib/randomExif';
 
-const authFetch = (url: string, body: any) =>
-  fetch(url, {
+const authFetch = (url: string, body: any, timeoutMs = 95_000) => {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  return fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${localStorage.getItem("fc_token") || ""}`,
     },
     body: JSON.stringify(body),
-  });
+    signal: ctrl.signal,
+  }).finally(() => clearTimeout(t));
+};
 
 interface DetectionResult {
   model: string;
@@ -206,23 +210,40 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
     new Promise((resolve) => {
       const img = new Image();
       img.onload = () => {
+        // Guard: si las dimensiones son 0 (imagen corrupta o formato no soportado),
+        // devolver el dataUrl original sin procesar para no producir un JPEG negro.
+        if (!img.width || !img.height) { resolve(dataUrl); return; }
         const scale = Math.min(1, maxPx / Math.max(img.width, img.height));
         const canvas = document.createElement('canvas');
         canvas.width = Math.round(img.width * scale);
         canvas.height = Math.round(img.height * scale);
-        canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL('image/jpeg', quality));
+        try {
+          canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        } catch {
+          resolve(dataUrl); // canvas tainted u otro error → devolver original
+        }
       };
+      img.onerror = () => resolve(dataUrl); // fallback: usar imagen original sin comprimir
       img.src = dataUrl;
     });
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    // Reset para nueva foto
+    setDetections(null);
+    setGeneratedImage(null);
+    setError(null);
 
     const reader = new FileReader();
     reader.onloadend = async () => {
-      const compressed = await compressImage(reader.result as string);
+      const raw = reader.result as string;
+      // Mostrar imagen inmediatamente (sin esperar compresión) para que el
+      // usuario nunca vea negro — la UI responde al instante.
+      setOriginalImage(raw);
+      // Comprimir en background y reemplazar (reduce payload a Gemini)
+      const compressed = await compressImage(raw);
       setOriginalImage(compressed);
       runOCR(compressed);
     };
@@ -247,7 +268,9 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
       setStatus('✓ Datos extraídos');
     } catch (err: any) {
       const msg = err.message || String(err);
-      if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
+      if (err.name === 'AbortError' || msg.includes('aborted')) {
+        setError('Tiempo de espera agotado (>90s). Inténtalo de nuevo.');
+      } else if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('Load failed')) {
         setError('Sin conexión. Comprueba tu internet e inténtalo de nuevo.');
       } else {
         setError(msg);
@@ -375,7 +398,9 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
       }
     } catch (err: any) {
       const msg = err.message || String(err);
-      if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
+      if (err.name === 'AbortError' || msg.includes('aborted')) {
+        setError('Tiempo de espera agotado. Inténtalo de nuevo.');
+      } else if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('Load failed')) {
         setError('Sin conexión. Comprueba tu internet.');
       } else {
         setError(msg);
@@ -409,7 +434,9 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
       }
     } catch (err: any) {
       const msg = err.message || String(err);
-      if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
+      if (err.name === 'AbortError' || msg.includes('aborted')) {
+        setError('Tiempo de espera agotado. Inténtalo de nuevo.');
+      } else if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('Load failed')) {
         setError('Sin conexión. Comprueba tu internet.');
       } else {
         setError(msg);
@@ -565,9 +592,11 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
                   <RefreshCcw className="w-3 h-3" />
                 </button>
                 {loading && !detections && (
-                  <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center gap-1.5">
-                    <RefreshCcw className="w-5 h-5 text-acid animate-spin" />
-                    <span className="text-[9px] text-acid uppercase tracking-widest">OCR...</span>
+                  <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px] flex flex-col items-center justify-center gap-2">
+                    <div className="flex items-center gap-2 bg-black/60 rounded-xl px-3 py-2">
+                      <RefreshCcw className="w-3.5 h-3.5 text-acid animate-spin" />
+                      <span className="text-[10px] text-acid font-bold uppercase tracking-widest">Analizando...</span>
+                    </div>
                   </div>
                 )}
                 {detections && (
