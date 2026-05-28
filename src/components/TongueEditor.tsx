@@ -6,6 +6,7 @@ import {
   ArrowRight, Camera, Eye, X, BellOff
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { injectRandomExif } from '../lib/randomExif';
 
 const authFetch = (url: string, body: any) =>
   fetch(url, {
@@ -225,7 +226,10 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
       const ctx = canvas.getContext('2d');
       if (!ctx) throw new Error("No se pudo obtener el contexto del canvas.");
       ctx.drawImage(img, 0, 0);
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
+      const rawDataUrl = canvas.toDataURL('image/jpeg', 0.95);
+      // Inyectar EXIF aleatorio realista (elimina metadata AI de Gemini,
+      // sustituye por datos creíbles de cámara móvil).
+      const dataUrl = await injectRandomExif(rawDataUrl);
       const link = document.createElement('a');
       const ts = Math.floor(Date.now() / 1000);
       link.href = dataUrl;
