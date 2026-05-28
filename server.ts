@@ -2139,9 +2139,12 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
       }
 
       // Modelos confirmados con generación de imagen
+      // Modelos activos de generación de imagen (mayo 2026)
+      // gemini-2.0-flash-*-image-generation dados de baja nov 2025
       const IMG_MODELS = [
-        "gemini-2.0-flash-preview-image-generation",
-        "gemini-2.0-flash-exp-image-generation",
+        "gemini-2.5-flash-image",           // GA estable — más rápido
+        "gemini-3.1-flash-image-preview",   // preview — alta calidad
+        "gemini-3-pro-image-preview",       // preview — máxima calidad
       ];
       const MAX_RETRIES_PER_MODEL = 2; // 2 intentos por modelo antes de pasar al siguiente
       let lastErr = "";
@@ -2452,10 +2455,11 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
     prompt: string, imageBase64: string | null, aspectRatio: string | null,
     globalDeadline: number, attemptTimeout: number, apiKey: string
   ): Promise<{ image: string; model: string } | null> {
-    // Solo modelos confirmados con soporte de generación de imagen
+    // Modelos activos de generación de imagen (mayo 2026)
     const IMG_MODELS = [
-      "gemini-2.0-flash-preview-image-generation",
-      "gemini-2.0-flash-exp-image-generation",
+      "gemini-2.5-flash-image",
+      "gemini-3.1-flash-image-preview",
+      "gemini-3-pro-image-preview",
     ];
     const MAX_RETRIES = 2;
     const parts: any[] = [{ text: prompt }];
