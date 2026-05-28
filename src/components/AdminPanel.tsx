@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion } from 'motion/react';
 import {
   Users, Key, Activity, LogOut, Plus, Trash2,
   RefreshCcw, Shield, ShieldOff, Copy, Check,
   ToggleLeft, ToggleRight, Fingerprint, Globe, Clock,
-  FileText, Save
+  FileText, Save, Package, ImagePlus, Hash
 } from 'lucide-react';
 
 interface AdminPanelProps {
@@ -13,7 +13,7 @@ interface AdminPanelProps {
   onBack?: () => void;
 }
 
-type Tab = 'stats' | 'users' | 'licenses' | 'sessions' | 'prompts';
+type Tab = 'stats' | 'users' | 'licenses' | 'sessions' | 'prompts' | 'references';
 
 const BRANDS = ['ADIDAS', 'NEW BALANCE', 'ASICS', 'ONITSUKA'] as const;
 type Brand = typeof BRANDS[number];
@@ -90,6 +90,21 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
     'ADIDAS': false, 'NEW BALANCE': false, 'ASICS': false, 'ONITSUKA': false,
   });
 
+  // Box prompts (same structure as tongue prompts)
+  const [boxPrompts, setBoxPrompts] = useState<Record<Brand, string>>({ 'ADIDAS': '', 'NEW BALANCE': '', 'ASICS': '', 'ONITSUKA': '' });
+  const [boxPromptSaving, setBoxPromptSaving] = useState<Record<Brand, boolean>>({ 'ADIDAS': false, 'NEW BALANCE': false, 'ASICS': false, 'ONITSUKA': false });
+  const [boxPromptSaved, setBoxPromptSaved] = useState<Record<Brand, boolean>>({ 'ADIDAS': false, 'NEW BALANCE': false, 'ASICS': false, 'ONITSUKA': false });
+
+  // References
+  const [refs, setRefs] = useState<any[]>([]);
+  const [newRefBrand, setNewRefBrand] = useState<Brand>('ADIDAS');
+  const [newRefSize, setNewRefSize] = useState('');
+  const [newRefType, setNewRefType] = useState<'tongue' | 'box'>('tongue');
+  const [newRefImage, setNewRefImage] = useState<string | null>(null);
+  const [newRefNotes, setNewRefNotes] = useState('');
+  const [refUploading, setRefUploading] = useState(false);
+  const refImgRef = useRef<HTMLInputElement>(null);
+
   const client = api(token);
 
   const loadTab = useCallback(async (t: Tab) => {
@@ -100,10 +115,19 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
       else if (t === 'licenses') setLicenses(await client.get('/api/admin/licenses'));
       else if (t === 'sessions') setSessions(await client.get('/api/admin/sessions'));
       else if (t === 'prompts') {
-        const rows: { brand: string; prompt: string }[] = await client.get('/api/tongue/prompts');
-        const map: Partial<Record<Brand, string>> = {};
-        rows.forEach(r => { if (BRANDS.includes(r.brand as Brand)) map[r.brand as Brand] = r.prompt; });
-        setPrompts(prev => ({ ...prev, ...map }));
+        const [tongueRows, boxRows]: [any[], any[]] = await Promise.all([
+          client.get('/api/tongue/prompts'),
+          client.get('/api/box/prompts'),
+        ]);
+        const tm: Partial<Record<Brand, string>> = {};
+        tongueRows.forEach((r: any) => { if (BRANDS.includes(r.brand as Brand)) tm[r.brand as Brand] = r.prompt; });
+        const bm: Partial<Record<Brand, string>> = {};
+        boxRows.forEach((r: any) => { if (BRANDS.includes(r.brand as Brand)) bm[r.brand as Brand] = r.prompt; });
+        setPrompts(prev => ({ ...prev, ...tm }));
+        setBoxPrompts(prev => ({ ...prev, ...bm }));
+      }
+      else if (t === 'references') {
+        setRefs(await client.get('/api/admin/label-references'));
       }
     } finally {
       setLoading(false);
@@ -116,6 +140,57 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
     setPromptSaving(prev => ({ ...prev, [brand]: false }));
     setPromptSaved(prev => ({ ...prev, [brand]: true }));
     setTimeout(() => setPromptSaved(prev => ({ ...prev, [brand]: false })), 2000);
+  };
+
+  const saveBoxPrompt = async (brand: Brand) => {
+    setBoxPromptSaving(prev => ({ ...prev, [brand]: true }));
+    await client.post('/api/admin/box/prompts', { brand, prompt: boxPrompts[brand] });
+    setBoxPromptSaving(prev => ({ ...prev, [brand]: false }));
+    setBoxPromptSaved(prev => ({ ...prev, [brand]: true }));
+    setTimeout(() => setBoxPromptSaved(prev => ({ ...prev, [brand]: false })), 2000);
+  };
+
+  // Compress image to max 900px before storing as base64
+  const compressRefImg = (dataUrl: string): Promise<string> =>
+    new Promise(resolve => {
+      const img = new Image();
+      img.onload = () => {
+        const scale = Math.min(1, 900 / Math.max(img.width, img.height));
+        const c = document.createElement('canvas');
+        c.width = Math.round(img.width * scale);
+        c.height = Math.round(img.height * scale);
+        c.getContext('2d')!.drawImage(img, 0, 0, c.width, c.height);
+        resolve(c.toDataURL('image/jpeg', 0.82));
+      };
+      img.src = dataUrl;
+    });
+
+  const uploadRef = async () => {
+    if (!newRefImage) return;
+    setRefUploading(true);
+    try {
+      const compressed = await compressRefImg(newRefImage);
+      await client.post('/api/admin/label-references', {
+        brand: newRefBrand,
+        size_us: newRefSize.trim() || null,
+        label_type: newRefType,
+        imageBase64: compressed,
+        codes: {},
+        notes: newRefNotes.trim() || null,
+      });
+      setNewRefImage(null);
+      setNewRefSize('');
+      setNewRefNotes('');
+      await loadTab('references');
+    } finally {
+      setRefUploading(false);
+    }
+  };
+
+  const deleteRef = async (id: number) => {
+    if (!confirm('¿Eliminar esta referencia?')) return;
+    await client.delete(`/api/admin/label-references/${id}`);
+    setRefs(prev => prev.filter(r => r.id !== id));
   };
 
   useEffect(() => { loadTab(tab); }, [tab]);
@@ -137,6 +212,7 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
     { id: 'licenses', label: 'Licencias', icon: <Key className="w-4 h-4" /> },
     { id: 'sessions', label: 'Sesiones', icon: <Globe className="w-4 h-4" /> },
     { id: 'prompts', label: 'Prompts', icon: <FileText className="w-4 h-4" /> },
+    { id: 'references', label: 'Referencias', icon: <ImagePlus className="w-4 h-4" /> },
   ];
 
   return (
@@ -419,42 +495,180 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
         {tab === 'prompts' && (
           <div className="space-y-4">
             <p className="text-sm text-zinc-400">
-              Escribe el prompt personalizado para cada marca. Se guardará en la base de datos y todos los usuarios lo recibirán automáticamente al abrir el Editor de Lengüeta.
+              Prompts personalizados por marca. Se aplican automáticamente a todos los usuarios al generar.
             </p>
             {BRANDS.map(brand => (
-              <motion.div
-                key={brand}
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5"
+              <motion.div key={brand} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+                className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 space-y-5"
               >
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="font-semibold text-sm flex items-center gap-2">
-                    <FileText className="w-4 h-4 text-violet-400" />
-                    {brand}
-                  </h3>
-                  <button
-                    onClick={() => savePrompt(brand)}
-                    disabled={promptSaving[brand]}
-                    className="flex items-center gap-2 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white px-4 py-1.5 rounded-xl text-sm font-medium transition"
-                  >
-                    {promptSaved[brand]
-                      ? <><Check className="w-4 h-4 text-green-300" /> Guardado</>
-                      : promptSaving[brand]
-                        ? <><RefreshCcw className="w-4 h-4 animate-spin" /> Guardando…</>
-                        : <><Save className="w-4 h-4" /> Guardar</>
-                    }
-                  </button>
+                <h3 className="font-semibold text-sm flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-violet-400" /> {brand}
+                </h3>
+
+                {/* Lengüeta */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-zinc-500 font-medium uppercase tracking-wider">Prompt Lengüeta</span>
+                    <button onClick={() => savePrompt(brand)} disabled={promptSaving[brand]}
+                      className="flex items-center gap-1.5 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white px-3 py-1.5 rounded-xl text-xs font-medium transition"
+                    >
+                      {promptSaved[brand] ? <><Check className="w-3.5 h-3.5 text-green-300" /> Guardado</> : promptSaving[brand] ? <><RefreshCcw className="w-3.5 h-3.5 animate-spin" /> Guardando…</> : <><Save className="w-3.5 h-3.5" /> Guardar Lengüeta</>}
+                    </button>
+                  </div>
+                  <textarea value={prompts[brand]} onChange={e => setPrompts(prev => ({ ...prev, [brand]: e.target.value }))}
+                    rows={6} placeholder={`Prompt base para lengüeta ${brand}…`}
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-violet-500 resize-y font-mono leading-relaxed"
+                  />
                 </div>
-                <textarea
-                  value={prompts[brand]}
-                  onChange={e => setPrompts(prev => ({ ...prev, [brand]: e.target.value }))}
-                  rows={8}
-                  placeholder={`Escribe aquí el prompt para ${brand}…`}
-                  className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-violet-500 resize-y font-mono leading-relaxed"
-                />
+
+                <div className="border-t border-zinc-800" />
+
+                {/* Caja */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-zinc-400 font-medium uppercase tracking-wider flex items-center gap-1.5">
+                      <Package className="w-3.5 h-3.5 text-acid" /> Prompt Caja
+                    </span>
+                    <button onClick={() => saveBoxPrompt(brand)} disabled={boxPromptSaving[brand]}
+                      className="flex items-center gap-1.5 bg-acid/20 hover:bg-acid/30 border border-acid/40 disabled:opacity-50 text-acid px-3 py-1.5 rounded-xl text-xs font-medium transition"
+                    >
+                      {boxPromptSaved[brand] ? <><Check className="w-3.5 h-3.5" /> Guardado</> : boxPromptSaving[brand] ? <><RefreshCcw className="w-3.5 h-3.5 animate-spin" /> Guardando…</> : <><Save className="w-3.5 h-3.5" /> Guardar Caja</>}
+                    </button>
+                  </div>
+                  <textarea value={boxPrompts[brand]} onChange={e => setBoxPrompts(prev => ({ ...prev, [brand]: e.target.value }))}
+                    rows={6} placeholder={`Prompt base para etiqueta de caja ${brand}…`}
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-acid/50 resize-y font-mono leading-relaxed"
+                  />
+                </div>
               </motion.div>
             ))}
+          </div>
+        )}
+
+        {/* References */}
+        {tab === 'references' && (
+          <div className="space-y-6">
+            {/* Upload form */}
+            <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 space-y-4">
+              <h3 className="font-semibold text-sm flex items-center gap-2">
+                <ImagePlus className="w-4 h-4 text-violet-400" /> Subir imagen de referencia
+              </h3>
+              <p className="text-xs text-zinc-500">Sube la foto real de la etiqueta original. Se usará como guía de tipografía y disposición para el motor de IA.</p>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">Marca</label>
+                  <select value={newRefBrand} onChange={e => setNewRefBrand(e.target.value as Brand)}
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-violet-500"
+                  >
+                    {BRANDS.map(b => <option key={b} value={b}>{b}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">Talla US (vacío = genérica)</label>
+                  <input value={newRefSize} onChange={e => setNewRefSize(e.target.value)} placeholder="ej: 10.5"
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-violet-500"
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-2">
+                {(['tongue', 'box'] as const).map(t => (
+                  <button key={t} onClick={() => setNewRefType(t)}
+                    className={`flex-1 py-2 rounded-xl text-sm font-medium border transition ${
+                      newRefType === t
+                        ? t === 'tongue' ? 'bg-violet-600 border-violet-600 text-white' : 'bg-acid/20 border-acid/50 text-acid'
+                        : 'bg-zinc-800 border-zinc-700 text-zinc-500 hover:text-white'
+                    }`}
+                  >
+                    {t === 'tongue' ? '👟 Lengüeta' : '📦 Etiqueta Caja'}
+                  </button>
+                ))}
+              </div>
+
+              <div
+                onClick={() => refImgRef.current?.click()}
+                className={`border-2 border-dashed rounded-xl p-4 text-center cursor-pointer transition ${
+                  newRefImage ? 'border-violet-500/50 bg-violet-500/5' : 'border-zinc-700 hover:border-zinc-500'
+                }`}
+              >
+                {newRefImage ? (
+                  <div className="space-y-2">
+                    <img src={newRefImage} className="max-h-40 mx-auto rounded-lg object-contain" />
+                    <p className="text-xs text-zinc-500">Clic para cambiar</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2 py-4">
+                    <ImagePlus className="w-8 h-8 text-zinc-600 mx-auto" />
+                    <p className="text-sm text-zinc-500">Clic para subir foto de referencia</p>
+                    <p className="text-xs text-zinc-600">JPEG / PNG — se comprimirá a 900px</p>
+                  </div>
+                )}
+                <input type="file" ref={refImgRef} accept="image/*" className="hidden"
+                  onChange={e => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onloadend = () => setNewRefImage(reader.result as string);
+                    reader.readAsDataURL(file);
+                  }}
+                />
+              </div>
+
+              <input value={newRefNotes} onChange={e => setNewRefNotes(e.target.value)} placeholder="Notas opcionales (ej: 'NB 574 talla EU 42')"
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-violet-500"
+              />
+
+              <button onClick={uploadRef} disabled={refUploading || !newRefImage}
+                className="flex items-center gap-2 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white px-4 py-2 rounded-xl text-sm font-medium transition w-full justify-center"
+              >
+                {refUploading ? <><RefreshCcw className="w-4 h-4 animate-spin" /> Subiendo…</> : <><ImagePlus className="w-4 h-4" /> Subir referencia</>}
+              </button>
+            </div>
+
+            {/* Table */}
+            <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-x-auto">
+              <div className="px-5 py-3 border-b border-zinc-800 flex items-center justify-between">
+                <h3 className="text-sm font-semibold flex items-center gap-2"><Hash className="w-4 h-4 text-zinc-500" /> Referencias almacenadas ({refs.length})</h3>
+                <button onClick={() => loadTab('references')} className="text-zinc-500 hover:text-zinc-300 transition">
+                  <RefreshCcw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                </button>
+              </div>
+              <table className="w-full text-sm min-w-[500px]">
+                <thead>
+                  <tr className="border-b border-zinc-800">
+                    {['Marca', 'Talla', 'Tipo', 'Notas', 'Fecha', ''].map(h => (
+                      <th key={h} className="text-left text-xs text-zinc-500 font-medium px-4 py-3">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {refs.map(r => (
+                    <tr key={r.id} className="border-b border-zinc-800/60 hover:bg-zinc-800/30 transition">
+                      <td className="px-4 py-3 text-sm font-medium">{r.brand}</td>
+                      <td className="px-4 py-3 text-xs text-zinc-400">{r.size_us || <span className="text-zinc-600 italic">Genérica</span>}</td>
+                      <td className="px-4 py-3">
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium border ${
+                          r.label_type === 'tongue' ? 'bg-violet-500/10 text-violet-400 border-violet-500/30' : 'bg-acid-soft text-acid border-acid/30'
+                        }`}>
+                          {r.label_type === 'tongue' ? '👟 Lengüeta' : '📦 Caja'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-xs text-zinc-500 max-w-[160px] truncate">{r.notes || '—'}</td>
+                      <td className="px-4 py-3 text-xs text-zinc-500">{formatDate(r.created_at)}</td>
+                      <td className="px-4 py-3">
+                        <button onClick={() => deleteRef(r.id)} title="Eliminar" className="text-zinc-600 hover:text-red-400 transition">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {refs.length === 0 && !loading && (
+                    <tr><td colSpan={6} className="text-center text-zinc-600 py-8 text-sm">Sin referencias todavía</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
 
