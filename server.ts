@@ -2344,72 +2344,92 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
   // ── Box Label Generation ──────────────────────────────────────────────────
 
   // Helper: build box label prompt per brand
-  function buildBoxPrompt(brand: string, d: any, customPrompt: string, barcodeValue: string): string {
+  function buildBoxPrompt(brand: string, d: any, customPrompt: string, _barcodeValue: string): string {
     const sizes = d.sizes || {};
+
+    // Preámbulo común — NUNCA blanquear el barcode, solo cambiar texto específico.
     const BOX_PREAMBLE =
-      `Te adjunto la foto de la etiqueta de la caja. ` +
-      `REGLA CRÍTICA: los valores de SUSTITUCIÓN tienen PRIORIDAD ABSOLUTA. ` +
-      `ZONA DE CÓDIGO DE BARRAS: sustituye el área rectangular del código de barras por ` +
-      `un rectángulo de fondo blanco COMPLETAMENTE LIMPIO y VACÍO (sin ninguna línea, número ` +
-      `ni texto) — la aplicación superpondrá el código de barras real generado por librería. ` +
-      `Mantén tipografía, colores, logo y layout exactamente iguales a la foto. ` +
-      `Foto de aspecto natural de móvil, sin marca de agua ni texto extra.`;
+      `Te adjunto la foto de la etiqueta adhesiva blanca de la caja de zapatillas. ` +
+      `REGLA CRÍTICA ABSOLUTA: el código de barras (las barras/rayas verticales negras y ` +
+      `el número EAN impreso bajo ellas) JAMÁS se toca — debe quedar EXACTAMENTE igual que ` +
+      `en la foto original, con las mismas rayas, mismo número, misma posición. ` +
+      `La etiqueta completa, el fondo azul de la caja, la perspectiva, la iluminación y ` +
+      `todos los logos también se preservan intactos. ` +
+      `SOLO se modifican los campos de texto específicos indicados a continuación.`;
 
-    if (brand === "ADIDAS") return [
-      BOX_PREAMBLE, ``,
-      `Edita la etiqueta adhesiva rectangular de la caja adidas.`,
-      `PRESERVA: logo adidas (3 bandas o trébol), "Made in ${d.lvl || 'China'}", composición de materiales, advertencias.`,
-      `SUSTITUYE:`,
-      `  · Art No / Número de artículo → "${d.sku}"`,
-      `  · Código alfanumérico (Brand Serial) → "${d.brandSerial}"`,
-      `  · Fecha → "${d.date}"`,
-      `  · Tallas: US ${sizes.us} / UK ${sizes.uk} / EU ${sizes.fr} / JP ${sizes.jp}`,
-      ``,
-      customPrompt || ""
-    ].filter(Boolean).join("\n");
+    if (brand === "ADIDAS") {
+      // Códigos de correlación: derivados de los seriales de la lengüeta.
+      // EAN PO# = dígitos del reference de lengüeta (10 dígitos)
+      const refDigits = (d.reference || "").replace(/\D/g, "").padEnd(10, "0").slice(0, 10);
+      // ABSBOX = dígitos del brandSerial (4 chars) + versión 2 dígitos
+      const absNum = (d.brandSerial || "").replace(/\D/g, "").padStart(4, "0").slice(0, 4);
+      const absVer = String(Math.floor(Math.random() * 20) + 1).padStart(2, "0");
 
-    if (brand === "ASICS") return [
-      BOX_PREAMBLE, ``,
-      `Edita la etiqueta adhesiva de la caja ASICS.`,
-      `PRESERVA: logo ASICS, colores corporativos, datos legales, composición.`,
-      `SUSTITUYE:`,
-      `  · SKU / Número de artículo → "${d.sku}"`,
-      `  · Tracking code (1 letra + 6 dígitos) → "${d.reference}"`,
-      `  · Serial (15 alfanuméricos) → "${d.brandSerial}"`,
-      `  · Fecha → "${d.date}"`,
-      `  · Tallas: US ${sizes.us} / UK ${sizes.uk} / EU ${sizes.fr} / JP ${sizes.jp}`,
-      ``,
-      customPrompt || ""
-    ].filter(Boolean).join("\n");
+      return [
+        BOX_PREAMBLE, ``,
+        `Edita la etiqueta adhesiva blanca de la caja adidas que ves en la foto.`,
+        ``,
+        `PRESERVA SIN CAMBIAR: nombre del modelo, SKU "${d.sku}", toda la tabla de tallas ` +
+        `(US ${sizes.us} / UK ${sizes.uk} / EU ${sizes.fr} / JP ${sizes.jp}), ` +
+        `colorway, línea de producto (ORIGINALS, etc.), MADE IN.../FABRIQUÉ EN..., ` +
+        `el código de barras con sus rayas verticales y el número EAN bajo ellas, ` +
+        `logos e iconos.`,
+        ``,
+        `SUSTITUYE ÚNICAMENTE estas 2 líneas pequeñas en la esquina inferior izquierda ` +
+        `(justo debajo de "FABRIQUÉ EN..." o del número EAN):`,
+        `  · La línea "EAN PO# XXXXXXXXXX"   →  "EAN PO# ${refDigits}"`,
+        `  · La línea "ABSBOX/XXXX/VXX"       →  "ABSBOX/${absNum}/V${absVer}"`,
+        ``,
+        `Misma fuente, mismo tamaño, mismo color negro, misma posición exacta. Nada más cambia.`,
+        customPrompt || ""
+      ].filter(Boolean).join("\n");
+    }
 
-    if (brand === "ONITSUKA") return [
-      BOX_PREAMBLE, ``,
-      `Edita la etiqueta de la caja Onitsuka Tiger.`,
-      `PRESERVA: "MADE IN INDONESIA / FABRIQUE EN INDONESIE", logo si está presente, datos legales.`,
-      `SUSTITUYE:`,
-      `  · SKU → "${d.sku}"`,
-      `  · Batch Code (F + 6 dígitos) → "${d.reference}"`,
-      `  · Unit Serial (15 alfanuméricos) → "${d.brandSerial}"`,
-      `  · Fecha → "${d.date}"`,
-      `  · Tallas: US ${sizes.us} / UK ${sizes.uk} / EU ${sizes.fr} / CM ${sizes.jp}`,
-      ``,
-      customPrompt || ""
-    ].filter(Boolean).join("\n");
+    if (brand === "ASICS") {
+      return [
+        BOX_PREAMBLE, ``,
+        `Edita la etiqueta adhesiva de la caja ASICS.`,
+        `PRESERVA: logo ASICS, nombre del modelo, SKU "${d.sku}", tabla de tallas, colorway, ` +
+        `país de fabricación, código de barras (barras + número EAN). Todo intacto.`,
+        ``,
+        `SUSTITUYE ÚNICAMENTE:`,
+        `  · Código de tracking individual (1 letra + 6 dígitos) → "${d.reference}"`,
+        `  · Serial único de unidad (15 alfanuméricos) → "${d.brandSerial}"`,
+        ``,
+        `Misma tipografía y posición. No cambies nada más.`,
+        customPrompt || ""
+      ].filter(Boolean).join("\n");
+    }
+
+    if (brand === "ONITSUKA") {
+      return [
+        BOX_PREAMBLE, ``,
+        `Edita la etiqueta de la caja Onitsuka Tiger.`,
+        `PRESERVA: logo, nombre del modelo, SKU "${d.sku}", tallas, ` +
+        `"MADE IN INDONESIA / FABRIQUE EN INDONESIE", código de barras (barras + EAN). Todo intacto.`,
+        ``,
+        `SUSTITUYE ÚNICAMENTE:`,
+        `  · Batch code (formato F + 6 dígitos) → "${d.reference}"`,
+        `  · Serial de unidad (15 alfanuméricos) → "${d.brandSerial}"`,
+        ``,
+        `Misma tipografía y posición. No cambies nada más.`,
+        customPrompt || ""
+      ].filter(Boolean).join("\n");
+    }
 
     // NEW BALANCE (default)
     return [
       BOX_PREAMBLE, ``,
       `Edita la etiqueta adhesiva de la caja New Balance.`,
-      `PRESERVA: logo NB, tipografía industrial, datos de composición, país de fabricación.`,
-      `SUSTITUYE:`,
-      `  · Style / Model → "${d.sku}"`,
-      `  · Factory → "${d.lvl}"`,
-      `  · Serial 1 (12 dígitos) → "${d.reference}"`,
-      `  · Serial 2 (7 dígitos) → "${d.reference2}"`,
-      `  · Brand code → "${d.brandSerial}"`,
-      `  · Fecha → "${d.date}"`,
-      `  · Tallas: US ${sizes.us} / UK ${sizes.uk} / EU ${sizes.fr} / CM ${sizes.jp}`,
+      `PRESERVA: logo NB, nombre del modelo, Style "${d.sku}", tabla de tallas, colores, ` +
+      `país de fabricación, código de barras (barras + número EAN). Todo intacto.`,
       ``,
+      `SUSTITUYE ÚNICAMENTE estos códigos de seguimiento:`,
+      `  · Serial 1 (12 dígitos)   → "${d.reference}"`,
+      `  · Serial 2 (7 dígitos)    → "${d.reference2 || ""}"`,
+      `  · Brand code              → "${d.brandSerial}"`,
+      ``,
+      `Misma tipografía y posición. No cambies nada más.`,
       customPrompt || ""
     ].filter(Boolean).join("\n");
   }

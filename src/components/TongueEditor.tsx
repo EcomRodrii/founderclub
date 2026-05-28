@@ -178,10 +178,7 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
   // ── Box label state ──────────────────────────────────────────────────────
   const [boxOriginalImage, setBoxOriginalImage] = useState<string | null>(null);
   const [boxImage, setBoxImage] = useState<string | null>(null);
-  const [boxCompositeImage, setBoxCompositeImage] = useState<string | null>(null);
-  const [boxBarcodeValue, setBoxBarcodeValue] = useState<string | null>(null);
   const [loadingBox, setLoadingBox] = useState(false);
-  const [loadingBarcode, setLoadingBarcode] = useState(false);
   const boxFileInputRef = useRef<HTMLInputElement>(null);
 
   // Load admin-defined prompts from server on mount
@@ -357,8 +354,6 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
     if (!detections) return;
     setLoadingBox(true);
     setBoxImage(null);
-    setBoxCompositeImage(null);
-    setBoxBarcodeValue(null);
     try {
       const res = await authFetch('/api/box/generate', {
         imageBase64: boxOriginalImage,
@@ -370,7 +365,6 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
       if (!res.ok) throw new Error(data.error || 'Error en el servidor');
       if (data.image) {
         setBoxImage(data.image);
-        setBoxBarcodeValue(data.barcodeValue || null);
       } else {
         setError('El modelo no devolvió imagen de caja.');
       }
@@ -381,27 +375,12 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
     }
   };
 
-  const applyBarcodeToBox = async () => {
-    if (!boxImage || !boxBarcodeValue) return;
-    setLoadingBarcode(true);
-    try {
-      const { overlayBarcode } = await import('../lib/barcodeClient');
-      const composite = await overlayBarcode(boxImage, boxBarcodeValue);
-      setBoxCompositeImage(composite);
-    } catch (err: any) {
-      setError('Error al pegar código de barras: ' + err.message);
-    } finally {
-      setLoadingBarcode(false);
-    }
-  };
-
   const handleDownloadBox = async () => {
-    const src = boxCompositeImage || boxImage;
-    if (!src) return;
+    if (!boxImage) return;
     try {
       const img = new Image();
       img.crossOrigin = 'anonymous';
-      await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = src; });
+      await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = boxImage; });
       const canvas = document.createElement('canvas');
       canvas.width = img.width;
       canvas.height = img.height;
@@ -992,7 +971,7 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
           <div className="bg-[#141414] border border-white/5 rounded-3xl p-6 flex flex-col items-center justify-center relative overflow-hidden min-h-[250px]">
             {boxImage ? (
               <div className="space-y-4 w-full text-center">
-                <img src={boxCompositeImage || boxImage} className="max-w-full rounded-xl border border-white/10 shadow-lg" alt="Box label" />
+                <img src={boxImage} className="max-w-full rounded-xl border border-white/10 shadow-lg" alt="Box label" />
                 <div className="flex flex-col items-center gap-3">
                   <div className="flex gap-2 flex-wrap justify-center">
                     <button
@@ -1001,20 +980,7 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
                     >
                       <Download className="w-3.5 h-3.5" /> Descargar Caja
                     </button>
-                    <button
-                      onClick={applyBarcodeToBox}
-                      disabled={!boxBarcodeValue || loadingBarcode}
-                      className="px-5 py-2.5 bg-white/10 hover:bg-white/15 text-white font-bold rounded-xl border border-white/10 transition-colors flex items-center gap-2 text-sm"
-                    >
-                      {loadingBarcode ? <RefreshCcw className="w-3.5 h-3.5 animate-spin" /> : <ArrowRight className="w-3.5 h-3.5" />}
-                      Pegar Código de Barras
-                    </button>
                   </div>
-                  {boxBarcodeValue && (
-                    <p className="text-[9px] text-white/30 font-mono">
-                      EAN: {boxBarcodeValue}
-                    </p>
-                  )}
                 </div>
               </div>
             ) : (
