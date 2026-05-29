@@ -2185,8 +2185,9 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
           const body: any = {
             contents: [{ parts }],
             generationConfig: {
-              responseModalities: ["TEXT", "IMAGE"],
-              temperature: 0.35 + (attempt - 1) * 0.1,
+              responseModalities: ["IMAGE"],
+              // Low temperature = conservative edit, fewer hallucinated changes
+              temperature: 0.1 + (attempt - 1) * 0.05,
             },
           };
           if (aspectRatio) body.generationConfig.imageConfig = { aspectRatio };
@@ -2513,8 +2514,8 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
         const body: any = {
           contents: [{ parts }],
           generationConfig: {
-            responseModalities: ["TEXT", "IMAGE"],
-            temperature: 0.35 + (attempt - 1) * 0.1,
+            responseModalities: ["IMAGE"],
+            temperature: 0.1 + (attempt - 1) * 0.05,
           },
         };
         if (aspectRatio) body.generationConfig.imageConfig = { aspectRatio };

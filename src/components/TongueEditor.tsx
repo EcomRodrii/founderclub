@@ -128,49 +128,23 @@ export default function TongueEditor() {
    - El código alfanumérico después de "adidas" (13 dígitos): Cámbialo manteniendo longitud y formato (mayúsculas/números).
 3. Mantén tipografía, alineación, materiales y calidad originales. Everything else stays the same.`);
 
-  const [customPromptNB, setCustomPromptNB] = useState<string>(`Modifica la etiqueta de esta zapatilla de New Balance. Cambia únicamente estos tres códigos:
-
-* 213772792545
-* 7173928
-* LXCK1298 CLX
-
-Reemplázalos por nuevos códigos aleatorios, pero manteniendo exactamente:
-- La misma cantidad de caracteres
-- El mismo formato (letras/números)
-- El espacio entre caracteres exactamente igual
-
-Específicamente:
-- 213772792545 → otro número de 12 dígitos.
-- 7173928 → otro número de 7 dígitos.
-- LXCK1298 CLX → 4 letras, 4 números, espacio, 3 letras.
-
-No cambies nada más (tipografía, texturas, iluminación y resto de datos deben ser idénticos).`);
+  const [customPromptNB, setCustomPromptNB] = useState<string>(`PROMPT NEW BALANCE - REGLAS DE ORO:
+1. NUNCA cambies el Style/Model ni la tabla de tallas: deben quedar exactamente iguales al original.
+2. Modifica ÚNICAMENTE los tres códigos indicados en las instrucciones (Serial 1, Serial 2, Brand code).
+3. Mantén la tipografía industrial pesada, mismo tamaño, misma posición y mismo espaciado que el original.
+4. No cambies iluminación, textura del tejido, ángulo ni ningún otro elemento visual.`);
 
   const [customPromptAsics, setCustomPromptAsics] = useState<string>(`PROMPT ASICS - REGLAS DE ORO:
-1. NUNCA cambies el SKU (1204A191): Debe ser exacto para que el modelo sea reconocido como original.
-2. Modifica los códigos de rastreo individuales:
-   - Código F960925: Cambia la letra inicial y los 6 dígitos por otros aleatorios.
-   - Número de Serie (N4VDCSSVG6CSMGH): Cámbialo por una combinación aleatoria de 15 caracteres (letras mayúsculas y números).
-3. Mantén la estructura: Respeta las líneas verticales divisorias (|) en la tabla de tallas y la tipografía comprimida y limpia característica de Asics.`);
+1. NUNCA cambies el SKU ni la tabla de tallas: deben quedar exactamente iguales al original.
+2. Modifica ÚNICAMENTE los dos códigos indicados en las instrucciones (tracking code y serial number).
+3. Mantén las líneas verticales divisorias (|) en la tabla de tallas y la tipografía comprimida característica de ASICS.
+4. No cambies iluminación, textura, ángulo ni ningún otro elemento visual.`);
 
-  const [customPromptOnitsuka, setCustomPromptOnitsuka] = useState<string>(`PROMPT ONITSUKA TIGER - PROTOCOLO DE PRECISIÓN:
-1. Integridad del SKU (Modelo):
-PROHIBIDO alterar el código THL7C2. Debe aparecer en la parte superior, centrado y con un ligero espaciado entre caracteres.
-
-2. Bloque de Tallas (Matriz de Datos):
-Mantener exactamente la cuadrícula de 2x3 celdas separadas por líneas verticales finas (|).
-Valores Obligatorios: CM 24.0, EURO 38, US 5½, UK 4.5, BR 36, CN 240(2.5). No redondear ni cambiar formatos (ej. mantener el "½" en formato pequeño).
-
-3. Reglas de Variación Inferior (Identidad Única):
-Código de Lote: Debe empezar por F seguido de exactamente 6 dígitos aleatorios (ej. F602841).
-Identificador de Región: Mantener las siglas PI a la derecha del código de lote.
-Serial de Unidad: Generar un código alfanumérico de 15 caracteres en mayúsculas. Regla estricta: Debe ser diferente para la zapatilla izquierda y la derecha para simular un par auténtico.
-
-4. Especificaciones Técnicas de Diseño:
-Tipografía: Usar una fuente Sans-Serif ultra-condensada (tipo Helvetica Compressed o similar), con impresión de transferencia térmica (puntos de tinta ligeramente visibles bajo aumento).
-Ausencia de Branding: No incluir el logo del tigre ni la palabra "Onitsuka". La etiqueta debe ser estrictamente informativa.
-Soporte: Fondo blanco mate con textura de tejido sintético, bordes termosellados y costura perimetral que la une a la lengüeta.
-Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
+  const [customPromptOnitsuka, setCustomPromptOnitsuka] = useState<string>(`PROMPT ONITSUKA TIGER - REGLAS DE ORO:
+1. NUNCA cambies el SKU ni la tabla de tallas: deben quedar exactamente iguales al original.
+2. Modifica ÚNICAMENTE los dos códigos indicados en las instrucciones (batch code y unit serial).
+3. Mantén el texto "MADE IN INDONESIA / FABRIQUE EN INDONESIE" exactamente igual.
+4. No cambies iluminación, textura, ángulo ni ningún otro elemento visual.`);
   
   const [showDownloadWarning, setShowDownloadWarning] = useState(false);
   const [neverWarn, setNeverWarn] = useState(() => localStorage.getItem('tongue_no_warn') === '1');
