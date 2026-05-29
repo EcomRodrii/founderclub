@@ -1821,28 +1821,18 @@ IMPORTANTE: queremos el TOTAL del lote y el TOTAL de unidades, NO el precio unit
     // No se puede usar googleSearch + inlineData al mismo tiempo, así que
     // primero extraemos los códigos de la imagen, luego buscamos el nombre.
     const ocrPrompt = `Analiza esta imagen de una lengueta de zapatilla ${brand}.
-Extrae EXACTAMENTE los datos que ves impresos y la posición de cada campo.
-Formato de bounding box: [ymin, xmin, ymax, xmax] en escala 0-1000 (donde 0=esquina superior izquierda, 1000=esquina inferior derecha).
-Devuelve SOLO un JSON puro sin markdown:
+Extrae EXACTAMENTE los datos que ves impresos. Devuelve SOLO un JSON puro sin markdown con estos campos:
 {
   "model": "código de modelo (ej: JQ5874, MR530SG, 1204A191)",
-  "model_box": [ymin,xmin,ymax,xmax],
   "sku": "mismo que model",
   "reference": "referencia principal (12 dígitos en NB, #XXXXXXXXX en Adidas, F seguido de 6 dígitos en Onitsuka)",
-  "reference_box": [ymin,xmin,ymax,xmax],
   "reference2": "7 dígitos solo en New Balance, vacío si no aplica",
-  "reference2_box": [ymin,xmin,ymax,xmax],
   "brandSerial": "código alfanumérico largo (ej: LXCK1298 CLX, FGwKZ39<82143, N4VDCSSVG6CSMGH)",
-  "brandSerial_box": [ymin,xmin,ymax,xmax],
   "date": "fecha impresa (ej: 05/22)",
-  "date_box": [ymin,xmin,ymax,xmax],
   "lvl": "código de fábrica (ej: EVN 791001)",
-  "lvl_box": [ymin,xmin,ymax,xmax],
-  "sizes": { "us": "...", "uk": "...", "fr": "...", "jp": "..." },
-  "sizes_row_box": [ymin,xmin,ymax,xmax]
+  "sizes": { "us": "...", "uk": "...", "fr": "...", "jp": "..." }
 }
-Para cada _box: coordenadas del texto del VALOR (no de la etiqueta "ART NO" etc., sino del código/valor en sí).
-Si no ves algún dato pon "" y para su box pon null. Solo el JSON, sin explicaciones.`;
+Si no ves algún dato, pon "". Solo el JSON, sin explicaciones.`;
 
     // Modelos confirmados con soporte multimodal (imagen+texto)
     const OCR_MODELS = [
