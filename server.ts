@@ -2163,13 +2163,12 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
       }
       parts.push({ text: brandPrompt });
 
-      // Modelos confirmados con generación de imagen
-      // Modelos activos de generación de imagen (mayo 2026)
-      // gemini-2.0-flash-*-image-generation dados de baja nov 2025
+      // Modelos GA de generación de imagen (mayo 2026).
+      // Los -preview fueron deprecados el 28 may 2026 cuando los GA salieron.
       const IMG_MODELS = [
-        "gemini-2.5-flash-image",           // GA estable — más rápido
-        "gemini-3.1-flash-image-preview",   // preview — alta calidad
-        "gemini-3-pro-image-preview",       // preview — máxima calidad
+        "gemini-3-pro-image",         // GA máxima calidad (desde 28 may 2026)
+        "gemini-3.1-flash-image",     // GA rápido alta calidad (desde 28 may 2026)
+        "gemini-2.5-flash-image",     // GA estable — fallback
       ];
       const MAX_RETRIES_PER_MODEL = 2; // 2 intentos por modelo antes de pasar al siguiente
       let lastErr = "";
@@ -2185,9 +2184,8 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
           const body: any = {
             contents: [{ parts }],
             generationConfig: {
-              responseModalities: ["IMAGE"],
-              // Low temperature = conservative edit, fewer hallucinated changes
-              temperature: 0.1 + (attempt - 1) * 0.05,
+              responseModalities: ["TEXT", "IMAGE"],
+              temperature: 0.35 + (attempt - 1) * 0.1,
             },
           };
           if (aspectRatio) body.generationConfig.imageConfig = { aspectRatio };
@@ -2489,11 +2487,11 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
     globalDeadline: number, attemptTimeout: number, apiKey: string,
     referenceBase64: string | null = null   // imagen de referencia del admin (opcional)
   ): Promise<{ image: string; model: string } | null> {
-    // Modelos activos de generación de imagen (mayo 2026)
+    // Modelos GA de generación de imagen (desde 28 may 2026; -preview deprecados)
     const IMG_MODELS = [
+      "gemini-3-pro-image",
+      "gemini-3.1-flash-image",
       "gemini-2.5-flash-image",
-      "gemini-3.1-flash-image-preview",
-      "gemini-3-pro-image-preview",
     ];
     const MAX_RETRIES = 2;
     const parts: any[] = [];
@@ -2514,8 +2512,8 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
         const body: any = {
           contents: [{ parts }],
           generationConfig: {
-            responseModalities: ["IMAGE"],
-            temperature: 0.1 + (attempt - 1) * 0.05,
+            responseModalities: ["TEXT", "IMAGE"],
+            temperature: 0.35 + (attempt - 1) * 0.1,
           },
         };
         if (aspectRatio) body.generationConfig.imageConfig = { aspectRatio };
