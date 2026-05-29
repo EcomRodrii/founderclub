@@ -2010,25 +2010,48 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
   }
 
   // Prefacio fijo que va SIEMPRE al inicio de cualquier prompt de generación.
-  const TONGUE_PREAMBLE =
-    `Te adjunto la imagen de la etiqueta/lengueta. ` +
-    `REGLA CRÍTICA: los valores que aparecen en las instrucciones de SUSTITUCIÓN a continuación ` +
-    `son los CORRECTOS y tienen PRIORIDAD ABSOLUTA sobre lo que veas en la imagen. ` +
-    `Si la imagen muestra un valor diferente al indicado, IGNORA lo de la imagen y usa el valor de las instrucciones. ` +
-    `INTEGRACIÓN DE TEXTURA FÍSICA: los textos nuevos deben integrarse visualmente con el sustrato real del tejido — ` +
-    `adoptando exactamente la perspectiva y ángulo de la cámara, siguiendo las microarrugas, curvas y pliegues de la lengüeta, ` +
-    `con el mismo micro-grano de impresión por transferencia térmica, idéntica opacidad y las mismas reflexiones de luz rasante ` +
-    `que el texto ya existente en la etiqueta. ` +
-    `Ningún texto sustituto debe parecer superpuesto digitalmente ni más nítido que el tejido: ` +
-    `toda la tipografía debe verse imprimida en la misma pasada de fábrica, con coherencia de perspectiva 3D ` +
-    `y micro-deformación acorde a los pliegues visibles del tejido. ` +
-    `Ahora aplica las siguientes instrucciones en alta precisión:`;
+  // Genera el preámbulo de lengüeta.
+  // Si hay imagen de referencia, el prompt menciona explícitamente las dos imágenes
+  // (IMAGE 1 = referencia de formato, IMAGE 2 = foto a editar).
+  function buildTonguePreamble(hasReference: boolean): string {
+    if (hasReference) {
+      return (
+        `Tienes DOS imágenes adjuntas: ` +
+        `IMAGE 1 (primera imagen) es una etiqueta de lengüeta AUTÉNTICA de referencia — ` +
+        `estudia su estilo visual exacto: tipografía, peso de fuente, espaciado, ` +
+        `textura de impresión por transferencia térmica y calidad de tejido. ` +
+        `IMAGE 2 (segunda imagen) es la foto real de la etiqueta que debes editar. ` +
+        `REGLA CRÍTICA: los valores que aparecen en las instrucciones de SUSTITUCIÓN a continuación ` +
+        `son los CORRECTOS y tienen PRIORIDAD ABSOLUTA sobre lo que veas en IMAGE 2. ` +
+        `Si IMAGE 2 muestra un valor diferente al indicado, IGNORA lo de IMAGE 2 y usa el valor de las instrucciones. ` +
+        `INTEGRACIÓN DE TEXTURA FÍSICA: los textos nuevos en IMAGE 2 deben integrarse visualmente ` +
+        `con el sustrato real del tejido — adoptando exactamente la perspectiva y ángulo de la cámara, ` +
+        `siguiendo las microarrugas, curvas y pliegues de la lengüeta, ` +
+        `con el mismo micro-grano de impresión por transferencia térmica, idéntica opacidad ` +
+        `y las mismas reflexiones de luz rasante que el texto ya existente. ` +
+        `Ningún texto sustituto debe parecer superpuesto digitalmente ni más nítido que el tejido. ` +
+        `Ahora aplica las siguientes instrucciones en alta precisión a IMAGE 2:`
+      );
+    }
+    return (
+      `Te adjunto la imagen de la etiqueta/lengueta. ` +
+      `REGLA CRÍTICA: los valores que aparecen en las instrucciones de SUSTITUCIÓN a continuación ` +
+      `son los CORRECTOS y tienen PRIORIDAD ABSOLUTA sobre lo que veas en la imagen. ` +
+      `Si la imagen muestra un valor diferente al indicado, IGNORA lo de la imagen y usa el valor de las instrucciones. ` +
+      `INTEGRACIÓN DE TEXTURA FÍSICA: los textos nuevos deben integrarse visualmente con el sustrato real del tejido — ` +
+      `adoptando exactamente la perspectiva y ángulo de la cámara, siguiendo las microarrugas, curvas y pliegues de la lengüeta, ` +
+      `con el mismo micro-grano de impresión por transferencia térmica, idéntica opacidad y las mismas reflexiones de luz rasante ` +
+      `que el texto ya existente en la etiqueta. ` +
+      `Ningún texto sustituto debe parecer superpuesto digitalmente ni más nítido que el tejido: ` +
+      `toda la tipografía debe verse imprimida en la misma pasada de fábrica, con coherencia de perspectiva 3D ` +
+      `y micro-deformación acorde a los pliegues visibles del tejido. ` +
+      `Ahora aplica las siguientes instrucciones en alta precisión:`
+    );
+  }
 
-  function buildTonguePrompt(brand: string, d: any, customPrompt: string): string {
+  function buildTonguePrompt(brand: string, d: any, customPrompt: string, hasReference = false): string {
     const sizes = d.sizes || {};
-    // Lista de campos a PRESERVAR (cada marca tiene los suyos) y a REEMPLAZAR.
-    // Formato conversacional con mapeos explícitos viejo→nuevo. Funciona mejor
-    // que CAPS+"DO NOT CHANGE" porque Gemini lee instrucciones naturales.
+    const TONGUE_PREAMBLE = buildTonguePreamble(hasReference);
     if (brand === "ADIDAS") {
       return [
         TONGUE_PREAMBLE,
@@ -2121,7 +2144,20 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY no configurada en el servidor" });
 
-    const brandPrompt = buildTonguePrompt(brand, detections, customPrompt || "");
+    // Cargar imagen de referencia del admin para esta marca (si existe)
+    const sizeUs = detections?.sizes?.us || null;
+    const refRow = await pool.query(
+      `SELECT image_base64 FROM label_references
+       WHERE brand = $1 AND label_type = 'tongue'
+         AND (size_us = $2 OR size_us IS NULL)
+       ORDER BY (size_us = $2)::int DESC
+       LIMIT 1`,
+      [brand, sizeUs]
+    ).catch(() => ({ rows: [] }));
+    const tongueRefBase64: string | null = refRow.rows[0]?.image_base64 || null;
+    if (tongueRefBase64) console.log(`[tongue] usando referencia de admin para ${brand}`);
+
+    const brandPrompt = buildTonguePrompt(brand, detections, customPrompt || "", !!tongueRefBase64);
 
     // Deadline global: 90s (margen seguro bajo Railway timeout de ~120s)
     const GLOBAL_DEADLINE = Date.now() + 90_000;
@@ -2129,14 +2165,20 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
     const ATTEMPT_TIMEOUT_MS = 35_000;
 
     try {
-      const parts: any[] = [{ text: brandPrompt }];
+      // Orden partes: [ref (si existe), foto a editar, texto]
+      const parts: any[] = [];
+      if (tongueRefBase64) {
+        const refB64 = tongueRefBase64.includes(",") ? tongueRefBase64.split(",")[1] : tongueRefBase64;
+        parts.push({ inlineData: { mimeType: "image/jpeg", data: refB64 } });
+      }
       let aspectRatio: string | null = null;
       if (imageBase64) {
         const base64Data = imageBase64.includes(",") ? imageBase64.split(",")[1] : imageBase64;
-        parts.unshift({ inlineData: { mimeType: "image/jpeg", data: base64Data } });
+        parts.push({ inlineData: { mimeType: "image/jpeg", data: base64Data } });
         const dims = jpegDimsFromBase64(base64Data);
         if (dims && dims.w > 0 && dims.h > 0) aspectRatio = pickGeminiAspect(dims.w, dims.h);
       }
+      parts.push({ text: brandPrompt });
 
       // Modelos confirmados con generación de imagen
       // Modelos activos de generación de imagen (mayo 2026)
@@ -2347,18 +2389,25 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
   // ── Box Label Generation ──────────────────────────────────────────────────
 
   // Helper: build box label prompt per brand
-  function buildBoxPrompt(brand: string, d: any, customPrompt: string, _barcodeValue: string): string {
+  function buildBoxPrompt(brand: string, d: any, customPrompt: string, _barcodeValue: string, hasReference = false): string {
     const sizes = d.sizes || {};
 
-    // Preámbulo común — NUNCA blanquear el barcode, solo cambiar texto específico.
-    const BOX_PREAMBLE =
-      `Te adjunto la foto de la etiqueta adhesiva blanca de la caja de zapatillas. ` +
-      `REGLA CRÍTICA ABSOLUTA: el código de barras (las barras/rayas verticales negras y ` +
-      `el número EAN impreso bajo ellas) JAMÁS se toca — debe quedar EXACTAMENTE igual que ` +
-      `en la foto original, con las mismas rayas, mismo número, misma posición. ` +
-      `La etiqueta completa, el fondo azul de la caja, la perspectiva, la iluminación y ` +
-      `todos los logos también se preservan intactos. ` +
-      `SOLO se modifican los campos de texto específicos indicados a continuación.`;
+    const BOX_PREAMBLE = hasReference
+      ? (`Tienes DOS imágenes adjuntas: ` +
+         `IMAGE 1 (primera imagen) es una etiqueta de caja AUTÉNTICA de referencia — ` +
+         `estudia exactamente su formato, tipografía, disposición y calidad de impresión. ` +
+         `IMAGE 2 (segunda imagen) es la foto real de la etiqueta de caja que debes editar. ` +
+         `REGLA CRÍTICA ABSOLUTA: el código de barras de IMAGE 2 (las barras/rayas verticales negras y ` +
+         `el número EAN impreso bajo ellas) JAMÁS se toca — debe quedar EXACTAMENTE igual. ` +
+         `La etiqueta completa, el fondo de la caja, la perspectiva, la iluminación y todos los logos también se preservan. ` +
+         `SOLO se modifican los campos de texto específicos indicados a continuación en IMAGE 2.`)
+      : (`Te adjunto la foto de la etiqueta adhesiva blanca de la caja de zapatillas. ` +
+         `REGLA CRÍTICA ABSOLUTA: el código de barras (las barras/rayas verticales negras y ` +
+         `el número EAN impreso bajo ellas) JAMÁS se toca — debe quedar EXACTAMENTE igual que ` +
+         `en la foto original, con las mismas rayas, mismo número, misma posición. ` +
+         `La etiqueta completa, el fondo azul de la caja, la perspectiva, la iluminación y ` +
+         `todos los logos también se preservan intactos. ` +
+         `SOLO se modifican los campos de texto específicos indicados a continuación.`);
 
     if (brand === "ADIDAS") {
       // Códigos de correlación: derivados de los seriales de la lengüeta.
@@ -2453,7 +2502,8 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
   // Reuse the same model-retry logic as tongue generation
   async function runGeminiImageGeneration(
     prompt: string, imageBase64: string | null, aspectRatio: string | null,
-    globalDeadline: number, attemptTimeout: number, apiKey: string
+    globalDeadline: number, attemptTimeout: number, apiKey: string,
+    referenceBase64: string | null = null   // imagen de referencia del admin (opcional)
   ): Promise<{ image: string; model: string } | null> {
     // Modelos activos de generación de imagen (mayo 2026)
     const IMG_MODELS = [
@@ -2462,11 +2512,18 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
       "gemini-3-pro-image-preview",
     ];
     const MAX_RETRIES = 2;
-    const parts: any[] = [{ text: prompt }];
+    const parts: any[] = [];
+    // Orden: [referencia (si existe), foto a editar, texto del prompt]
+    // Gemini procesa los inputs en orden — la referencia primero maximiza su influencia
+    if (referenceBase64) {
+      const refB64 = referenceBase64.includes(",") ? referenceBase64.split(",")[1] : referenceBase64;
+      parts.push({ inlineData: { mimeType: "image/jpeg", data: refB64 } });
+    }
     if (imageBase64) {
       const b64 = imageBase64.includes(",") ? imageBase64.split(",")[1] : imageBase64;
-      parts.unshift({ inlineData: { mimeType: "image/jpeg", data: b64 } });
+      parts.push({ inlineData: { mimeType: "image/jpeg", data: b64 } });
     }
+    parts.push({ text: prompt });
     for (const model of IMG_MODELS) {
       for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         if (Date.now() >= globalDeadline) return null;
@@ -2520,11 +2577,26 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
     if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY no configurada" });
 
     const barcodeValue = generateEAN13(EAN_PREFIXES[brand] || "400");
-    const boxPromptResult = await pool.query("SELECT prompt FROM box_prompts WHERE brand = $1", [brand]);
-    const adminBoxPrompt = boxPromptResult.rows[0]?.prompt || "";
-    const finalCustomPrompt = customPrompt || adminBoxPrompt;
 
-    const prompt = buildBoxPrompt(brand, detections, finalCustomPrompt, barcodeValue);
+    // Cargar referencia de caja + prompt admin en paralelo
+    const sizeUsBox = detections?.sizes?.us || null;
+    const [boxPromptResult, boxRefResult] = await Promise.all([
+      pool.query("SELECT prompt FROM box_prompts WHERE brand = $1", [brand]).catch(() => ({ rows: [] })),
+      pool.query(
+        `SELECT image_base64 FROM label_references
+         WHERE brand = $1 AND label_type = 'box'
+           AND (size_us = $2 OR size_us IS NULL)
+         ORDER BY (size_us = $2)::int DESC
+         LIMIT 1`,
+        [brand, sizeUsBox]
+      ).catch(() => ({ rows: [] })),
+    ]);
+    const adminBoxPrompt = boxPromptResult.rows[0]?.prompt || "";
+    const boxRefBase64: string | null = boxRefResult.rows[0]?.image_base64 || null;
+    if (boxRefBase64) console.log(`[box] usando referencia de admin para ${brand}`);
+
+    const finalCustomPrompt = customPrompt || adminBoxPrompt;
+    const prompt = buildBoxPrompt(brand, detections, finalCustomPrompt, barcodeValue, !!boxRefBase64);
 
     let aspectRatio: string | null = null;
     if (imageBase64) {
@@ -2533,7 +2605,7 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
       if (dims && dims.w > 0 && dims.h > 0) aspectRatio = pickGeminiAspect(dims.w, dims.h);
     }
 
-    const result = await runGeminiImageGeneration(prompt, imageBase64, aspectRatio, Date.now() + 90_000, 35_000, apiKey);
+    const result = await runGeminiImageGeneration(prompt, imageBase64, aspectRatio, Date.now() + 90_000, 35_000, apiKey, boxRefBase64);
     if (!result) return res.status(503).json({ error: "No se pudo generar la imagen de caja. Inténtalo de nuevo." });
 
     res.json({ ...result, barcodeValue });
