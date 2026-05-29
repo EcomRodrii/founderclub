@@ -516,34 +516,59 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
               className="fixed inset-x-4 bottom-6 sm:inset-auto sm:left-1/2 sm:-translate-x-1/2 sm:bottom-auto sm:top-1/2 sm:-translate-y-1/2 z-50 w-auto sm:w-full sm:max-w-md"
             >
               <div className="bg-[#141414] border border-[#d4ff00]/25 rounded-[24px] p-6 shadow-[0_32px_80px_rgba(0,0,0,0.7)]">
+                {/* Header */}
                 <div className="flex items-start justify-between gap-3 mb-4">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-xl bg-[#d4ff00]/10 border border-[#d4ff00]/20 flex items-center justify-center shrink-0">
                       <Eye className="w-5 h-5 text-[#d4ff00]" />
                     </div>
                     <h3 className="text-[#f2f2ef] font-bold text-base leading-tight">
-                      Ojo chaval,<br /><span className="text-[#d4ff00]">revisa antes de subir</span>
+                      Revisa antes de publicar<br />
+                      <span className="text-[#d4ff00]">tu cuenta depende de esto</span>
                     </h3>
                   </div>
                   <button onClick={() => setShowDownloadWarning(false)} className="text-[#555550] hover:text-[#f2f2ef] transition-colors shrink-0 mt-0.5">
                     <X className="w-5 h-5" />
                   </button>
                 </div>
-                <p className="text-[#888880] text-sm leading-relaxed mb-5">
-                  Antes de subir a Vinted,{' '}
-                  <span className="text-[#f2f2ef] font-medium">comprueba que la lengüeta esté perfecta</span>
-                  {' '}— códigos legibles, fondo limpio, sin artefactos raros.
-                </p>
+
+                {/* Checklist */}
+                <div className="space-y-2 mb-5">
+                  {[
+                    { text: 'Los números y códigos se leen perfectamente, sin dígitos raros ni borrosos' },
+                    { text: 'La tipografía no tiene letras fundidas, deformadas ni flotantes' },
+                    { text: 'El fondo del tejido no tiene manchas, zonas borrosas ni parches de color' },
+                    { text: 'La perspectiva y la luz son coherentes con una foto real de móvil' },
+                  ].map((item, i) => (
+                    <div key={i} className="flex items-start gap-2.5">
+                      <div className="w-4 h-4 rounded border border-white/15 bg-white/5 flex items-center justify-center shrink-0 mt-0.5">
+                        <span className="text-[8px] text-white/20">✓</span>
+                      </div>
+                      <p className="text-[12px] text-[#888880] leading-snug">{item.text}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Warning */}
+                <div className="bg-red-500/8 border border-red-500/20 rounded-xl px-3 py-2.5 mb-5">
+                  <p className="text-[11px] text-red-400 leading-relaxed">
+                    <span className="font-bold">Vinted detecta imágenes generadas por IA.</span>{' '}
+                    Si subes una foto con artefactos visibles te pueden banear la cuenta sin previo aviso. Regenera si algo no cuadra.
+                  </p>
+                </div>
+
+                {/* Actions */}
                 <div className="flex flex-col sm:flex-row gap-2">
                   <button onClick={() => { setShowDownloadWarning(false); executeDownload(); }}
                     className="flex-1 bg-[#d4ff00] hover:bg-[#b3da00] text-black font-bold py-2.5 px-4 rounded-xl text-sm transition flex items-center justify-center gap-2">
-                    <Download className="w-4 h-4" /> Entendido, descargar
+                    <Download className="w-4 h-4" /> Está perfecta, descargar
                   </button>
                   <button onClick={() => setShowDownloadWarning(false)}
                     className="flex-1 bg-white/[0.06] hover:bg-white/[0.1] text-[#888880] hover:text-[#f2f2ef] font-medium py-2.5 px-4 rounded-xl text-sm transition">
-                    Revisar primero
+                    Volver a revisar
                   </button>
                 </div>
+
                 <button onClick={() => { localStorage.setItem('tongue_no_warn', '1'); setNeverWarn(true); setShowDownloadWarning(false); executeDownload(); }}
                   className="w-full mt-3 flex items-center justify-center gap-1.5 text-[#444440] hover:text-[#666660] text-xs transition py-1">
                   <BellOff className="w-3 h-3" /> No volver a mostrar este aviso
