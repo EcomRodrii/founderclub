@@ -2144,20 +2144,7 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY no configurada en el servidor" });
 
-    // Cargar imagen de referencia del admin para esta marca (si existe)
-    const sizeUs = detections?.sizes?.us || null;
-    const refRow = await pool.query(
-      `SELECT image_base64 FROM label_references
-       WHERE brand = $1 AND label_type = 'tongue'
-         AND (size_us = $2 OR size_us IS NULL)
-       ORDER BY (size_us = $2)::int DESC
-       LIMIT 1`,
-      [brand, sizeUs]
-    ).catch(() => ({ rows: [] }));
-    const tongueRefBase64: string | null = refRow.rows[0]?.image_base64 || null;
-    if (tongueRefBase64) console.log(`[tongue] usando referencia de admin para ${brand}`);
-
-    const brandPrompt = buildTonguePrompt(brand, detections, customPrompt || "", !!tongueRefBase64);
+    const brandPrompt = buildTonguePrompt(brand, detections, customPrompt || "", false);
 
     // Deadline global: 90s (margen seguro bajo Railway timeout de ~120s)
     const GLOBAL_DEADLINE = Date.now() + 90_000;
@@ -2165,12 +2152,8 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
     const ATTEMPT_TIMEOUT_MS = 35_000;
 
     try {
-      // Orden partes: [ref (si existe), foto a editar, texto]
+      // Partes: [foto a editar, texto]
       const parts: any[] = [];
-      if (tongueRefBase64) {
-        const refB64 = tongueRefBase64.includes(",") ? tongueRefBase64.split(",")[1] : tongueRefBase64;
-        parts.push({ inlineData: { mimeType: "image/jpeg", data: refB64 } });
-      }
       let aspectRatio: string | null = null;
       if (imageBase64) {
         const base64Data = imageBase64.includes(",") ? imageBase64.split(",")[1] : imageBase64;
