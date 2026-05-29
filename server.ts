@@ -2010,136 +2010,106 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
   }
 
   // Prefacio fijo que va SIEMPRE al inicio de cualquier prompt de generación.
-  // ─── Prompt engineering para Imagen 3 / Gemini image gen ───────────────────
-  // Principios clave:
-  //  1. DESCRIBIR el resultado (foto editada), no dar instrucciones de proceso
-  //  2. Anclar textos exactos entre comillas simples para evitar alucinaciones
-  //  3. Especificar posición física + tipografía de cada campo
-  //  4. Anclar la física del material (tejido, impresión transfer, iluminación)
-  //  5. Temperatura baja (0.05) en la llamada API para máxima fidelidad de texto
-
-  // Ancla de fotorrealismo compartida por todas las marcas
-  const PHOTO_ANCHOR =
-    `The output must look like the ORIGINAL PHOTOGRAPH with only those specific text values changed. ` +
-    `Preserve without any alteration: exact camera angle, framing, depth of field, film grain, ` +
-    `ambient lighting direction, specular highlights on the label surface, fabric fold geometry, ` +
-    `thread micro-structure of the woven nylon substrate, and thermal-transfer print texture ` +
-    `(slight halftone dot pattern, ink absorbed into fibers, no sharp digital edges). ` +
-    `Every unchanged character must remain pixel-identical in position, weight, and opacity. ` +
-    `No watermarks, no signatures, no added elements, no reframing.`;
-
-  // Regla de renderizado de texto compartida
-  const TEXT_RULE =
-    `TEXT RENDERING: Every substituted value must be printed as a literal character string ` +
-    `using the identical compressed industrial sans-serif font already present on the label — ` +
-    `same ink color (black), same optical size, same character spacing, same baseline alignment ` +
-    `as the text it replaces. Reproduce the exact characters shown in quotes, including digits ` +
-    `and symbols. Zero tolerance for random numbers, garbled glyphs, or approximated values.`;
+  const TONGUE_PREAMBLE =
+    `Te adjunto la imagen de la etiqueta/lengueta. ` +
+    `REGLA CRÍTICA: los valores que aparecen en las instrucciones de SUSTITUCIÓN a continuación ` +
+    `son los CORRECTOS y tienen PRIORIDAD ABSOLUTA sobre lo que veas en la imagen. ` +
+    `Si la imagen muestra un valor diferente al indicado, IGNORA lo de la imagen y usa el valor de las instrucciones. ` +
+    `INTEGRACIÓN DE TEXTURA FÍSICA: los textos nuevos deben integrarse visualmente con el sustrato real del tejido — ` +
+    `adoptando exactamente la perspectiva y ángulo de la cámara, siguiendo las microarrugas, curvas y pliegues de la lengüeta, ` +
+    `con el mismo micro-grano de impresión por transferencia térmica, idéntica opacidad y las mismas reflexiones de luz rasante ` +
+    `que el texto ya existente en la etiqueta. ` +
+    `Ningún texto sustituto debe parecer superpuesto digitalmente ni más nítido que el tejido: ` +
+    `toda la tipografía debe verse imprimida en la misma pasada de fábrica, con coherencia de perspectiva 3D ` +
+    `y micro-deformación acorde a los pliegues visibles del tejido. ` +
+    `Ahora aplica las siguientes instrucciones en alta precisión:`;
 
   function buildTonguePrompt(brand: string, d: any, customPrompt: string): string {
     const sizes = d.sizes || {};
-
+    // Lista de campos a PRESERVAR (cada marca tiene los suyos) y a REEMPLAZAR.
+    // Formato conversacional con mapeos explícitos viejo→nuevo. Funciona mejor
+    // que CAPS+"DO NOT CHANGE" porque Gemini lee instrucciones naturales.
     if (brand === "ADIDAS") {
       return [
-        `Photo editing task: modify specific text fields on the interior tongue label of an Adidas sneaker.`,
+        TONGUE_PREAMBLE,
         ``,
-        `SUBJECT: The attached photograph shows the woven white nylon tongue label of an Adidas shoe, ` +
-        `printed with a thermal-transfer process. The label displays an article number, factory code, ` +
-        `size chart, date, serial codes, and the Adidas trefoil logo.`,
+        `Edita la etiqueta interior de la lengüeta de la zapatilla adidas que ves en la foto.`,
+        `Mantén EXACTAMENTE la misma foto en todo: encuadre, fondo, iluminación, ángulo, grano, perspectiva, textura del tejido, costuras, sombras, doblez de la lengüeta. No reencuadres, no añadas elementos nuevos.`,
         ``,
-        `${PHOTO_ANCHOR}`,
+        `Conserva sin tocar los siguientes textos exactamente como aparecen ahora:`,
+        `  · ART NO / SKU "${d.sku}"`,
+        `  · FACTORY / LVL "${d.lvl}"`,
+        `  · Tabla de tallas: US ${sizes.us}  UK ${sizes.uk}  FR ${sizes.fr}  JP ${sizes.jp}`,
         ``,
-        `${TEXT_RULE}`,
+        `SUSTITUYE únicamente estos textos por los nuevos valores indicados (usa EXACTAMENTE estos valores, no los de la imagen):`,
+        `  · FECHA: borra la fecha que aparece en la imagen y escribe "${d.date}" en su lugar`,
+        `  · Brand Serial de abajo a la izquierda → "${d.brandSerial}"`,
+        `  · Reference (la que empieza por #) → "${d.reference}"`,
         ``,
-        `FIELDS TO KEEP UNCHANGED (do not touch these):`,
-        `  • Article number / ART NO: '${d.sku}' — leave exactly as printed`,
-        `  • Factory / LVL code: '${d.lvl}' — leave exactly as printed`,
-        `  • Size chart line: US ${sizes.us} / UK ${sizes.uk} / FR ${sizes.fr} / JP ${sizes.jp} — leave exactly as printed`,
-        `  • Adidas logo and all decorative elements`,
-        ``,
-        `FIELDS TO SUBSTITUTE — replace old printed value with the exact quoted string below:`,
-        `  • Date field (printed near top-right or bottom area): replace current date → print exactly '${d.date}' in the same location, same black bold font`,
-        `  • Reference code starting with '#' (bottom area, left-aligned): replace current value → print exactly '${d.reference}' — monospaced digits, same weight`,
-        `  • Alphanumeric serial below the Adidas brand mark (bottom-left corner): replace current value → print exactly '${d.brandSerial}' — same condensed font, no extra characters`,
-        ``,
+        `Usa la misma tipografía sans-serif bold de adidas, mismo tamaño y posición que el texto que sustituyes. Mantén el aspecto de foto cruda con cámara de móvil 12 MP — sin marcas de agua, sin texto adicional, sin firma, sin logo nuevo.`,
         customPrompt || ""
       ].filter(Boolean).join("\n");
     }
-
     if (brand === "ASICS") {
       return [
-        `Photo editing task: modify specific text fields on the interior tongue label of an Asics sneaker.`,
+        TONGUE_PREAMBLE,
         ``,
-        `SUBJECT: The attached photograph shows the tongue label of an Asics shoe — white rectangular label ` +
-        `on woven fabric, with compressed sans-serif typography, a vertical-bar size chart, and thermal-transfer print.`,
+        `Edita la etiqueta interior de la lengüeta ASICS que ves en la foto.`,
+        `Mantén EXACTAMENTE la misma foto en todo: encuadre, fondo, ángulo, perspectiva, iluminación, grano, costuras y textura del tejido. No reencuadres ni añadas elementos.`,
         ``,
-        `${PHOTO_ANCHOR}`,
+        `Preserva tal cual:`,
+        `  · SKU "${d.sku}"`,
+        `  · Tabla de tallas con los separadores verticales | : US ${sizes.us} | UK ${sizes.uk} | FR ${sizes.fr} | JP ${sizes.jp}`,
         ``,
-        `${TEXT_RULE}`,
+        `SUSTITUYE solo (usa EXACTAMENTE estos valores, no los de la imagen):`,
+        `  · Fecha: borra la fecha que aparece en la imagen y escribe "${d.date}" en su lugar`,
+        `  · Tracking code (1 letra + 6 dígitos) → "${d.reference}"`,
+        `  · Serial number (15 alfanuméricos en mayúsculas) → "${d.brandSerial}"`,
         ``,
-        `FIELDS TO KEEP UNCHANGED:`,
-        `  • SKU / model code: '${d.sku}' — leave exactly as printed`,
-        `  • Size chart with vertical separators: US ${sizes.us} | UK ${sizes.uk} | FR ${sizes.fr} | JP ${sizes.jp}`,
-        `  • Asics logo and country of manufacture`,
-        ``,
-        `FIELDS TO SUBSTITUTE:`,
-        `  • Date field: replace current date → print exactly '${d.date}' in the same position, same compact font`,
-        `  • Tracking code (1 uppercase letter followed by 6 digits, located in lower section): replace → print exactly '${d.reference}'`,
-        `  • Serial number (15-character alphanumeric string in uppercase, bottom area): replace → print exactly '${d.brandSerial}' — no spaces, same condensed font`,
-        ``,
+        `Usa la tipografía compacta y limpia característica de ASICS, mismo tamaño y posición que los textos sustituidos. Estilo de foto macro de móvil, sin marcas de agua ni texto extra.`,
         customPrompt || ""
       ].filter(Boolean).join("\n");
     }
-
     if (brand === "ONITSUKA") {
       return [
-        `Photo editing task: modify specific text fields on the interior tongue label of an Onitsuka Tiger sneaker.`,
+        TONGUE_PREAMBLE,
         ``,
-        `SUBJECT: The attached photograph shows the tongue label of an Onitsuka Tiger shoe — white matte label ` +
-        `on woven synthetic fabric, ultra-condensed Helvetica-style typography, purely informational layout ` +
-        `(no tiger logo on the label itself), thermal-transfer ink.`,
+        `Edita la etiqueta interior de la lengüeta ONITSUKA TIGER que ves en la foto.`,
+        `Mantén EXACTAMENTE la misma foto: mismo encuadre, fondo, ángulo, iluminación, grano, costuras y textura. No reencuadres ni añadas elementos.`,
         ``,
-        `${PHOTO_ANCHOR}`,
+        `Preserva tal cual:`,
+        `  · SKU "${d.sku}"`,
+        `  · Tabla de tallas: US ${sizes.us}  UK ${sizes.uk}  FR ${sizes.fr}  CM ${sizes.jp}`,
+        `  · Texto país "MADE IN INDONESIA / FABRIQUE EN INDONESIE"`,
         ``,
-        `${TEXT_RULE}`,
+        `SUSTITUYE solo (usa EXACTAMENTE estos valores, no los de la imagen):`,
+        `  · Fecha: borra la fecha que aparece en la imagen y escribe "${d.date}" en su lugar`,
+        `  · Batch Code (formato F + 6 dígitos) → "${d.reference}"`,
+        `  · Unit Serial (15 alfanuméricos en mayúsculas) → "${d.brandSerial}"`,
         ``,
-        `FIELDS TO KEEP UNCHANGED:`,
-        `  • SKU / model code: '${d.sku}'`,
-        `  • Size chart: US ${sizes.us} / UK ${sizes.uk} / FR ${sizes.fr} / CM ${sizes.jp}`,
-        `  • Country line: 'MADE IN INDONESIA / FABRIQUE EN INDONESIE'`,
-        ``,
-        `FIELDS TO SUBSTITUTE:`,
-        `  • Date field: replace current date → print exactly '${d.date}'`,
-        `  • Batch code (letter F followed by exactly 6 digits): replace → print exactly '${d.reference}'`,
-        `  • Unit serial (15-character alphanumeric uppercase string, right of batch code): replace → print exactly '${d.brandSerial}'`,
-        ``,
+        `Tipografía sans-serif ultra-condensada, fondo blanco mate, impresión transfer térmico. Sin logo de tigre, sin marcas de agua, etiqueta puramente informativa.`,
         customPrompt || ""
       ].filter(Boolean).join("\n");
     }
-
     // NEW BALANCE (default)
     return [
-      `Photo editing task: modify specific text fields on the interior tongue label of a New Balance sneaker.`,
+      TONGUE_PREAMBLE,
       ``,
-      `SUBJECT: The attached photograph shows the tongue label of a New Balance shoe — white satin-weave label ` +
-      `with heavy industrial typography, factory code, two serial numbers, a brand alphanumeric code, and size chart.`,
+      `Edita la etiqueta interior de la lengüeta NEW BALANCE que ves en la foto.`,
+      `Mantén EXACTAMENTE la misma foto: mismo encuadre, fondo, ángulo, iluminación, grano, costuras y textura del tejido satinado. No reencuadres ni añadas elementos nuevos.`,
       ``,
-      `${PHOTO_ANCHOR}`,
+      `Preserva tal cual:`,
+      `  · Style / Model "${d.sku}"`,
+      `  · Factory "${d.lvl}"`,
+      `  · Tabla de tallas: US ${sizes.us}  UK ${sizes.uk}  EU ${sizes.fr}  CM ${sizes.jp}`,
       ``,
-      `${TEXT_RULE}`,
+      `SUSTITUYE exactamente estos códigos (usa EXACTAMENTE estos valores, no los de la imagen):`,
+      `  · Fecha: borra la fecha que aparece en la imagen y escribe "${d.date}" en su lugar`,
+      `  · Serial 1 (12 dígitos) → "${d.reference}"`,
+      `  · Serial 2 (7 dígitos) → "${d.reference2}"`,
+      `  · Brand code → "${d.brandSerial}"`,
       ``,
-      `FIELDS TO KEEP UNCHANGED:`,
-      `  • Style / Model number: '${d.sku}'`,
-      `  • Factory code: '${d.lvl}'`,
-      `  • Size chart: US ${sizes.us} / UK ${sizes.uk} / EU ${sizes.fr} / CM ${sizes.jp}`,
-      `  • New Balance logo and all remaining text`,
-      ``,
-      `FIELDS TO SUBSTITUTE:`,
-      `  • Date field: replace current date → print exactly '${d.date}'`,
-      `  • Serial 1 (12-digit number, upper serial area): replace → print exactly '${d.reference}' — monospaced digits`,
-      `  • Serial 2 (7-digit number, lower serial area): replace → print exactly '${d.reference2 || ""}' — monospaced digits`,
-      `  • Brand code (letters + digits + space + letters format, e.g. LXCK1298 CLX): replace → print exactly '${d.brandSerial}'`,
-      ``,
+      `Tipografía industrial pesada idéntica a la original, mismas posiciones, foto macro de móvil. Sin marcas de agua, sin firma, sin texto extra.`,
       customPrompt || ""
     ].filter(Boolean).join("\n");
   }
@@ -2191,9 +2161,7 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
             contents: [{ parts }],
             generationConfig: {
               responseModalities: ["TEXT", "IMAGE"],
-              // Temperatura baja = máxima fidelidad en reproducción de texto.
-              // Sube ligeramente en reintentos para salir de bloqueos creativos.
-              temperature: 0.05 + (attempt - 1) * 0.08,
+              temperature: 0.35 + (attempt - 1) * 0.1,
             },
           };
           if (aspectRatio) body.generationConfig.imageConfig = { aspectRatio };
@@ -2378,140 +2346,93 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
 
   // ── Box Label Generation ──────────────────────────────────────────────────
 
+  // Helper: build box label prompt per brand
   function buildBoxPrompt(brand: string, d: any, customPrompt: string, _barcodeValue: string): string {
     const sizes = d.sizes || {};
 
-    // Ancla física compartida para etiquetas de caja
-    const BOX_PHOTO_ANCHOR =
-      `The output must look like the ORIGINAL PHOTOGRAPH with only those specific text values changed. ` +
-      `Preserve without alteration: exact camera angle, framing, label geometry (rectangular white adhesive ` +
-      `sticker, slightly raised edges), semi-matte paper texture, print registration, ambient lighting, ` +
-      `box background material and color, and all surrounding context. ` +
-      `No reframing, no perspective change, no added shine or distortion.`;
-
-    const BOX_BARCODE_RULE =
-      `BARCODE PROTECTION — ABSOLUTE: The barcode (group of vertical black stripes of varying widths ` +
-      `with the EAN-13 numeric string printed directly below them) must be reproduced stroke-for-stroke ` +
-      `identical to the original. Do not redraw, regenerate, approximate, or alter any stripe width, ` +
-      `spacing, or the digits below. The barcode zone is completely frozen.`;
-
-    const BOX_TEXT_RULE =
-      `TEXT RENDERING: Each substituted value must appear as a literal printed string — ` +
-      `clean black sans-serif font on white background, same optical size as the text it replaces, ` +
-      `same position on the label. Print the exact characters shown in quotes. ` +
-      `No random digits, no symbol corruption, no approximated values.`;
+    // Preámbulo común — NUNCA blanquear el barcode, solo cambiar texto específico.
+    const BOX_PREAMBLE =
+      `Te adjunto la foto de la etiqueta adhesiva blanca de la caja de zapatillas. ` +
+      `REGLA CRÍTICA ABSOLUTA: el código de barras (las barras/rayas verticales negras y ` +
+      `el número EAN impreso bajo ellas) JAMÁS se toca — debe quedar EXACTAMENTE igual que ` +
+      `en la foto original, con las mismas rayas, mismo número, misma posición. ` +
+      `La etiqueta completa, el fondo azul de la caja, la perspectiva, la iluminación y ` +
+      `todos los logos también se preservan intactos. ` +
+      `SOLO se modifican los campos de texto específicos indicados a continuación.`;
 
     if (brand === "ADIDAS") {
+      // Códigos de correlación: derivados de los seriales de la lengüeta.
+      // EAN PO# = dígitos del reference de lengüeta (10 dígitos)
       const refDigits = (d.reference || "").replace(/\D/g, "").padEnd(10, "0").slice(0, 10);
-      const absNum   = (d.brandSerial || "").replace(/\D/g, "").padStart(4, "0").slice(0, 4);
-      const absVer   = String(Math.floor(Math.random() * 20) + 1).padStart(2, "0");
+      // ABSBOX = dígitos del brandSerial (4 chars) + versión 2 dígitos
+      const absNum = (d.brandSerial || "").replace(/\D/g, "").padStart(4, "0").slice(0, 4);
+      const absVer = String(Math.floor(Math.random() * 20) + 1).padStart(2, "0");
 
       return [
-        `Photo editing task: modify two small tracking text lines on an Adidas shoebox adhesive label.`,
+        BOX_PREAMBLE, ``,
+        `Edita la etiqueta adhesiva blanca de la caja adidas que ves en la foto.`,
         ``,
-        `SUBJECT: The attached photograph shows a white rectangular adhesive sticker affixed to the side ` +
-        `of an Adidas shoe box. The label contains: model name, article number '${d.sku}', colorway, ` +
-        `size chart (US ${sizes.us} / UK ${sizes.uk} / EU ${sizes.fr} / JP ${sizes.jp}), ` +
-        `country of manufacture, a barcode with EAN digits, and two small tracking lines in the lower-left area.`,
+        `PRESERVA SIN CAMBIAR: nombre del modelo, SKU "${d.sku}", toda la tabla de tallas ` +
+        `(US ${sizes.us} / UK ${sizes.uk} / EU ${sizes.fr} / JP ${sizes.jp}), ` +
+        `colorway, línea de producto (ORIGINALS, etc.), MADE IN.../FABRIQUÉ EN..., ` +
+        `el código de barras con sus rayas verticales y el número EAN bajo ellas, ` +
+        `logos e iconos.`,
         ``,
-        `${BOX_PHOTO_ANCHOR}`,
+        `SUSTITUYE ÚNICAMENTE estas 2 líneas pequeñas en la esquina inferior izquierda ` +
+        `(justo debajo de "FABRIQUÉ EN..." o del número EAN):`,
+        `  · La línea "EAN PO# XXXXXXXXXX"   →  "EAN PO# ${refDigits}"`,
+        `  · La línea "ABSBOX/XXXX/VXX"       →  "ABSBOX/${absNum}/V${absVer}"`,
         ``,
-        `${BOX_BARCODE_RULE}`,
-        ``,
-        `${BOX_TEXT_RULE}`,
-        ``,
-        `FIELDS TO KEEP UNCHANGED (do not touch):`,
-        `  • Model name, article number '${d.sku}', colorway, product line (ORIGINALS etc.)`,
-        `  • Size chart: US ${sizes.us} / UK ${sizes.uk} / EU ${sizes.fr} / JP ${sizes.jp}`,
-        `  • Country line (MADE IN / FABRIQUÉ EN)`,
-        `  • The entire barcode area — stripes and EAN digits below them`,
-        `  • All logos, icons, and remaining text`,
-        ``,
-        `ONLY CHANGE these two small lines in the lower-left corner of the label ` +
-        `(the lines that appear just below the barcode or below the country line):`,
-        `  • The line that reads 'EAN PO# [any digits]' → replace entirely with the text 'EAN PO# ${refDigits}' ` +
-        `printed in the same small black sans-serif font, same position`,
-        `  • The line that reads 'ABSBOX/[digits]/V[digits]' → replace entirely with the text 'ABSBOX/${absNum}/V${absVer}' ` +
-        `printed in the same small black sans-serif font, same position`,
-        ``,
+        `Misma fuente, mismo tamaño, mismo color negro, misma posición exacta. Nada más cambia.`,
         customPrompt || ""
       ].filter(Boolean).join("\n");
     }
 
     if (brand === "ASICS") {
       return [
-        `Photo editing task: modify two tracking codes on an Asics shoebox adhesive label.`,
+        BOX_PREAMBLE, ``,
+        `Edita la etiqueta adhesiva de la caja ASICS.`,
+        `PRESERVA: logo ASICS, nombre del modelo, SKU "${d.sku}", tabla de tallas, colorway, ` +
+        `país de fabricación, código de barras (barras + número EAN). Todo intacto.`,
         ``,
-        `SUBJECT: White rectangular adhesive label on an Asics shoe box. Contains Asics logo, ` +
-        `model name, SKU '${d.sku}', colorway, size chart, country of manufacture, and a barcode.`,
+        `SUSTITUYE ÚNICAMENTE:`,
+        `  · Código de tracking individual (1 letra + 6 dígitos) → "${d.reference}"`,
+        `  · Serial único de unidad (15 alfanuméricos) → "${d.brandSerial}"`,
         ``,
-        `${BOX_PHOTO_ANCHOR}`,
-        ``,
-        `${BOX_BARCODE_RULE}`,
-        ``,
-        `${BOX_TEXT_RULE}`,
-        ``,
-        `FIELDS TO KEEP UNCHANGED: Asics logo, model name, SKU '${d.sku}', ` +
-        `sizes (US ${sizes.us} / UK ${sizes.uk} / FR ${sizes.fr} / JP ${sizes.jp}), ` +
-        `colorway, country line, barcode stripes and EAN digits.`,
-        ``,
-        `ONLY CHANGE these two fields:`,
-        `  • Tracking code (1 uppercase letter + 6 digits format): replace current value → print exactly '${d.reference}' in the same position and font`,
-        `  • Unit serial (15-character alphanumeric uppercase string): replace current value → print exactly '${d.brandSerial}' in the same position and font`,
-        ``,
+        `Misma tipografía y posición. No cambies nada más.`,
         customPrompt || ""
       ].filter(Boolean).join("\n");
     }
 
     if (brand === "ONITSUKA") {
       return [
-        `Photo editing task: modify two tracking codes on an Onitsuka Tiger shoebox adhesive label.`,
+        BOX_PREAMBLE, ``,
+        `Edita la etiqueta de la caja Onitsuka Tiger.`,
+        `PRESERVA: logo, nombre del modelo, SKU "${d.sku}", tallas, ` +
+        `"MADE IN INDONESIA / FABRIQUE EN INDONESIE", código de barras (barras + EAN). Todo intacto.`,
         ``,
-        `SUBJECT: White rectangular adhesive label on an Onitsuka Tiger shoe box. ` +
-        `Contains brand logo, model name, SKU '${d.sku}', size chart, ` +
-        `'MADE IN INDONESIA / FABRIQUE EN INDONESIE', and a barcode.`,
+        `SUSTITUYE ÚNICAMENTE:`,
+        `  · Batch code (formato F + 6 dígitos) → "${d.reference}"`,
+        `  · Serial de unidad (15 alfanuméricos) → "${d.brandSerial}"`,
         ``,
-        `${BOX_PHOTO_ANCHOR}`,
-        ``,
-        `${BOX_BARCODE_RULE}`,
-        ``,
-        `${BOX_TEXT_RULE}`,
-        ``,
-        `FIELDS TO KEEP UNCHANGED: logo, model name, SKU '${d.sku}', ` +
-        `sizes (US ${sizes.us} / UK ${sizes.uk} / FR ${sizes.fr} / CM ${sizes.jp}), ` +
-        `country lines, barcode stripes and EAN digits.`,
-        ``,
-        `ONLY CHANGE these two fields:`,
-        `  • Batch code (letter F followed by exactly 6 digits): replace current value → print exactly '${d.reference}'`,
-        `  • Unit serial (15-character alphanumeric uppercase string): replace current value → print exactly '${d.brandSerial}'`,
-        ``,
+        `Misma tipografía y posición. No cambies nada más.`,
         customPrompt || ""
       ].filter(Boolean).join("\n");
     }
 
     // NEW BALANCE (default)
     return [
-      `Photo editing task: modify three tracking codes on a New Balance shoebox adhesive label.`,
+      BOX_PREAMBLE, ``,
+      `Edita la etiqueta adhesiva de la caja New Balance.`,
+      `PRESERVA: logo NB, nombre del modelo, Style "${d.sku}", tabla de tallas, colores, ` +
+      `país de fabricación, código de barras (barras + número EAN). Todo intacto.`,
       ``,
-      `SUBJECT: White rectangular adhesive label on a New Balance shoe box. ` +
-      `Contains NB logo, model name, Style '${d.sku}', color description, size chart, ` +
-      `country of manufacture, two serial numbers, a brand code, and a barcode.`,
+      `SUSTITUYE ÚNICAMENTE estos códigos de seguimiento:`,
+      `  · Serial 1 (12 dígitos)   → "${d.reference}"`,
+      `  · Serial 2 (7 dígitos)    → "${d.reference2 || ""}"`,
+      `  · Brand code              → "${d.brandSerial}"`,
       ``,
-      `${BOX_PHOTO_ANCHOR}`,
-      ``,
-      `${BOX_BARCODE_RULE}`,
-      ``,
-      `${BOX_TEXT_RULE}`,
-      ``,
-      `FIELDS TO KEEP UNCHANGED: NB logo, model name, Style '${d.sku}', ` +
-      `sizes (US ${sizes.us} / UK ${sizes.uk} / EU ${sizes.fr} / CM ${sizes.jp}), ` +
-      `color, country line, barcode stripes and EAN digits.`,
-      ``,
-      `ONLY CHANGE these three tracking fields:`,
-      `  • 12-digit serial number (upper serial area): replace current value → print exactly '${d.reference}'`,
-      `  • 7-digit serial number (lower serial area): replace current value → print exactly '${d.reference2 || ""}'`,
-      `  • Brand code (letters+digits+space+letters format, e.g. LXCK1298 CLX): replace current value → print exactly '${d.brandSerial}'`,
-      ``,
+      `Misma tipografía y posición. No cambies nada más.`,
       customPrompt || ""
     ].filter(Boolean).join("\n");
   }
@@ -2553,7 +2474,7 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
           contents: [{ parts }],
           generationConfig: {
             responseModalities: ["TEXT", "IMAGE"],
-            temperature: 0.05 + (attempt - 1) * 0.08,
+            temperature: 0.35 + (attempt - 1) * 0.1,
           },
         };
         if (aspectRatio) body.generationConfig.imageConfig = { aspectRatio };
