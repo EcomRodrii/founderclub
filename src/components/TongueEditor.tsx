@@ -373,34 +373,21 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
   };
 
   // ── Canvas-based text editing ─────────────────────────────────────────────
-  // Strategy:
-  //  1. Heavy-blur the whole image → text pixels dissolve into background color
-  //  2. Stamp that blurred patch over each text region → "erases" old characters
-  //     without a visible solid-color rectangle (blur preserves bg texture/gradient)
-  //  3. Render new value using multiply composite so text ink integrates with the
-  //     fabric weave instead of sitting on top as a flat digital layer
+  // Paints new text values directly onto the original photo without AI regeneration.
+  // Uses bounding boxes returned by the OCR step to know exactly where each
+  // text field sits in the image. This preserves every pixel of the original
+  // photo — only the specific text regions are overwritten.
   const applyCanvasTextEdits = (srcImage: string, d: any): Promise<string> =>
     new Promise((resolve) => {
       const img = new Image();
       img.onload = () => {
         const W = img.width, H = img.height;
-
-        // Pre-build a heavily-blurred copy of the full image.
-        // When stamped over a text region this averages the dark text pixels into
-        // the surrounding white label background → seamless erase.
-        const blurRadius = Math.max(12, Math.round(Math.min(W, H) / 38));
-        const blurCvs = document.createElement('canvas');
-        blurCvs.width = W; blurCvs.height = H;
-        const blurCtx = blurCvs.getContext('2d')!;
-        blurCtx.filter = `blur(${blurRadius}px)`;
-        blurCtx.drawImage(img, 0, 0);
-
         const canvas = document.createElement('canvas');
         canvas.width = W; canvas.height = H;
         const ctx = canvas.getContext('2d')!;
-        ctx.drawImage(img, 0, 0);   // start with original pixels
+        ctx.drawImage(img, 0, 0);
 
-        // Convert Gemini 0-1000 normalised coords → pixel rect
+        // Convert Gemini 0-1000 normalized coords → pixel rect
         const toRect = (box: number[]) => {
           const [yn1, xn1, yn2, xn2] = box;
           return {
@@ -411,29 +398,47 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
           };
         };
 
+        // Sample background colour from a thin strip ABOVE and BELOW the box
+        // (avoids sampling the text itself)
+        const sampleBg = (x: number, y: number, w: number, h: number): string => {
+          let r = 0, g = 0, b = 0, n = 0;
+          const sw = Math.max(1, Math.min(Math.round(w), W - Math.round(x)));
+          const sh = Math.max(1, Math.min(6, Math.round(h * 0.4)));
+          const addStrip = (sy: number) => {
+            if (sy < 0 || sy + sh > H || sw <= 0) return;
+            const px = ctx.getImageData(Math.round(x), sy, sw, sh).data;
+            for (let i = 0; i < px.length; i += 4) { r += px[i]; g += px[i+1]; b += px[i+2]; n++; }
+          };
+          addStrip(Math.max(0, Math.round(y - sh * 1.5)));   // strip above
+          addStrip(Math.min(H - sh, Math.round(y + h + 2)));  // strip below
+          if (n === 0) return '#f0ebe0';  // fallback: cream label colour
+          return `rgb(${Math.round(r/n)},${Math.round(g/n)},${Math.round(b/n)})`;
+        };
+
+        // Erase old text and paint new value at the same position
         const paint = (value: string, box: number[] | null | undefined) => {
           if (!box || box.length < 4 || !value) return;
           const { x, y, w, h } = toRect(box);
-          // Generous padding so even a slightly-off box fully covers old text
-          const pad = Math.max(6, h * 0.4);
-          const rx = Math.max(0, x - pad),   ry = Math.max(0, y - pad);
-          const rw = Math.min(w + pad * 2, W - rx), rh = Math.min(h + pad * 2, H - ry);
+          const pad = Math.max(4, h * 0.25);
 
-          // Step 1: stamp blurred fill — erases old characters, no solid patch
-          ctx.drawImage(blurCvs, rx, ry, rw, rh, rx, ry, rw, rh);
+          // Fill with background colour (oversized to cover any bleed)
+          ctx.fillStyle = sampleBg(x, y, w, h);
+          ctx.fillRect(
+            Math.max(0, x - pad), Math.max(0, y - pad),
+            Math.min(W - Math.max(0, x - pad), w + pad * 2),
+            Math.min(H - Math.max(0, y - pad), h + pad * 2),
+          );
 
-          // Step 2: render new text in multiply blend mode.
-          // Multiply: dark ink × white background ≈ ink colour → looks printed.
-          // On light backgrounds (label = white/cream) this is identical to normal;
-          // on textured areas the weave grain shows through the stroke naturally.
-          const fs = Math.max(7, Math.round(h * 0.68));
-          ctx.font = `bold ${fs}px "Arial Narrow","Helvetica Neue Condensed Bold",Helvetica,Arial,sans-serif`;
-          ctx.globalCompositeOperation = 'multiply';
-          ctx.fillStyle = '#0d0d0d';
+          // Render replacement text
+          const fs = Math.max(7, Math.round(h * 0.64));
+          ctx.font = `bold ${fs}px "Arial Narrow","Helvetica Neue",Arial,sans-serif`;
+          ctx.fillStyle = '#1a1a1a';
           ctx.textAlign = 'left';
           ctx.textBaseline = 'middle';
+          // Slight opacity < 1 mimics thermal-transfer print on fabric
+          ctx.globalAlpha = 0.88;
           ctx.fillText(value, x, y + h / 2, w + pad);
-          ctx.globalCompositeOperation = 'source-over';   // reset
+          ctx.globalAlpha = 1;
         };
 
         paint(d.model || d.sku,  d.model_box);
@@ -444,12 +449,13 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
         paint(d.lvl,             d.lvl_box);
         if (d.sizes && d.sizes_row_box) {
           const s = d.sizes;
-          paint(`US ${s.us}  UK ${s.uk}  FR ${s.fr}  JP ${s.jp}`, d.sizes_row_box);
+          const line = `US ${s.us}  UK ${s.uk}  FR ${s.fr}  JP ${s.jp}`;
+          paint(line, d.sizes_row_box);
         }
 
         resolve(canvas.toDataURL('image/jpeg', 0.93));
       };
-      img.onerror = () => resolve(srcImage);
+      img.onerror = () => resolve(srcImage);  // fallback: return untouched original
       img.src = srcImage;
     });
 
