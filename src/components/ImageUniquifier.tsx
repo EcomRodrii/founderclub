@@ -803,17 +803,17 @@ function makeConfig(partial: Partial<ModeConfig> & Pick<ModeConfig, 'id' | 'labe
   } as RepostConfig;
 }
 
-// Presets iniciales — marcos reducidos a 1-2% (imperceptibles en Vinted).
+// Presets iniciales — marco mínimo 0.3% (casi invisible en Vinted).
 // La unicidad real viene del crop invisible + ruido por bloques, no del marco.
 const DEFAULT_CONFIGS: RepostConfig[] = [
-  makeConfig({ id: 'normal', label: '#1', desc: 'Sesgar X+Y suave + marco 1%',   skewX: 0.5,  skewY: 0.5,  frameVPct: 1, frameHPct: 1 }),
-  makeConfig({ id: 'normal', label: '#2', desc: 'Sesgar X+Y inverso + marco 1%', skewX: -0.5, skewY: -0.5, frameVPct: 1, frameHPct: 1 }),
-  makeConfig({ id: 'normal', label: '#3', desc: 'Rotar +2° + marco sutil',       rotateDegMax: 2, frameVPct: 1, frameHPct: 1 }),
-  makeConfig({ id: 'normal', label: '#4', desc: 'Rotar -2° + marco sutil',       rotateDegMax: 2, frameVPct: 1, frameHPct: 1 }),
-  makeConfig({ id: 'normal', label: '#5', desc: 'Sin sesgar + marco 2%',         frameVPct: 2, frameHPct: 2 }),
-  makeConfig({ id: 'normal', label: '#6', desc: 'Sesgar sutil + marco 2%',       frameVPct: 2, frameHPct: 2, skewX: -0.5, skewY: -0.2 }),
-  makeConfig({ id: 'normal', label: '#7', desc: 'Sesgar Y + sin marco',          frameVPct: 0, frameHPct: 0, skewY: -0.3 }),
-  makeConfig({ id: 'normal', label: '#8', desc: 'Sesgar X + sin marco',          frameVPct: 0, frameHPct: 0, skewX: -0.5 }),
+  makeConfig({ id: 'normal', label: '#1', desc: 'Sesgar X+Y suave + marco 0.3%',   skewX: 0.5,  skewY: 0.5,  frameVPct: 0.3, frameHPct: 0.3 }),
+  makeConfig({ id: 'normal', label: '#2', desc: 'Sesgar X+Y inverso + marco 0.3%', skewX: -0.5, skewY: -0.5, frameVPct: 0.3, frameHPct: 0.3 }),
+  makeConfig({ id: 'normal', label: '#3', desc: 'Rotar +2° + marco 0.3%',          rotateDegMax: 2, frameVPct: 0.3, frameHPct: 0.3 }),
+  makeConfig({ id: 'normal', label: '#4', desc: 'Rotar -2° + marco 0.3%',          rotateDegMax: 2, frameVPct: 0.3, frameHPct: 0.3 }),
+  makeConfig({ id: 'normal', label: '#5', desc: 'Sin sesgar + marco 0.3%',         frameVPct: 0.3, frameHPct: 0.3 }),
+  makeConfig({ id: 'normal', label: '#6', desc: 'Sesgar sutil + marco 0.3%',       frameVPct: 0.3, frameHPct: 0.3, skewX: -0.5, skewY: -0.2 }),
+  makeConfig({ id: 'normal', label: '#7', desc: 'Sesgar Y + sin marco',            frameVPct: 0, frameHPct: 0, skewY: -0.3 }),
+  makeConfig({ id: 'normal', label: '#8', desc: 'Sesgar X + sin marco',            frameVPct: 0, frameHPct: 0, skewX: -0.5 }),
 ];
 
 function summarizeConfig(c: RepostConfig): string {
@@ -1163,8 +1163,8 @@ export default function ImageUniquifier() {
                       <NumField label="Sesgar X" step={0.1} value={c.skewX ?? 0} onChange={v => updateConfig(c.rid, { skewX: v })} />
                       <NumField label="Sesgar Y" step={0.1} value={c.skewY ?? 0} onChange={v => updateConfig(c.rid, { skewY: v })} />
                       <NumField label="Rotar máx (°)" step={0.5} min={0} value={c.rotateDegMax} onChange={v => updateConfig(c.rid, { rotateDegMax: v })} />
-                      <NumField label="Marco vertical (%)" step={1} min={0} max={50} value={c.frameVPct ?? 0} onChange={v => updateConfig(c.rid, { frameVPct: v })} />
-                      <NumField label="Marco horizontal (%)" step={1} min={0} max={50} value={c.frameHPct ?? 0} onChange={v => updateConfig(c.rid, { frameHPct: v })} />
+                      <NumField label="Marco vertical (%)" step={0.1} min={0} max={50} value={c.frameVPct ?? 0} onChange={v => updateConfig(c.rid, { frameVPct: v })} />
+                      <NumField label="Marco horizontal (%)" step={0.1} min={0} max={50} value={c.frameHPct ?? 0} onChange={v => updateConfig(c.rid, { frameHPct: v })} />
                       <NumField label="Ruido por bloque" step={1} min={0} max={6} value={c.blockNoiseMax} onChange={v => updateConfig(c.rid, { blockNoiseMax: v })} />
                       <NumField label="Brillo máx" step={1} min={0} max={20} value={c.brightMax} onChange={v => updateConfig(c.rid, { brightMax: v })} />
                       <NumField label="JPEG calidad mín" step={0.01} min={0.5} max={1} value={c.qualityMin} onChange={v => updateConfig(c.rid, { qualityMin: v })} />
