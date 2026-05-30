@@ -1962,8 +1962,8 @@ Para los demás campos, haz tu mejor esfuerzo. Si no ves un dato pon "". Solo el
       let color = "Desconocido";
 
       if (sku && sku !== "Desconocido" && sku !== "") {
-        // Intentar con varios modelos que soporten google_search grounding
-        const SEARCH_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"];
+        // gemini-2.0-flash deprecated mayo 2026 → usar solo 2.5-flash con más timeout
+        const SEARCH_MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-preview-05-20"];
         for (const searchModel of SEARCH_MODELS) {
           try {
             // Construir query con toda la info disponible para máxima precisión
@@ -1984,7 +1984,7 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
             const searchData = await geminiCall(searchModel, {
               contents: [{ parts: [{ text: searchPrompt }] }],
               tools: [{ google_search: {} }]
-            }, 18000);
+            }, 35000);  // 35s — search+generation necesita más tiempo que un OCR normal
 
             const searchText = searchData.candidates?.[0]?.content?.parts?.find((p: any) => p.text)?.text || "";
             console.log(`[OCR] Search ${searchModel} raw:`, searchText.slice(0, 300));
