@@ -2323,10 +2323,11 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
 
     const brandPrompt = buildTonguePrompt(brand, detections, customPrompt || "", false);
 
-    // Deadline global: 90s (margen seguro bajo Railway timeout de ~120s)
-    const GLOBAL_DEADLINE = Date.now() + 90_000;
-    // Timeout por intento: 35s — falla rápido y prueba el siguiente modelo
-    const ATTEMPT_TIMEOUT_MS = 35_000;
+    // Deadline global: 110s (margen seguro bajo Railway timeout de ~120s)
+    const GLOBAL_DEADLINE = Date.now() + 110_000;
+    // 1 intento por modelo con 40s: 5 modelos × 40s = 200s máx pero el deadline lo corta
+    // En la práctica: si los 3 primeros fallan rápido (<5s por 404), los 5 modelos se prueban
+    const ATTEMPT_TIMEOUT_MS = 40_000;
 
     try {
       // Partes: [foto a editar, texto]
@@ -2340,14 +2341,15 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
       }
       parts.push({ text: brandPrompt });
 
-      // Modelos GA de generación de imagen (mayo 2026).
-      // Los -preview fueron deprecados el 28 may 2026 cuando los GA salieron.
+      // Modelos de generación de imagen — en orden de preferencia
       const IMG_MODELS = [
-        "gemini-3-pro-image",         // GA máxima calidad (desde 28 may 2026)
-        "gemini-3.1-flash-image",     // GA rápido alta calidad (desde 28 may 2026)
-        "gemini-2.5-flash-image",     // GA estable — fallback
+        "gemini-3-pro-image",                      // GA máxima calidad (mayo 2026)
+        "gemini-3.1-flash-image",                  // GA rápido (mayo 2026)
+        "gemini-2.5-flash-image",                  // GA estable
+        "gemini-2.0-flash-preview-image-generation", // Preview anterior — fallback
+        "gemini-2.0-flash-exp",                    // Experimental conocido que genera imágenes
       ];
-      const MAX_RETRIES_PER_MODEL = 2; // 2 intentos por modelo antes de pasar al siguiente
+      const MAX_RETRIES_PER_MODEL = 1; // 1 intento por modelo — así los 5 modelos tienen tiempo
       let lastErr = "";
       let lastTextResponse = "";
 
@@ -2413,11 +2415,13 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
         }
       }
 
-      console.error("[tongue] todos los modelos fallaron. lastText:", lastTextResponse, "lastErr:", lastErr.slice(0, 200));
+      console.error("[tongue] todos los modelos fallaron. lastText:", lastTextResponse, "lastErr:", lastErr.slice(0, 300));
       res.status(422).json({
         error: lastTextResponse
           ? `Gemini respondió texto en vez de imagen: ${lastTextResponse.slice(0, 120)}…`
-          : "Ningún modelo devolvió imagen tras los reintentos. Intenta de nuevo en un momento.",
+          : lastErr
+            ? `Error de generación: ${lastErr.slice(0, 200)}`
+            : "Ningún modelo devolvió imagen. Inténtalo de nuevo.",
       });
     } catch (err: any) {
       console.error("Tongue generate error:", err.message);
