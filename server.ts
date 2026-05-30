@@ -1820,26 +1820,20 @@ IMPORTANTE: queremos el TOTAL del lote y el TOTAL de unidades, NO el precio unit
     // ── PASO 1: OCR con imagen — extraer datos técnicos ────────────────────────
     // No se puede usar googleSearch + inlineData al mismo tiempo, así que
     // primero extraemos los códigos de la imagen, luego buscamos el nombre.
-    const ocrPrompt = `Analiza esta imagen de una etiqueta de zapatilla ${brand}.
-Extrae EXACTAMENTE los datos impresos siguiendo estas reglas por marca:
-
-ADIDAS: "model" = código tras "A:" o "ART " (ej: IH1511, IF1847, GX1234). "reference" = código con # (ej: #0901801801). "lvl" = código "SHD XXXXXX". "brandSerial" = código alfanumérico junto al logo adidas (ej: hWFHVDQdQQ325).
-NEW BALANCE: "model" = código estilo MR530SG, BB550WT1. "reference" = 12 dígitos. "reference2" = 7 dígitos si aparece. "lvl" = código "EVN XXXXXX". "brandSerial" = código alfanumérico largo.
-ASICS / ONITSUKA TIGER: "model" = código como 1204A191 o D6A3L. "reference" = "F" seguido de 6 dígitos. "brandSerial" = código alfanumérico largo.
-NIKE: "model" = código como DV3945-100. "reference" = segundo código si lo hay. "brandSerial" = código alfanumérico.
-
-Devuelve SOLO este JSON sin texto extra:
+    const ocrPrompt = `Lee TODA la texto visible en esta etiqueta de zapatilla y devuelve este JSON:
 {
-  "model": "código de artículo/modelo exacto",
+  "rawText": "transcripción literal línea a línea de TODO el texto visible, separado por \\n",
+  "model": "código de artículo/modelo",
   "sku": "mismo que model",
   "reference": "referencia principal",
-  "reference2": "solo New Balance, vacío si no aplica",
-  "brandSerial": "código serie alfanumérico",
+  "reference2": "",
+  "brandSerial": "código serie alfanumérico largo",
   "date": "fecha (ej: 12/25, 05/22)",
   "lvl": "código de fábrica",
-  "sizes": { "us": "...", "uk": "...", "fr": "...", "jp": "..." }
+  "sizes": { "us": "", "uk": "", "fr": "", "jp": "" }
 }
-Si no ves un dato, pon "". Solo el JSON.`;
+Lo más importante es "rawText": copia EXACTAMENTE todo el texto que ves, incluyendo códigos, fechas y números.
+Para los demás campos, haz tu mejor esfuerzo. Si no ves un dato pon "". Solo el JSON.`;
 
     // Modelos con soporte multimodal (imagen+texto) — actualizados junio 2026
     const OCR_MODELS = [
@@ -1927,34 +1921,36 @@ Si no ves un dato, pon "". Solo el JSON.`;
       const brandLow = (brand || "").toLowerCase();
 
       if (brandLow.includes("adidas")) {
-        // Helper: ¿es este valor un código de artículo Adidas? (A:IH1511, AIH1511, ART IH1511, IH1511...)
-        const isAdidasArt = (v: string) => /^(?:A[:\s]?|ART\s+)[A-Z0-9]{4,}/i.test(v);
-        // Helper: ¿es código SHD de fábrica?
-        const isSHD       = (v: string) => /^SHD[\s\-]?\d+/i.test(v);
-        // Helper: extraer código limpio (sin prefijo A:, ART, etc.)
-        const cleanArt    = (v: string) => v.replace(/^(?:A[:\s]?|ART\s+)/i, "").trim();
+        // Parsear campos Adidas desde rawText (más fiable que confiar en lo que Gemini mapea)
+        const raw = (ocrResult.rawText || "") as string;
+        console.log(`[OCR] Adidas rawText:`, raw.slice(0, 300));
 
-        // Buscar artículo en TODOS los campos del OCR (por si Gemini lo puso en sitio equivocado)
-        const allFields = ["model", "sku", "lvl", "reference", "reference2", "brandSerial"] as const;
-        let artField: string | null = null;
-        let artValue: string | null = null;
-        let shdField: string | null = null;
-        let shdValue: string | null = null;
-
-        for (const f of allFields) {
-          const v = String(ocrResult[f] || "");
-          if (!artValue && isAdidasArt(v)) { artField = f; artValue = cleanArt(v); }
-          if (!shdValue && isSHD(v))        { shdField = f; shdValue = v; }
+        // Artículo: línea "A:IH1511" / "A IH1511" / "AIH1511" → extraer "IH1511"
+        const artMatch = raw.match(/\bA[:\s]?([A-Z]{1,2}[0-9]{4}[A-Z0-9]*)\b/i)
+                      || raw.match(/\bART[:\s]+([A-Z0-9]{4,10})\b/i);
+        if (artMatch) {
+          ocrResult.model = artMatch[1].trim();
+          ocrResult.sku   = ocrResult.model;
+          console.log(`[OCR] Adidas artMatch → model: ${ocrResult.model}`);
         }
 
-        if (artValue) {
-          ocrResult.model = artValue;
-          ocrResult.sku   = artValue;
-          console.log(`[OCR] Adidas art found in '${artField}': ${artValue}`);
+        // Fábrica SHD: "SHD 675005"
+        const shdMatch = raw.match(/\b(SHD[\s\-]?\d+)\b/i);
+        if (shdMatch) {
+          ocrResult.lvl = shdMatch[1].trim();
+          console.log(`[OCR] Adidas shdMatch → lvl: ${ocrResult.lvl}`);
         }
-        if (shdValue) {
-          ocrResult.lvl = shdValue;
-          console.log(`[OCR] Adidas SHD found in '${shdField}': ${shdValue}`);
+
+        // Referencia lote: "#0901801801"
+        const refMatch = raw.match(/(#\d{6,12})/);
+        if (refMatch) {
+          ocrResult.reference = refMatch[1];
+        }
+
+        // Serial: última cadena alfanumérica larga (ej: hWFHVDQdQQ325 / E1QWSTF<906601)
+        const serialMatch = raw.match(/adidas\s+([A-Z0-9<]{6,})/i);
+        if (serialMatch) {
+          ocrResult.brandSerial = serialMatch[1].trim();
         }
       }
 
