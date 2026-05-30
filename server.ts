@@ -1834,12 +1834,12 @@ Extrae EXACTAMENTE los datos que ves impresos. Devuelve SOLO un JSON puro sin ma
 }
 Si no ves algún dato, pon "". Solo el JSON, sin explicaciones.`;
 
-    // Modelos confirmados con soporte multimodal (imagen+texto)
+    // Modelos con soporte multimodal (imagen+texto) — actualizados junio 2026
     const OCR_MODELS = [
-      "gemini-2.5-flash",
-      "gemini-2.5-pro",
-      "gemini-2.0-flash",
-      "gemini-1.5-flash",
+      "gemini-2.5-flash-preview-05-20",   // versión concreta mayo 2026 (más estable)
+      "gemini-2.5-flash",                  // alias genérico
+      "gemini-2.0-flash",                  // GA estable
+      "gemini-1.5-flash",                  // fallback probado
     ];
 
     async function geminiCall(model: string, body: object, timeoutMs = 30000): Promise<any> {
@@ -1878,31 +1878,42 @@ Si no ves algún dato, pon "". Solo el JSON, sin explicaciones.`;
             contents: [{ parts: [
               { inlineData: { mimeType, data: base64Data } },
               { text: ocrPrompt }
-            ]}]
+            ]}],
+            generationConfig: { responseMimeType: "application/json" },
           });
-          const text = data.candidates?.[0]?.content?.parts?.find((p: any) => p.text)?.text || "";
-          ocrResult = extractJson(text);
-          if (ocrResult) {
-            const hasAnyData = ocrResult.model || ocrResult.sku || ocrResult.reference || ocrResult.date || ocrResult.sizes?.fr;
+          // Con responseMimeType:json el texto ya es JSON puro, sin markdown
+          const raw = data.candidates?.[0]?.content?.parts?.find((p: any) => p.text)?.text || "";
+          console.log(`[OCR] ${model} raw (100ch):`, raw.slice(0, 100));
+          // Intentar parsear directo; extractJson como fallback
+          let parsed: any = null;
+          try { parsed = JSON.parse(raw); } catch { parsed = extractJson(raw); }
+          if (parsed) {
+            const hasAnyData = parsed.model || parsed.sku || parsed.reference || parsed.date || parsed.sizes?.fr;
             if (!hasAnyData) {
-              console.warn(`[OCR] ${model} devolvió JSON vacío, pruebo siguiente modelo`);
-              ocrResult = null;
+              console.warn(`[OCR] ${model} JSON vacío, pruebo siguiente`);
               lastError = "empty_json";
               continue;
             }
-            console.log(`[OCR] ${model} OK, sku=${ocrResult.model}`);
+            ocrResult = parsed;
+            console.log(`[OCR] ${model} OK → sku=${ocrResult.model}, fr=${ocrResult.sizes?.fr}`);
             break;
           }
-          lastError = "no_json: " + text.slice(0, 200);
-          console.warn(`[OCR] ${model} no_json:`, text.slice(0, 200));
+          lastError = "no_json: " + raw.slice(0, 200);
+          console.warn(`[OCR] ${model} no_json:`, raw.slice(0, 200));
         } catch (e: any) {
           lastError = e.message;
-          console.error(`[OCR] ${model} error:`, lastError);
+          console.error(`[OCR] ${model} ERROR:`, lastError);
         }
       }
 
       if (!ocrResult) {
-        return res.status(500).json({ error: "No se pudo leer la etiqueta. Asegúrate de que la foto sea nítida e inténtalo de nuevo." });
+        console.error(`[OCR] Todos los modelos fallaron. Último error: ${lastError}`);
+        const userMsg = lastError.startsWith("HTTP 429") || lastError.includes("quota")
+          ? "Límite de API alcanzado. Espera 1 minuto e inténtalo de nuevo."
+          : lastError.startsWith("HTTP 4") || lastError.startsWith("HTTP 5")
+            ? `Error de API Gemini: ${lastError}. Inténtalo de nuevo.`
+            : "No se pudo leer la etiqueta. Asegúrate de que la foto sea nítida e inténtalo de nuevo.";
+        return res.status(500).json({ error: userMsg });
       }
 
       // ── Paso 2: Búsqueda web con googleSearch para identificar el modelo ──
