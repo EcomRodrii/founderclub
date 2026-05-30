@@ -1927,20 +1927,34 @@ Si no ves un dato, pon "". Solo el JSON.`;
       const brandLow = (brand || "").toLowerCase();
 
       if (brandLow.includes("adidas")) {
-        // Adidas: modelo = código tras "A:" o "ART " (ej: A:IH1511 → IH1511)
-        if (ocrResult.model?.match(/^A:/i)) {
-          ocrResult.model = ocrResult.model.replace(/^A:/i, "").trim();
-          ocrResult.sku   = ocrResult.model;
+        // Helper: ¿es este valor un código de artículo Adidas? (A:IH1511, AIH1511, ART IH1511, IH1511...)
+        const isAdidasArt = (v: string) => /^(?:A[:\s]?|ART\s+)[A-Z0-9]{4,}/i.test(v);
+        // Helper: ¿es código SHD de fábrica?
+        const isSHD       = (v: string) => /^SHD[\s\-]?\d+/i.test(v);
+        // Helper: extraer código limpio (sin prefijo A:, ART, etc.)
+        const cleanArt    = (v: string) => v.replace(/^(?:A[:\s]?|ART\s+)/i, "").trim();
+
+        // Buscar artículo en TODOS los campos del OCR (por si Gemini lo puso en sitio equivocado)
+        const allFields = ["model", "sku", "lvl", "reference", "reference2", "brandSerial"] as const;
+        let artField: string | null = null;
+        let artValue: string | null = null;
+        let shdField: string | null = null;
+        let shdValue: string | null = null;
+
+        for (const f of allFields) {
+          const v = String(ocrResult[f] || "");
+          if (!artValue && isAdidasArt(v)) { artField = f; artValue = cleanArt(v); }
+          if (!shdValue && isSHD(v))        { shdField = f; shdValue = v; }
         }
-        // Si OCR invirtió modelo y lvl: model=SHD xxx / lvl=A:XXXXX → corregir
-        const modelIsSHD = /^SHD\s+\d+/i.test(ocrResult.model || "");
-        const lvlIsArt   = /^A:/i.test(ocrResult.lvl || "");
-        if (modelIsSHD && lvlIsArt) {
-          const correctedModel = ocrResult.lvl.replace(/^A:/i, "").trim();
-          ocrResult.lvl   = ocrResult.model;   // SHD va a lvl
-          ocrResult.model = correctedModel;
-          ocrResult.sku   = correctedModel;
-          console.log(`[OCR] Adidas swap: model=${ocrResult.model}, lvl=${ocrResult.lvl}`);
+
+        if (artValue) {
+          ocrResult.model = artValue;
+          ocrResult.sku   = artValue;
+          console.log(`[OCR] Adidas art found in '${artField}': ${artValue}`);
+        }
+        if (shdValue) {
+          ocrResult.lvl = shdValue;
+          console.log(`[OCR] Adidas SHD found in '${shdField}': ${shdValue}`);
         }
       }
 
