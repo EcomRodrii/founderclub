@@ -1820,20 +1820,44 @@ IMPORTANTE: queremos el TOTAL del lote y el TOTAL de unidades, NO el precio unit
     // ── PASO 1: OCR con imagen — extraer datos técnicos ────────────────────────
     // No se puede usar googleSearch + inlineData al mismo tiempo, así que
     // primero extraemos los códigos de la imagen, luego buscamos el nombre.
-    const ocrPrompt = `Lee TODA la texto visible en esta etiqueta de zapatilla y devuelve este JSON:
+    const ocrPrompt = `Lee TODO el texto visible en esta etiqueta de zapatilla ${brand} y devuelve este JSON:
 {
-  "rawText": "transcripción literal línea a línea de TODO el texto visible, separado por \\n",
+  "rawText": "copia EXACTAMENTE todo el texto visible, línea a línea separado por \\n",
   "model": "código de artículo/modelo",
   "sku": "mismo que model",
-  "reference": "referencia principal",
-  "reference2": "",
-  "brandSerial": "código serie alfanumérico largo",
-  "date": "fecha (ej: 12/25, 05/22)",
+  "reference": "referencia/lote principal",
+  "reference2": "segundo código de lote (solo NB)",
+  "brandSerial": "número de serie único alfanumérico",
+  "date": "fecha de fabricación",
   "lvl": "código de fábrica",
   "sizes": { "us": "", "uk": "", "fr": "", "jp": "" }
 }
-Lo más importante es "rawText": copia EXACTAMENTE todo el texto que ves, incluyendo códigos, fechas y números.
-Para los demás campos, haz tu mejor esfuerzo. Si no ves un dato pon "". Solo el JSON.`;
+
+ESTRUCTURA DE CADA MARCA — úsala para asignar los campos correctos:
+
+ADIDAS: La etiqueta tiene QR + bloque derecho con estas líneas exactas:
+  · Fecha fabricación (MM/YY) → "date"
+  · "SHD XXXXXX" = código de fábrica → "lvl"
+  · "ART XXXXXX" o "A:XXXXXX" = número de artículo → "model" (solo el código, sin "ART" ni "A:")
+  · "#XXXXXXXXX" = número de lote → "reference"
+  · Código alfanumérico junto al logo adidas (ej: E1QWSTF<906601, hWFHVDQdQQ325) → "brandSerial"
+
+NEW BALANCE: La etiqueta tiene:
+  · Modelo alfanumérico (ej: U740WM2, MR530SG, BB550WT1) → "model"
+  · Código de 11-12 dígitos (UPC/barcode) → "reference"
+  · Código de 7 dígitos (lote interno) → "reference2"
+  · Código de cadena de suministro (ej: LCXL1671 CXC, LXCK1298 CLX) → "brandSerial"
+  · Fecha tras "MFG:" (ej: 07/2024) → "date"
+  · Número tras "LOC:" → "lvl"
+
+ASICS / ONITSUKA TIGER: La etiqueta tiene:
+  · Código de modelo estilo "1204A191" (4 dígitos + letra + 3 dígitos) → "model"
+  · Código "F" + 6 dígitos (ej: F960925) = código de fábrica/lote → "reference"
+  · Código 2 letras (ej: WR) = control de materiales → "lvl"
+  · Código de 15 alfanuméricos (ej: N4VDCSSVG6CSMGH) = número de serie único → "brandSerial"
+
+Prioridad máxima: "rawText" debe ser transcripción literal completa.
+Para el resto, aplica la estructura de la marca. Si no ves un dato pon "". Solo el JSON.`;
 
     // Modelos con soporte multimodal (imagen+texto) — actualizados junio 2026
     const OCR_MODELS = [
@@ -1947,11 +1971,71 @@ Para los demás campos, haz tu mejor esfuerzo. Si no ves un dato pon "". Solo el
           ocrResult.reference = refMatch[1];
         }
 
-        // Serial: última cadena alfanumérica larga (ej: hWFHVDQdQQ325 / E1QWSTF<906601)
+        // Serial: código alfanumérico junto al logo adidas (ej: E1QWSTF<906601, hWFHVDQdQQ325)
         const serialMatch = raw.match(/adidas\s+([A-Z0-9<]{6,})/i);
         if (serialMatch) {
           ocrResult.brandSerial = serialMatch[1].trim();
         }
+      }
+
+      // ── Post-proceso NEW BALANCE ───────────────────────────────────────────
+      if (brandLow.includes("new balance") || brandLow === "nb" || brandLow === "new_balance") {
+        const raw = (ocrResult.rawText || "") as string;
+        console.log(`[OCR] NB rawText:`, raw.slice(0, 300));
+
+        // Modelo: 1-2 letras + 3 dígitos + 2-3 letras/dígitos (ej: U740WM2, MR530SG, BB550WT1)
+        const nbModel = raw.match(/\b([A-Z]{1,2}\d{3}[A-Z]{2}\d?)\b/);
+        if (nbModel) {
+          ocrResult.model = nbModel[1];
+          ocrResult.sku   = nbModel[1];
+          console.log(`[OCR] NB model: ${ocrResult.model}`);
+        }
+
+        // Referencia: 11-12 dígitos (UPC/barcode)
+        const nbRef = raw.match(/\b(\d{11,12})\b/);
+        if (nbRef) ocrResult.reference = nbRef[1];
+
+        // Referencia2: 7 dígitos exactos (lote interno)
+        const nbRef2 = raw.match(/\b(\d{7})\b/);
+        if (nbRef2) ocrResult.reference2 = nbRef2[1];
+
+        // BrandSerial: código alfanumérico tipo "LCXL1671 CXC" o "LXCK1298 CLX"
+        const nbSerial = raw.match(/\b([A-Z]{4}\d{4}\s[A-Z]{3})\b/);
+        if (nbSerial) ocrResult.brandSerial = nbSerial[1];
+
+        // Fecha: "MFG: MM/YYYY" o "MFG: MM/YY"
+        const nbDate = raw.match(/MFG[:\s]+(\d{2}\/\d{2,4})/i);
+        if (nbDate) ocrResult.date = nbDate[1];
+
+        // LVL: número tras "LOC:"
+        const nbLoc = raw.match(/LOC[:\s]+(\d+)/i);
+        if (nbLoc) ocrResult.lvl = nbLoc[1];
+      }
+
+      // ── Post-proceso ASICS / ONITSUKA ──────────────────────────────────────
+      if (brandLow.includes("asics") || brandLow.includes("onitsuka")) {
+        const raw = (ocrResult.rawText || "") as string;
+        console.log(`[OCR] ASICS/Onitsuka rawText:`, raw.slice(0, 300));
+
+        // Modelo ASICS: 4 dígitos + letra + 3 dígitos (ej: 1204A191, 1203A359)
+        const asicsModel = raw.match(/\b(\d{4}[A-Z]\d{3})\b/);
+        if (asicsModel) {
+          ocrResult.model = asicsModel[1];
+          ocrResult.sku   = asicsModel[1];
+          console.log(`[OCR] ASICS model: ${ocrResult.model}`);
+        }
+
+        // Reference: "F" + 6 dígitos exactos (ej: F960925)
+        const asicsRef = raw.match(/\b(F\d{6})\b/i);
+        if (asicsRef) ocrResult.reference = asicsRef[1].toUpperCase();
+
+        // BrandSerial: 15 alfanuméricos en mayúsculas (ej: N4VDCSSVG6CSMGH)
+        const asicsSerial = raw.match(/\b([A-Z0-9]{14,16})\b/);
+        if (asicsSerial) ocrResult.brandSerial = asicsSerial[1];
+
+        // LVL: código de 2 letras tras la referencia F (ej: WR)
+        const asicsLvl = raw.match(/F\d{6}\s+([A-Z]{2})\b/i);
+        if (asicsLvl) ocrResult.lvl = asicsLvl[1].toUpperCase();
       }
 
       // ── Paso 2: Búsqueda web con googleSearch para identificar el modelo ──
