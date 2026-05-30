@@ -1940,12 +1940,41 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
 
       // ── Ensamblar respuesta final ──────────────────────────────────────────
       const frSize = sizeFr || ocrResult.sizes?.fr || "";
+
+      // 10 raisons de vente naturelles pour Vinted FR (template pool)
+      const VINTED_TEMPLATES = [
+        "Je les vends parce qu'elles sont malheureusement trop petites pour moi. C'est vraiment une très belle paire qui mérite de trouver une nouvelle propriétaire.",
+        "Je les vends car j'ai déjà une paire très similaire et je ne les utilise finalement pas. Elles sont en très bon état et méritent d'être portées.",
+        "Je les vends parce qu'elles ne correspondent plus à mon style actuel. Elles sont pourtant magnifiques et en excellent état.",
+        "Je les vends car je les ai achetées sur un coup de cœur, mais je ne les porte finalement jamais. Elles méritent de ne pas rester dans un placard.",
+        "Je les vends pour faire un peu de place dans mon dressing. Elles sont très jolies et feront certainement le bonheur de quelqu'un.",
+        "Je les vends car c'était un cadeau que je n'ai malheureusement jamais eu l'occasion de porter. Elles sont comme neuves.",
+        "Je les vends parce que j'ai trop de paires et je fais un peu de tri. Elles sont superbes et méritent d'être portées.",
+        "Je les vends car je me suis trompée de taille lors de l'achat. Elles sont très belles et en parfait état.",
+        "Je les vends parce que je les avais achetées pour une occasion spéciale qui a finalement été annulée. Elles n'ont donc jamais servi.",
+        "Je les vends car elles restent dans leur boîte et je préfère qu'elles profitent à quelqu'un qui les portera davantage. Elles sont vraiment très jolies.",
+      ];
+      const randDesc = VINTED_TEMPLATES[Math.floor(Math.random() * VINTED_TEMPLATES.length)];
+
+      // Colour: keep first colour only ("blanc et bleu" → "Blanc")
+      const mainColor = (color && color !== "Desconocido")
+        ? (color.split(/ et | \/ /)[0].trim())
+        : "";
+      const colorCap = mainColor ? mainColor.charAt(0).toUpperCase() + mainColor.slice(1) : "";
+      const colorPart = colorCap ? ` | ${colorCap}` : "";
+
+      // Title: SEO-optimised for Vinted France
       const listingTitle = modelName !== "Desconocido"
-        ? `${modelName} - Pointure ${frSize} ${color} / ${sku}`
-        : `${brand} ${sku} - Pointure ${frSize}`;
-      const listingDescription = modelName !== "Desconocido"
-        ? `Zapatillas ${modelName} en perfecto estado.\n\nCouleur : ${color}\nModele : ${sku}\nTaille : ${frSize}`
-        : `Zapatillas ${brand} en perfecto estado.\n\nModele : ${sku}\nTaille : ${frSize}`;
+        ? `${modelName} | Pointure ${frSize}${colorPart} | Très bon état`
+        : `${brand} ${sku} | Pointure ${frSize}${colorPart}`;
+
+      // Description: French template + product fields
+      const descFields = [
+        colorCap ? `Couleur : ${colorCap}` : null,
+        `Modèle : ${sku}`,
+        `Pointure : ${frSize}`,
+      ].filter(Boolean).join("\n");
+      const listingDescription = `${randDesc}\n\n${descFields}`;
 
       return res.json({
         ...ocrResult,

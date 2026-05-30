@@ -113,6 +113,21 @@ function buildOnitsukaBrandSerial(): string {
   return (region + _rndAN(13)).slice(0, 15);
 }
 
+// Robust clipboard copy with execCommand fallback (works on HTTP too)
+async function copyText(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    try { await navigator.clipboard.writeText(text); return; } catch { /* fall through */ }
+  }
+  // execCommand fallback
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0;';
+  document.body.appendChild(ta);
+  ta.focus(); ta.select();
+  document.execCommand('copy');
+  document.body.removeChild(ta);
+}
+
 export default function TongueEditor() {
   const [activeBrand, setActiveBrand] = useState<'ADIDAS' | 'NEW BALANCE' | 'ASICS' | 'ONITSUKA'>('ADIDAS');
   const [originalImage, setOriginalImage] = useState<string | null>(null);
@@ -121,6 +136,7 @@ export default function TongueEditor() {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [detections, setDetections] = useState<DetectionResult | null>(null);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
   const [customPromptAdidas, setCustomPromptAdidas] = useState<string>(`PROMPT ADIDAS - REGLAS DE ORO:
 1. NUNCA cambies el SKU / MODELO (el código que aparece después de "ART NO" o "A:"). Debe ser EXACTAMENTE igual al original.
 2. Modifica únicamente los dos últimos códigos de la parte inferior:
@@ -904,9 +920,13 @@ export default function TongueEditor() {
             <div className="space-y-1">
               <div className="flex items-center justify-between">
                 <label className="text-[9px] uppercase text-acid/80 tracking-wider">Título</label>
-                <button onClick={() => { navigator.clipboard.writeText(detections.listingTitle); setStatus("Título copiado"); }}
-                  className="flex items-center gap-1 text-[9px] text-white/30 hover:text-white transition">
-                  <Copy className="w-2.5 h-2.5" /> Copiar
+                <button onClick={async () => {
+                  await copyText(detections.listingTitle);
+                  setCopiedField('title');
+                  setTimeout(() => setCopiedField(null), 2000);
+                }} className={`flex items-center gap-1 text-[9px] transition font-medium ${copiedField === 'title' ? 'text-acid' : 'text-white/30 hover:text-white'}`}>
+                  <Copy className="w-2.5 h-2.5" />
+                  {copiedField === 'title' ? '✓ Copiado' : 'Copiar'}
                 </button>
               </div>
               <input value={detections.listingTitle || ''}
@@ -917,14 +937,18 @@ export default function TongueEditor() {
             <div className="space-y-1">
               <div className="flex items-center justify-between">
                 <label className="text-[9px] uppercase text-acid/80 tracking-wider">Descripción</label>
-                <button onClick={() => { navigator.clipboard.writeText(detections.listingDescription); setStatus("Descripción copiada"); }}
-                  className="flex items-center gap-1 text-[9px] text-white/30 hover:text-white transition">
-                  <Copy className="w-2.5 h-2.5" /> Copiar
+                <button onClick={async () => {
+                  await copyText(detections.listingDescription);
+                  setCopiedField('desc');
+                  setTimeout(() => setCopiedField(null), 2000);
+                }} className={`flex items-center gap-1 text-[9px] transition font-medium ${copiedField === 'desc' ? 'text-acid' : 'text-white/30 hover:text-white'}`}>
+                  <Copy className="w-2.5 h-2.5" />
+                  {copiedField === 'desc' ? '✓ Copiado' : 'Copiar'}
                 </button>
               </div>
               <textarea value={detections.listingDescription || ''}
                 onChange={e => setDetections({ ...detections, listingDescription: e.target.value })}
-                className="w-full bg-acid-soft border border-acid/30 rounded-xl px-3 py-2.5 text-xs text-white focus:border-acid outline-none h-24 resize-none" />
+                className="w-full bg-acid-soft border border-acid/30 rounded-xl px-3 py-2.5 text-xs text-white focus:border-acid outline-none h-36 resize-none" />
             </div>
           </motion.div>
         )}
