@@ -1864,7 +1864,10 @@ Si no ves algún dato, pon "". Solo el JSON, sin explicaciones.`;
     }
 
     try {
+      const mimeMatch = imageBase64.match(/^data:([^;]+);/);
+      const mimeType = mimeMatch?.[1] || "image/jpeg";
       const base64Data = imageBase64.includes(",") ? imageBase64.split(",")[1] : imageBase64;
+      console.log(`[OCR] mimeType detectado: ${mimeType}, base64 len: ${base64Data.length}`);
       let ocrResult: any = null;
       let lastError = "";
 
@@ -1873,14 +1876,25 @@ Si no ves algún dato, pon "". Solo el JSON, sin explicaciones.`;
         try {
           const data = await geminiCall(model, {
             contents: [{ parts: [
-              { inlineData: { mimeType: "image/jpeg", data: base64Data } },
+              { inlineData: { mimeType, data: base64Data } },
               { text: ocrPrompt }
             ]}]
           });
           const text = data.candidates?.[0]?.content?.parts?.find((p: any) => p.text)?.text || "";
           ocrResult = extractJson(text);
-          if (ocrResult) { console.log(`[OCR] ${model} OK, sku=${ocrResult.model}`); break; }
+          if (ocrResult) {
+            const hasAnyData = ocrResult.model || ocrResult.sku || ocrResult.reference || ocrResult.date || ocrResult.sizes?.fr;
+            if (!hasAnyData) {
+              console.warn(`[OCR] ${model} devolvió JSON vacío, pruebo siguiente modelo`);
+              ocrResult = null;
+              lastError = "empty_json";
+              continue;
+            }
+            console.log(`[OCR] ${model} OK, sku=${ocrResult.model}`);
+            break;
+          }
           lastError = "no_json: " + text.slice(0, 200);
+          console.warn(`[OCR] ${model} no_json:`, text.slice(0, 200));
         } catch (e: any) {
           lastError = e.message;
           console.error(`[OCR] ${model} error:`, lastError);
@@ -1888,7 +1902,7 @@ Si no ves algún dato, pon "". Solo el JSON, sin explicaciones.`;
       }
 
       if (!ocrResult) {
-        return res.status(500).json({ error: "OCR no disponible. Intenta de nuevo." });
+        return res.status(500).json({ error: "No se pudo leer la etiqueta. Asegúrate de que la foto sea nítida e inténtalo de nuevo." });
       }
 
       // ── Paso 2: Búsqueda web con googleSearch para identificar el modelo ──
