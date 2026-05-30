@@ -2144,10 +2144,15 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
   function buildTonguePrompt(brand: string, d: any, customPrompt: string, hasReference = false): string {
     const sizes = d.sizes || {};
     const TONGUE_PREAMBLE = buildTonguePreamble(hasReference);
+    // El customPrompt va DESPUÉS del preámbulo pero ANTES de los valores específicos,
+    // para que sus reglas de calidad/estilo sean el contexto que rige todo lo que sigue.
+    const CUSTOM_BLOCK = customPrompt
+      ? `\nREGLAS ADICIONALES DE CALIDAD (aplican a toda la generación):\n${customPrompt}\n`
+      : "";
     if (brand === "ADIDAS") {
       return [
         TONGUE_PREAMBLE,
-        ``,
+        CUSTOM_BLOCK,
         `Edita la etiqueta interior de la lengüeta de la zapatilla adidas que ves en la foto.`,
         `Mantén EXACTAMENTE la misma foto en todo: encuadre, fondo, iluminación, ángulo, grano, perspectiva, textura del tejido, costuras, sombras, doblez de la lengüeta. No reencuadres, no añadas elementos nuevos.`,
         ``,
@@ -2162,13 +2167,12 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
         `  · Reference (la que empieza por #) → "${d.reference}"`,
         ``,
         `Usa la misma tipografía sans-serif bold de adidas, mismo tamaño y posición que el texto que sustituyes. Mantén el aspecto de foto cruda con cámara de móvil 12 MP — sin marcas de agua, sin texto adicional, sin firma, sin logo nuevo.`,
-        customPrompt || ""
       ].filter(Boolean).join("\n");
     }
     if (brand === "ASICS") {
       return [
         TONGUE_PREAMBLE,
-        ``,
+        CUSTOM_BLOCK,
         `Edita la etiqueta interior de la lengüeta ASICS que ves en la foto.`,
         `Mantén EXACTAMENTE la misma foto en todo: encuadre, fondo, ángulo, perspectiva, iluminación, grano, costuras y textura del tejido. No reencuadres ni añadas elementos.`,
         ``,
@@ -2182,13 +2186,12 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
         `  · Serial number (15 alfanuméricos en mayúsculas) → "${d.brandSerial}"`,
         ``,
         `Usa la tipografía compacta y limpia característica de ASICS, mismo tamaño y posición que los textos sustituidos. Estilo de foto macro de móvil, sin marcas de agua ni texto extra.`,
-        customPrompt || ""
       ].filter(Boolean).join("\n");
     }
     if (brand === "ONITSUKA") {
       return [
         TONGUE_PREAMBLE,
-        ``,
+        CUSTOM_BLOCK,
         `Edita la etiqueta interior de la lengüeta ONITSUKA TIGER que ves en la foto.`,
         `Mantén EXACTAMENTE la misma foto: mismo encuadre, fondo, ángulo, iluminación, grano, costuras y textura. No reencuadres ni añadas elementos.`,
         ``,
@@ -2203,13 +2206,12 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
         `  · Unit Serial (15 alfanuméricos en mayúsculas) → "${d.brandSerial}"`,
         ``,
         `Tipografía sans-serif ultra-condensada, fondo blanco mate, impresión transfer térmico. Sin logo de tigre, sin marcas de agua, etiqueta puramente informativa.`,
-        customPrompt || ""
       ].filter(Boolean).join("\n");
     }
     // NEW BALANCE (default)
     return [
       TONGUE_PREAMBLE,
-      ``,
+      CUSTOM_BLOCK,
       `Edita la etiqueta interior de la lengüeta NEW BALANCE que ves en la foto.`,
       `Mantén EXACTAMENTE la misma foto: mismo encuadre, fondo, ángulo, iluminación, grano, costuras y textura del tejido satinado. No reencuadres ni añadas elementos nuevos.`,
       ``,
@@ -2225,7 +2227,6 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
       `  · Brand code → "${d.brandSerial}"`,
       ``,
       `Tipografía industrial pesada idéntica a la original, mismas posiciones, foto macro de móvil. Sin marcas de agua, sin firma, sin texto extra.`,
-      customPrompt || ""
     ].filter(Boolean).join("\n");
   }
 
