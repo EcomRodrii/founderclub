@@ -1923,6 +1923,27 @@ Si no ves un dato, pon "". Solo el JSON.`;
         return res.status(500).json({ error: userMsg });
       }
 
+      // ── Post-proceso: normalizar campos por marca ──────────────────────────
+      const brandLow = (brand || "").toLowerCase();
+
+      if (brandLow.includes("adidas")) {
+        // Adidas: modelo = código tras "A:" o "ART " (ej: A:IH1511 → IH1511)
+        if (ocrResult.model?.match(/^A:/i)) {
+          ocrResult.model = ocrResult.model.replace(/^A:/i, "").trim();
+          ocrResult.sku   = ocrResult.model;
+        }
+        // Si OCR invirtió modelo y lvl: model=SHD xxx / lvl=A:XXXXX → corregir
+        const modelIsSHD = /^SHD\s+\d+/i.test(ocrResult.model || "");
+        const lvlIsArt   = /^A:/i.test(ocrResult.lvl || "");
+        if (modelIsSHD && lvlIsArt) {
+          const correctedModel = ocrResult.lvl.replace(/^A:/i, "").trim();
+          ocrResult.lvl   = ocrResult.model;   // SHD va a lvl
+          ocrResult.model = correctedModel;
+          ocrResult.sku   = correctedModel;
+          console.log(`[OCR] Adidas swap: model=${ocrResult.model}, lvl=${ocrResult.lvl}`);
+        }
+      }
+
       // ── Paso 2: Búsqueda web con googleSearch para identificar el modelo ──
       // Esta llamada es solo texto, sin imagen → compatible con googleSearch
       const sku = ocrResult.model || ocrResult.sku || "";
