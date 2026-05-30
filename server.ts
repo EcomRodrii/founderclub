@@ -2163,17 +2163,25 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
   }
 
   // Elige el aspect ratio soportado por Gemini más cercano al input.
+  // Lista EXACTA aceptada por la API (imageConfig.aspect_ratio):
+  // '1:1','1:4','1:8','2:3','3:2','3:4','4:1','4:3','4:5','5:4','8:1','9:16','16:9','21:9'
   function pickGeminiAspect(w: number, h: number): string {
     const ratios: { label: string; v: number }[] = [
+      { label: "8:1",  v: 8 / 1  },
+      { label: "4:1",  v: 4 / 1  },
       { label: "21:9", v: 21 / 9 },
       { label: "16:9", v: 16 / 9 },
-      { label: "3:2", v: 3 / 2 },
-      { label: "4:3", v: 4 / 3 },
-      { label: "1:1", v: 1 },
-      { label: "3:4", v: 3 / 4 },
-      { label: "2:3", v: 2 / 3 },
+      { label: "5:4",  v: 5 / 4  },
+      { label: "4:3",  v: 4 / 3  },
+      { label: "3:2",  v: 3 / 2  },
+      { label: "1:1",  v: 1      },
+      { label: "4:5",  v: 4 / 5  },
+      { label: "3:4",  v: 3 / 4  },
+      { label: "2:3",  v: 2 / 3  },
       { label: "9:16", v: 9 / 16 },
-      { label: "9:21", v: 9 / 21 },
+      { label: "1:4",  v: 1 / 4  },
+      { label: "1:8",  v: 1 / 8  },
+      // ELIMINADO: "9:21" — NO está en la lista aceptada por la API → causaba HTTP 400
     ];
     const target = w / h;
     let best = ratios[0];
