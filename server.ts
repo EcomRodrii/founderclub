@@ -1820,19 +1820,26 @@ IMPORTANTE: queremos el TOTAL del lote y el TOTAL de unidades, NO el precio unit
     // ── PASO 1: OCR con imagen — extraer datos técnicos ────────────────────────
     // No se puede usar googleSearch + inlineData al mismo tiempo, así que
     // primero extraemos los códigos de la imagen, luego buscamos el nombre.
-    const ocrPrompt = `Analiza esta imagen de una lengueta de zapatilla ${brand}.
-Extrae EXACTAMENTE los datos que ves impresos. Devuelve SOLO un JSON puro sin markdown con estos campos:
+    const ocrPrompt = `Analiza esta imagen de una etiqueta de zapatilla ${brand}.
+Extrae EXACTAMENTE los datos impresos siguiendo estas reglas por marca:
+
+ADIDAS: "model" = código tras "A:" o "ART " (ej: IH1511, IF1847, GX1234). "reference" = código con # (ej: #0901801801). "lvl" = código "SHD XXXXXX". "brandSerial" = código alfanumérico junto al logo adidas (ej: hWFHVDQdQQ325).
+NEW BALANCE: "model" = código estilo MR530SG, BB550WT1. "reference" = 12 dígitos. "reference2" = 7 dígitos si aparece. "lvl" = código "EVN XXXXXX". "brandSerial" = código alfanumérico largo.
+ASICS / ONITSUKA TIGER: "model" = código como 1204A191 o D6A3L. "reference" = "F" seguido de 6 dígitos. "brandSerial" = código alfanumérico largo.
+NIKE: "model" = código como DV3945-100. "reference" = segundo código si lo hay. "brandSerial" = código alfanumérico.
+
+Devuelve SOLO este JSON sin texto extra:
 {
-  "model": "código de modelo (ej: JQ5874, MR530SG, 1204A191)",
+  "model": "código de artículo/modelo exacto",
   "sku": "mismo que model",
-  "reference": "referencia principal (12 dígitos en NB, #XXXXXXXXX en Adidas, F seguido de 6 dígitos en Onitsuka)",
-  "reference2": "7 dígitos solo en New Balance, vacío si no aplica",
-  "brandSerial": "código alfanumérico largo (ej: LXCK1298 CLX, FGwKZ39<82143, N4VDCSSVG6CSMGH)",
-  "date": "fecha impresa (ej: 05/22)",
-  "lvl": "código de fábrica (ej: EVN 791001)",
+  "reference": "referencia principal",
+  "reference2": "solo New Balance, vacío si no aplica",
+  "brandSerial": "código serie alfanumérico",
+  "date": "fecha (ej: 12/25, 05/22)",
+  "lvl": "código de fábrica",
   "sizes": { "us": "...", "uk": "...", "fr": "...", "jp": "..." }
 }
-Si no ves algún dato, pon "". Solo el JSON, sin explicaciones.`;
+Si no ves un dato, pon "". Solo el JSON.`;
 
     // Modelos con soporte multimodal (imagen+texto) — actualizados junio 2026
     const OCR_MODELS = [
