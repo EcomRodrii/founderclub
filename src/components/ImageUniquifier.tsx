@@ -765,21 +765,26 @@ interface RepostConfig extends ModeConfig {
   editDescription: 'auto' | 'manual';
 }
 
-// Base común (heredado del modo NORMAL).
-// cropPctMin/Max activo para romper pHash incluso sin marco visible.
+// Base común — configuración FUERTE anti-detección.
+// Cada técnica rompe una capa diferente del sistema de deduplicación de Vinted:
+//   crop 1.5-3.5%  → pHash distancia Hamming máxima (derrota paso 1)
+//   blockNoise ±4 en bloques 16px → cada parche del embedder CNN ve estadísticas distintas (derrota paso 2)
+//   lineWarp ±1px  → layout espacial único por imagen
+//   perspectiveMax 4px → coordenadas de keypoints SIFT/ORB cambian (derrota paso 3)
+//   randomExif     → EXIF de iPhone/Samsung realista, foto parece tomada con móvil
 const REPOST_BASE: Omit<ModeConfig, 'id' | 'label' | 'desc'> = {
-  trimMin: 1, trimMax: 2,
-  cropPctMin: 0.5, cropPctMax: 1.5,   // crop invisible ±1.5% → rompe pHash
-  pixelNoiseMax: 1,
-  blockNoiseMax: 2, blockSize: 20,
-  lineWarpMax: 0,
-  brightMax: 2,
-  gradientMax: 0,
+  trimMin: 2, trimMax: 4,
+  cropPctMin: 1.5, cropPctMax: 3.5,   // ↑ crop más agresivo → rompe pHash con margen
+  pixelNoiseMax: 2,
+  blockNoiseMax: 4, blockSize: 16,     // ↑ bloques más pequeños y más ruido → rompe embedding CNN
+  lineWarpMax: 1,                       // ↑ ondulación sinusoidal por filas → layout espacial único
+  brightMax: 3,
+  gradientMax: 2,                       // gradiente diagonal sutil
   rotateDegMax: 0,
-  qualityMin: 0.90, qualityMax: 0.94,
+  qualityMin: 0.87, qualityMax: 0.93,  // ↑ más variación de artefactos JPEG
   flipChance: 0,
-  aspectStretchMax: 0,
-  perspectiveMax: 0,
+  aspectStretchMax: 0.01,               // stretch mínimo de proporción
+  perspectiveMax: 4,                    // ↑ warp de perspectiva → rompe SIFT/ORB
   bgShiftMax: 0,
   bgTolerance: 0,
   textureAmp: 0,
@@ -787,7 +792,7 @@ const REPOST_BASE: Omit<ModeConfig, 'id' | 'label' | 'desc'> = {
   offCenterKeepMax: 0,
   toneCurveAmp: 0,
   distractorChance: 0,
-  randomExif: false,
+  randomExif: true,                     // ↑ EXIF realista de móvil en cada foto
 };
 
 let RID_SEQ = 0;
@@ -803,17 +808,17 @@ function makeConfig(partial: Partial<ModeConfig> & Pick<ModeConfig, 'id' | 'labe
   } as RepostConfig;
 }
 
-// Presets iniciales — marco mínimo 0.3% (casi invisible en Vinted).
-// La unicidad real viene del crop invisible + ruido por bloques, no del marco.
+// Presets iniciales — sin marco visible. La unicidad viene del crop + noise + perspectiva + EXIF.
+// Configs pares (#2, #4, #6, #8) añaden flip horizontal: máxima variación de embedding CNN.
 const DEFAULT_CONFIGS: RepostConfig[] = [
-  makeConfig({ id: 'normal', label: '#1', desc: 'Sesgar X+Y suave + marco 0.3%',   skewX: 0.5,  skewY: 0.5,  frameVPct: 0.3, frameHPct: 0.3 }),
-  makeConfig({ id: 'normal', label: '#2', desc: 'Sesgar X+Y inverso + marco 0.3%', skewX: -0.5, skewY: -0.5, frameVPct: 0.3, frameHPct: 0.3 }),
-  makeConfig({ id: 'normal', label: '#3', desc: 'Rotar +2° + marco 0.3%',          rotateDegMax: 2, frameVPct: 0.3, frameHPct: 0.3 }),
-  makeConfig({ id: 'normal', label: '#4', desc: 'Rotar -2° + marco 0.3%',          rotateDegMax: 2, frameVPct: 0.3, frameHPct: 0.3 }),
-  makeConfig({ id: 'normal', label: '#5', desc: 'Sin sesgar + marco 0.3%',         frameVPct: 0.3, frameHPct: 0.3 }),
-  makeConfig({ id: 'normal', label: '#6', desc: 'Sesgar sutil + marco 0.3%',       frameVPct: 0.3, frameHPct: 0.3, skewX: -0.5, skewY: -0.2 }),
-  makeConfig({ id: 'normal', label: '#7', desc: 'Sesgar Y + sin marco',            frameVPct: 0, frameHPct: 0, skewY: -0.3 }),
-  makeConfig({ id: 'normal', label: '#8', desc: 'Sesgar X + sin marco',            frameVPct: 0, frameHPct: 0, skewX: -0.5 }),
+  makeConfig({ id: 'normal', label: '#1', desc: 'Sesgar X+Y suave',        skewX: 0.5,  skewY: 0.5,  frameVPct: 0, frameHPct: 0 }),
+  makeConfig({ id: 'normal', label: '#2', desc: 'Sesgar inverso + flip',   skewX: -0.5, skewY: -0.5, frameVPct: 0, frameHPct: 0, flipChance: 0.5 }),
+  makeConfig({ id: 'normal', label: '#3', desc: 'Rotar +2°',               rotateDegMax: 2, frameVPct: 0, frameHPct: 0 }),
+  makeConfig({ id: 'normal', label: '#4', desc: 'Rotar -2° + flip',        rotateDegMax: 2, frameVPct: 0, frameHPct: 0, flipChance: 0.5 }),
+  makeConfig({ id: 'normal', label: '#5', desc: 'Sin sesgar + perspectiva extra',  frameVPct: 0, frameHPct: 0, perspectiveMax: 8 }),
+  makeConfig({ id: 'normal', label: '#6', desc: 'Sesgar sutil + flip',     frameVPct: 0, frameHPct: 0, skewX: -0.5, skewY: -0.2, flipChance: 0.5 }),
+  makeConfig({ id: 'normal', label: '#7', desc: 'Sesgar Y + perspectiva',  frameVPct: 0, frameHPct: 0, skewY: -0.3, perspectiveMax: 6 }),
+  makeConfig({ id: 'normal', label: '#8', desc: 'Sesgar X + flip',         frameVPct: 0, frameHPct: 0, skewX: -0.5, flipChance: 0.5 }),
 ];
 
 function summarizeConfig(c: RepostConfig): string {
@@ -901,7 +906,7 @@ export default function ImageUniquifier() {
   const addConfig = () => {
     setConfigs(prev => [
       ...prev,
-      makeConfig({ id: 'normal', label: `#${prev.length + 1}`, desc: 'Nueva configuración', frameVPct: 5, frameHPct: 5 }),
+      makeConfig({ id: 'normal', label: `#${prev.length + 1}`, desc: 'Nueva configuración', frameVPct: 0, frameHPct: 0 }),
     ]);
   };
   const resetConfigs = () => {
@@ -912,14 +917,14 @@ export default function ImageUniquifier() {
   // diferente sin perder la idea (sesgar, rotar, marco). El número de filas no cambia.
   const randomizeConfigs = () => {
     const rnd = (a: number, b: number) => +(a + Math.random() * (b - a)).toFixed(2);
-    const rndI = (a: number, b: number) => Math.floor(a + Math.random() * (b - a + 1));
     setConfigs(prev => prev.map(c => ({
       ...c,
       skewX:        Math.random() < 0.5 ? rnd(-2, 2) : 0,
       skewY:        Math.random() < 0.5 ? rnd(-2, 2) : 0,
       rotateDegMax: Math.random() < 0.5 ? rnd(0.5, 3) : 0,
-      frameVPct:    rndI(0, 10),
-      frameHPct:    rndI(0, 10),
+      flipChance:   Math.random() < 0.5 ? 0.5 : 0,
+      frameVPct:    0,
+      frameHPct:    0,
     })));
   };
 
