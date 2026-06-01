@@ -1860,11 +1860,10 @@ Prioridad máxima: "rawText" debe ser transcripción literal completa.
 Para el resto, aplica la estructura de la marca. Si no ves un dato pon "". Solo el JSON.`;
 
     // Modelos con soporte multimodal (imagen+texto) — actualizados junio 2026
+    // gemini-2.0-flash deprecado mayo 2026; gemini-2.5-flash-preview-05-20 preview caducado
     const OCR_MODELS = [
-      "gemini-2.5-flash-preview-05-20",   // versión concreta mayo 2026 (más estable)
-      "gemini-2.5-flash",                  // alias genérico
-      "gemini-2.0-flash",                  // GA estable
-      "gemini-1.5-flash",                  // fallback probado
+      "gemini-2.5-flash",    // primary — multimodal estable junio 2026
+      "gemini-1.5-flash",    // fallback probado
     ];
 
     async function geminiCall(model: string, body: object, timeoutMs = 30000): Promise<any> {
@@ -1904,7 +1903,8 @@ Para el resto, aplica la estructura de la marca. Si no ves un dato pon "". Solo 
               { inlineData: { mimeType, data: base64Data } },
               { text: ocrPrompt }
             ]}],
-            generationConfig: { responseMimeType: "application/json" },
+            // Sin responseMimeType: máxima compatibilidad entre modelos.
+            // extractJson parsea tanto JSON puro como bloques ```json ... ```.
           });
           // Con responseMimeType:json el texto ya es JSON puro, sin markdown
           const raw = data.candidates?.[0]?.content?.parts?.find((p: any) => p.text)?.text || "";
@@ -1913,7 +1913,10 @@ Para el resto, aplica la estructura de la marca. Si no ves un dato pon "". Solo 
           let parsed: any = null;
           try { parsed = JSON.parse(raw); } catch { parsed = extractJson(raw); }
           if (parsed) {
-            const hasAnyData = parsed.model || parsed.sku || parsed.reference || parsed.date || parsed.sizes?.fr;
+            // Aceptar si hay rawText con contenido O algún campo mapeado.
+            // rawText es lo más fiable: el post-proceso regex extrae los campos de él.
+            const hasAnyData = (parsed.rawText && parsed.rawText.length > 3)
+              || parsed.model || parsed.sku || parsed.reference || parsed.date || parsed.sizes?.fr;
             if (!hasAnyData) {
               console.warn(`[OCR] ${model} JSON vacío, pruebo siguiente`);
               lastError = "empty_json";
