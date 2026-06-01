@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   Upload, Download, Image as ImageIcon,
   CheckCircle2, RefreshCcw, Trash2, Shuffle,
-  ZapOff, Images, Zap
+  ZapOff, Images, Zap, FlipHorizontal2
 } from 'lucide-react';
 
 // ─── Cómo detecta Vinted duplicados ──────────────────────────────────────────
@@ -110,9 +110,9 @@ const MODES: ModeConfig[] = [
     id: 'normal', label: 'NORMAL',
     desc: 'Equilibrio perfecto. Recomendado para uso diario.',
     trimMin: 1, trimMax: 3,
-    cropPctMin: 0.5, cropPctMax: 2.0,
+    cropPctMin: 1.0, cropPctMax: 3.0,
     pixelNoiseMax: 1,
-    blockNoiseMax: 2, blockSize: 20,
+    blockNoiseMax: 2, blockSize: 18,
     lineWarpMax: 0,
     brightMax: 3,
     gradientMax: 0,
@@ -134,17 +134,17 @@ const MODES: ModeConfig[] = [
     id: 'fuerte', label: 'FUERTE',
     desc: 'Invisible al ojo. Rompe pHash + embedding CNN.',
     trimMin: 2, trimMax: 4,
-    cropPctMin: 1.0, cropPctMax: 3.0,
+    cropPctMin: 2.0, cropPctMax: 5.0,
     pixelNoiseMax: 2,
-    blockNoiseMax: 2, blockSize: 16,
+    blockNoiseMax: 3, blockSize: 14,
     lineWarpMax: 1,
     brightMax: 4,
     gradientMax: 4,
-    rotateDegMax: 0.3,
-    qualityMin: 0.87, qualityMax: 0.92,
+    rotateDegMax: 0.5,
+    qualityMin: 0.86, qualityMax: 0.92,
     flipChance: 0,
-    aspectStretchMax: 0,
-    perspectiveMax: 0,
+    aspectStretchMax: 0.015,
+    perspectiveMax: 3,
     bgShiftMax: 0,
     bgTolerance: 0,
     textureAmp: 0,
@@ -306,10 +306,13 @@ async function uniquifyImage(
         // Cambia las coordenadas geométricas de cada keypoint → no matchea.
         if (cfg.perspectiveMax > 0) {
           const pAmp = cfg.perspectiveMax;
-          const dTLx = rnd(-pAmp, pAmp), dTLy = rnd(-pAmp, pAmp);
-          const dTRx = rnd(-pAmp, pAmp), dTRy = rnd(-pAmp, pAmp);
-          const dBLx = rnd(-pAmp, pAmp), dBLy = rnd(-pAmp, pAmp);
-          const dBRx = rnd(-pAmp, pAmp), dBRy = rnd(-pAmp, pAmp);
+          // Esquinas desplazadas SOLO hacia dentro: la zona muestreada queda
+          // siempre DENTRO de la imagen, así no se clampean los bordes y NO
+          // aparece el "marco" distorsionado. Mantiene la unicidad geométrica.
+          const dTLx = rnd(0, pAmp),  dTLy = rnd(0, pAmp);
+          const dTRx = rnd(-pAmp, 0), dTRy = rnd(0, pAmp);
+          const dBLx = rnd(0, pAmp),  dBLy = rnd(-pAmp, 0);
+          const dBRx = rnd(-pAmp, 0), dBRy = rnd(-pAmp, 0);
           const srcP = ctx.getImageData(0, 0, W, H);
           const dstP = ctx.createImageData(W, H);
           const sd = srcP.data, dd = dstP.data;
@@ -733,6 +736,7 @@ export default function ImageUniquifier() {
   const [clipReady, setClipReady]       = useState(false);
   const [clipError, setClipError]       = useState<string | null>(null);
   const [clipProgress, setClipProgress] = useState(0);
+  const [flipEnabled, setFlipEnabled]   = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const cfg        = MODES.find(m => m.id === activeMode)!;
@@ -764,7 +768,10 @@ export default function ImageUniquifier() {
   }, [nuclearMode, clipReady, ensureCLIP]);
 
   const processFiles = useCallback(async (files: FileList | File[], mode: Mode) => {
-    const mc  = MODES.find(m => m.id === mode)!;
+    const baseMc = MODES.find(m => m.id === mode)!;
+    // El toggle de espejo fuerza el flip en cualquier modo (lo más efectivo
+    // contra la detección). Si está OFF, se respeta el flipChance del modo.
+    const mc = { ...baseMc, flipChance: flipEnabled ? 1 : baseMc.flipChance };
     const arr = Array.from(files).filter(f => f.type.startsWith('image/'));
     if (!arr.length) return;
     const useNuclear = nuclearMode && clipReady;
@@ -811,7 +818,7 @@ export default function ImageUniquifier() {
         setImages(prev => prev.map(img => img.id === entry.id ? { ...img, status: 'error' } : img));
       }
     }
-  }, [nuclearMode, clipReady]);
+  }, [nuclearMode, clipReady, flipEnabled]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault(); setDragging(false); processFiles(e.dataTransfer.files, activeMode);
@@ -824,7 +831,8 @@ export default function ImageUniquifier() {
 
   const reprocess = async (id: string) => {
     const entry = images.find(img => img.id === id); if (!entry) return;
-    const mc = MODES.find(m => m.id === entry.mode)!;
+    const baseMc = MODES.find(m => m.id === entry.mode)!;
+    const mc = { ...baseMc, flipChance: flipEnabled ? 1 : baseMc.flipChance };
     setImages(prev => prev.map(img => img.id === id ? { ...img, status: 'processing', processedUrl: null } : img));
     try {
       const blob = await fetch(entry.originalUrl).then(r => r.blob());
@@ -886,6 +894,31 @@ export default function ImageUniquifier() {
           );
         })}
       </div>
+
+      {/* Toggle: voltear horizontal (espejo) */}
+      <button
+        onClick={() => setFlipEnabled(v => !v)}
+        className={`w-full flex items-center justify-between gap-3 rounded-2xl border-2 p-4 transition-all ${
+          flipEnabled ? 'border-acid bg-acid-soft' : 'border-white/[0.08] bg-white/[0.02] hover:border-white/15'
+        }`}
+      >
+        <div className="flex items-center gap-3 text-left">
+          <FlipHorizontal2 className={`w-5 h-5 shrink-0 ${flipEnabled ? 'text-acid' : 'text-white/30'}`} />
+          <div>
+            <p className={`text-sm font-black uppercase tracking-widest ${flipEnabled ? 'text-acid' : 'text-white/50'}`}>
+              Voltear · espejo
+            </p>
+            <p className="text-[11px] text-white/40 leading-snug">
+              Lo más efectivo contra la detección de Vinted. Ojo: logos y texto quedan al revés.
+            </p>
+          </div>
+        </div>
+        <span className={`shrink-0 px-3 py-1 rounded-lg text-xs font-black uppercase tracking-wider ${
+          flipEnabled ? 'bg-acid text-black' : 'bg-white/5 text-white/50'
+        }`}>
+          {flipEnabled ? 'ON' : 'OFF'}
+        </span>
+      </button>
 
       {/* Modo NUCLEAR: CLIP adversarial verifier */}
       <div className={`rounded-2xl border-2 p-4 transition-all ${
