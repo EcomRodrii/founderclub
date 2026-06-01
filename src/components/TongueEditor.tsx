@@ -860,18 +860,20 @@ export default function TongueEditor() {
               )}
             </div>
 
-            {/* Badge de tokens (solo si tiene límite, no si es ilimitado/null) */}
-            {tokenBalance !== undefined && tokenBalance !== null && (
+            {/* Badge de tokens — siempre visible cuando ya cargó */}
+            {tokenBalance !== undefined && (
               <div className={`flex items-center justify-center gap-1.5 text-[11px] py-2 px-3 rounded-xl border ${
                 tokenBalance === 0
                   ? 'bg-red-500/10 border-red-500/20 text-red-400'
-                  : tokenBalance <= 3
+                  : tokenBalance !== null && tokenBalance <= 3
                     ? 'bg-yellow-500/10 border-yellow-500/20 text-yellow-400'
                     : 'bg-white/5 border-white/10 text-white/40'
               }`}>
-                🪙 {tokenBalance === 0
-                  ? 'Sin tokens · contacta al admin'
-                  : `${tokenBalance} token${tokenBalance !== 1 ? 's' : ''} restante${tokenBalance !== 1 ? 's' : ''}`}
+                🪙 {tokenBalance === null
+                  ? 'Tokens ilimitados'
+                  : tokenBalance === 0
+                    ? 'Sin tokens · contacta al admin'
+                    : `${tokenBalance} token${tokenBalance !== 1 ? 's' : ''} restante${tokenBalance !== 1 ? 's' : ''}`}
               </div>
             )}
 
