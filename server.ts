@@ -1915,7 +1915,8 @@ Para el resto, aplica la estructura de la marca. Si no ves un dato pon "". Solo 
       }
 
       if (!ocrResult) {
-        return res.status(500).json({ error: "No se pudo leer la etiqueta. Asegúrate de que la foto sea nítida e inténtalo de nuevo." });
+        // Mostrar error real al usuario para diagnosticar
+        return res.status(500).json({ error: "[OCR] GPT-4o no pudo leer la etiqueta. Revisa los logs del servidor." });
       }
 
       // ── Post-proceso: normalizar campos por marca ──────────────────────────
