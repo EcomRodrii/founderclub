@@ -179,6 +179,7 @@ export default function TongueEditor() {
 
   // ── UI state ─────────────────────────────────────────────────────────────
   const [showAllData, setShowAllData] = useState(false);
+  const [showPrompt, setShowPrompt]   = useState(false);
 
   // Load admin-defined prompts from server on mount
   useEffect(() => {
@@ -804,6 +805,42 @@ export default function TongueEditor() {
             <div className="flex items-center gap-2.5">
               <span className="w-5 h-5 rounded-full bg-acid text-black text-[9px] font-black flex items-center justify-center shrink-0">3</span>
               <h3 className="text-xs font-bold text-white/50 uppercase tracking-widest">Generar</h3>
+            </div>
+
+            {/* Prompt personalizado por marca */}
+            <div className="bg-black/30 border border-white/[0.06] rounded-2xl overflow-hidden">
+              <button
+                onClick={() => setShowPrompt(v => !v)}
+                className="w-full flex items-center justify-between px-4 py-3 text-[10px] uppercase tracking-widest text-white/30 hover:text-white/50 transition select-none"
+              >
+                <span>Prompt personalizado · {activeBrand}</span>
+                {showPrompt ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+              </button>
+              {showPrompt && (
+                <div className="px-4 pb-4">
+                  <textarea
+                    value={
+                      activeBrand === 'ADIDAS'     ? customPromptAdidas
+                      : activeBrand === 'ASICS'    ? customPromptAsics
+                      : activeBrand === 'ONITSUKA' ? customPromptOnitsuka
+                      : customPromptNB
+                    }
+                    onChange={e => {
+                      const v = e.target.value;
+                      if (activeBrand === 'ADIDAS')          setCustomPromptAdidas(v);
+                      else if (activeBrand === 'ASICS')      setCustomPromptAsics(v);
+                      else if (activeBrand === 'ONITSUKA')   setCustomPromptOnitsuka(v);
+                      else                                   setCustomPromptNB(v);
+                    }}
+                    rows={6}
+                    className="w-full bg-black/50 border border-white/10 rounded-xl px-3 py-2.5 text-[11px] text-white/60 focus:border-acid focus:text-white/90 outline-none resize-y font-mono leading-relaxed"
+                    placeholder="Instrucciones personalizadas para la IA..."
+                  />
+                  <p className="text-[10px] text-white/20 mt-2 leading-relaxed">
+                    Edita las reglas que sigue la IA para {activeBrand}. Los cambios se aplican en la próxima generación.
+                  </p>
+                </div>
+              )}
             </div>
 
             <div className="grid grid-cols-2 gap-3">
