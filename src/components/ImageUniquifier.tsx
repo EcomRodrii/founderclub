@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   Upload, Download, Image as ImageIcon,
   CheckCircle2, RefreshCcw, Trash2, Shuffle,
-  ZapOff, Images, Zap, Plus, Pencil, ChevronDown, ChevronUp, RotateCcw
+  ZapOff, Images, Plus, Pencil, ChevronDown, ChevronUp, RotateCcw
 } from 'lucide-react';
 
 // ─── Cómo detecta Vinted duplicados ──────────────────────────────────────────
@@ -651,38 +651,6 @@ async function uniquifyImage(
   });
 }
 
-// ─── Wrapper adversarial con CLIP (modo NUCLEAR) ───────────────────────────
-// Genera hasta MAX_TRIES variantes y se queda con la que más lejos esté del
-// embedding original. Si alcanza TARGET_DIST antes, sale temprano.
-// El embedding original se calcula UNA sola vez por imagen (cache externo).
-
-const ADV_MAX_TRIES = 5;
-const ADV_TARGET_DIST = 0.14;
-
-async function uniquifyImageAdversarial(
-  file: File,
-  cfg: ModeConfig,
-  origEmbed: Float32Array,
-  onAttempt?: (i: number, dist: number) => void
-): Promise<{ dataUrl: string; noiseLevel: number; dimChange: string; size: number; cosineDist: number }> {
-  const { embedDataUrl, cosineDistance } = await import('../lib/clipAdversarial');
-  let best: { result: Awaited<ReturnType<typeof uniquifyImage>>; dist: number } | null = null;
-  for (let i = 0; i < ADV_MAX_TRIES; i++) {
-    const result = await uniquifyImage(file, cfg);
-    let dist = 0;
-    try {
-      const emb = await embedDataUrl(result.dataUrl);
-      dist = cosineDistance(origEmbed, emb);
-    } catch (e) {
-      console.warn('[adversarial] embedding falló, intento sin score', e);
-    }
-    onAttempt?.(i + 1, dist);
-    if (!best || dist > best.dist) best = { result, dist };
-    if (dist >= ADV_TARGET_DIST) break;
-  }
-  return { ...best!.result, cosineDist: best!.dist };
-}
-
 // ─── Helpers UI ───────────────────────────────────────────────────────────────
 
 function formatSize(b: number) {
@@ -840,7 +808,6 @@ interface ProcessedImage {
   id: string; originalName: string; originalUrl: string;
   processedUrl: string | null; originalSize: number; processedSize: number;
   status: 'processing' | 'done' | 'error'; noiseLevel: number; dimChange: string; mode: Mode;
-  cosineDist?: number; advAttempts?: number;
   hashShort?: string;          // SHA-1 corto de la procesada (prueba visual de unicidad)
   originalHashShort?: string;  // SHA-1 corto de la original
 }
@@ -890,11 +857,7 @@ export default function ImageUniquifier() {
   const [dragging, setDragging]     = useState(false);
   const [savingAll, setSavingAll]   = useState(false);
   const [savedCount, setSavedCount] = useState(0);
-  const [nuclearMode, setNuclearMode]   = useState(false);
-  const [clipLoading, setClipLoading]   = useState(false);
-  const [clipReady, setClipReady]       = useState(false);
-  const [clipError, setClipError]       = useState<string | null>(null);
-  const [clipProgress, setClipProgress] = useState(0);
+  const [configsOpen, setConfigsOpen]   = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const updateConfig = (rid: string, patch: Partial<RepostConfig>) => {
@@ -928,31 +891,6 @@ export default function ImageUniquifier() {
     })));
   };
 
-  const ensureCLIP = useCallback(async () => {
-    if (clipReady) return true;
-    setClipError(null);
-    setClipLoading(true);
-    setClipProgress(0);
-    try {
-      const { loadCLIP } = await import('../lib/clipAdversarial');
-      await loadCLIP((pct) => setClipProgress(pct));
-      setClipReady(true);
-      setClipLoading(false);
-      return true;
-    } catch (e: any) {
-      setClipError(e?.message || 'No se pudo cargar CLIP');
-      setClipLoading(false);
-      setNuclearMode(false);
-      return false;
-    }
-  }, [clipReady]);
-
-  const handleToggleNuclear = useCallback(async () => {
-    if (nuclearMode) { setNuclearMode(false); return; }
-    setNuclearMode(true);
-    if (!clipReady) await ensureCLIP();
-  }, [nuclearMode, clipReady, ensureCLIP]);
-
   const processFiles = useCallback(async (files: FileList | File[], cfgs: RepostConfig[]) => {
     // Acepta cualquier archivo cuyo type sea image/* o cuya extensión parezca imagen.
     // iOS/Android a veces devuelven HEIC/HEIF con type vacío.
@@ -967,7 +905,6 @@ export default function ImageUniquifier() {
       alert('No se reconoció ningún archivo como imagen. Asegúrate de subir JPG, PNG, WEBP o HEIC.');
       return;
     }
-    const useNuclear = nuclearMode && clipReady;
     const entries: ProcessedImage[] = arr.map((f, i) => ({
       id: `${Date.now()}-${Math.random().toString(36).slice(2)}-${i}`,
       originalName: f.name, originalUrl: URL.createObjectURL(f),
@@ -977,8 +914,6 @@ export default function ImageUniquifier() {
     }));
     setImages(prev => [...entries, ...prev]);
 
-    const clipHelpers = useNuclear ? await import('../lib/clipAdversarial') : null;
-
     for (let i = 0; i < arr.length; i++) {
       const entry = entries[i];
       const mc = cfgs[i % cfgs.length];
@@ -986,37 +921,19 @@ export default function ImageUniquifier() {
         const origBuf = await arr[i].arrayBuffer();
         const origHash = await sha1Short(origBuf);
         setImages(prev => prev.map(img => img.id === entry.id ? { ...img, originalHashShort: origHash } : img));
-        if (useNuclear && clipHelpers) {
-          const origDataUrl = await new Promise<string>((resolve, reject) => {
-            const r = new FileReader();
-            r.onload = () => resolve(r.result as string);
-            r.onerror = reject;
-            r.readAsDataURL(arr[i]);
-          });
-          const origEmb = await clipHelpers.embedDataUrl(origDataUrl);
-          let attempts = 0;
-          const res = await uniquifyImageAdversarial(arr[i], mc, origEmb, (n) => { attempts = n; });
-          const procHash = await sha1Short(res.dataUrl);
-          setImages(prev => prev.map(img =>
-            img.id === entry.id
-              ? { ...img, processedUrl: res.dataUrl, processedSize: res.size, status: 'done', noiseLevel: res.noiseLevel, dimChange: res.dimChange, cosineDist: res.cosineDist, advAttempts: attempts, hashShort: procHash }
-              : img
-          ));
-        } else {
-          const res = await uniquifyImage(arr[i], mc);
-          const procHash = await sha1Short(res.dataUrl);
-          setImages(prev => prev.map(img =>
-            img.id === entry.id
-              ? { ...img, processedUrl: res.dataUrl, processedSize: res.size, status: 'done', noiseLevel: res.noiseLevel, dimChange: res.dimChange, hashShort: procHash }
-              : img
-          ));
-        }
+        const res = await uniquifyImage(arr[i], mc);
+        const procHash = await sha1Short(res.dataUrl);
+        setImages(prev => prev.map(img =>
+          img.id === entry.id
+            ? { ...img, processedUrl: res.dataUrl, processedSize: res.size, status: 'done', noiseLevel: res.noiseLevel, dimChange: res.dimChange, hashShort: procHash }
+            : img
+        ));
       } catch (e) {
         console.error('[uniquify] error', e);
         setImages(prev => prev.map(img => img.id === entry.id ? { ...img, status: 'error' } : img));
       }
     }
-  }, [nuclearMode, clipReady]);
+  }, []);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault(); setDragging(false); processFiles(e.dataTransfer.files, configs);
@@ -1097,11 +1014,20 @@ export default function ImageUniquifier() {
 
       {/* Configuración de repost — tabla cíclica */}
       <div className="bg-[#0f0f0f] border border-white/[0.08] rounded-2xl overflow-hidden">
-        <div className="p-5 pb-3 border-b border-white/5">
-          <p className="text-xs font-black uppercase tracking-widest text-white/50">Configuración de modificaciones</p>
-          <p className="text-[11px] text-white/40 mt-1">Define varios sets — cada foto subida usa uno en orden cíclico</p>
+        <div
+          className={`p-5 flex items-center justify-between cursor-pointer select-none ${configsOpen ? 'pb-3 border-b border-white/5' : 'pb-5'}`}
+          onClick={() => setConfigsOpen(v => !v)}
+        >
+          <div>
+            <p className="text-xs font-black uppercase tracking-widest text-white/50">Configuración de modificaciones</p>
+            <p className="text-[11px] text-white/40 mt-1">Define varios sets — cada foto subida usa uno en orden cíclico</p>
+          </div>
+          {configsOpen
+            ? <ChevronUp className="w-4 h-4 text-white/30 shrink-0" />
+            : <ChevronDown className="w-4 h-4 text-white/30 shrink-0" />}
         </div>
 
+        {configsOpen && (<>
         {/* Header */}
         <div className="hidden md:grid grid-cols-[40px_1fr_140px_140px_180px] gap-3 px-5 py-3 text-[10px] uppercase tracking-widest text-white/40 font-bold border-b border-white/5">
           <div>#</div>
@@ -1208,9 +1134,10 @@ export default function ImageUniquifier() {
             Rotación activa: orden 1, 2, 3… y vuelve a 1.
           </p>
         </div>
+        </>)}
       </div>
 
-      {/* Acciones formulario */}
+      {configsOpen && (
       <div className="flex gap-2 flex-wrap">
         <button
           onClick={randomizeConfigs}
@@ -1227,49 +1154,7 @@ export default function ImageUniquifier() {
           Resetear formulario
         </button>
       </div>
-
-      {/* Modo NUCLEAR: CLIP adversarial verifier */}
-      <div className={`rounded-2xl border-2 p-4 transition-all ${
-        nuclearMode ? 'border-fuchsia-700 bg-fuchsia-950/40' : 'border-white/[0.08] bg-white/[0.02]'
-      }`}>
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div className="flex items-center gap-3">
-            <Zap className={`w-5 h-5 ${nuclearMode ? 'text-fuchsia-400' : 'text-white/30'}`} />
-            <div>
-              <p className={`text-sm font-black uppercase tracking-widest ${nuclearMode ? 'text-fuchsia-400' : 'text-white/50'}`}>
-                Modo NUCLEAR · CLIP adversarial
-              </p>
-              <p className="text-[11px] text-white/40 leading-snug">
-                Genera hasta {ADV_MAX_TRIES} variantes y se queda con la que más lejos esté del original en el espacio de embeddings CLIP. <span className="text-white/30">Mismo modelo que usa Vinted.</span>
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={handleToggleNuclear}
-            disabled={clipLoading}
-            className={`px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider border-2 transition ${
-              nuclearMode
-                ? 'bg-fuchsia-500 border-fuchsia-400 text-black hover:bg-fuchsia-400'
-                : 'bg-white/5 border-white/10 text-white/50 hover:text-white hover:border-white/30'
-            } disabled:opacity-50`}
-          >
-            {clipLoading ? `Cargando ${Math.round(clipProgress)}%` : nuclearMode ? (clipReady ? 'ON' : 'Cargando…') : 'Activar'}
-          </button>
-        </div>
-        {clipLoading && (
-          <div className="mt-3 h-1.5 rounded-full bg-white/5 overflow-hidden">
-            <div className="h-full bg-fuchsia-500 transition-all" style={{ width: `${clipProgress}%` }} />
-          </div>
-        )}
-        {clipError && (
-          <p className="mt-2 text-[11px] text-red-400">⚠ {clipError}</p>
-        )}
-        {nuclearMode && clipReady && (
-          <p className="mt-2 text-[11px] text-fuchsia-300/80">
-            ✓ CLIP cargado. Cada imagen tardará ~3-6s. Objetivo: cosine ≥ {ADV_TARGET_DIST.toFixed(2)}.
-          </p>
-        )}
-      </div>
+      )}
 
       {/* Barra acciones */}
       {images.length > 0 && (
@@ -1341,14 +1226,6 @@ export default function ImageUniquifier() {
                         <div className="mt-2 pt-2 border-t border-white/5 space-y-0.5">
                           <div className="flex justify-between text-[10px] text-white/30 font-mono"><span>Hash original</span><span>{img.originalHashShort}</span></div>
                           <div className="flex justify-between text-[10px] text-acid font-mono"><span>Hash nuevo ✓</span><span>{img.hashShort}</span></div>
-                        </div>
-                      )}
-                      {typeof img.cosineDist === 'number' && (
-                        <div className={`flex justify-between text-[10px] font-mono mt-1 ${
-                          img.cosineDist >= ADV_TARGET_DIST ? 'text-fuchsia-400' : 'text-amber-400/80'
-                        }`}>
-                          <span>CLIP cosine {img.cosineDist >= ADV_TARGET_DIST ? '✓' : '⚠'}</span>
-                          <span>{img.cosineDist.toFixed(3)}{img.advAttempts ? ` · ${img.advAttempts} try` : ''}</span>
                         </div>
                       )}
                     </div>
