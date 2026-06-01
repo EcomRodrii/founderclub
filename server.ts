@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import express, { Request, Response, NextFunction } from "express";
+import OpenAI from "openai";
 import axios from "axios";
 import https from "https";
 import { createServer as createViteServer } from "vite";
@@ -1814,12 +1815,7 @@ IMPORTANTE: queremos el TOTAL del lote y el TOTAL de unidades, NO el precio unit
     const { imageBase64, brand } = req.body;
     if (!imageBase64) return res.status(400).json({ error: "Se requiere imagen" });
 
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY no configurada en el servidor" });
-
     // ── PASO 1: OCR con imagen — extraer datos técnicos ────────────────────────
-    // No se puede usar googleSearch + inlineData al mismo tiempo, así que
-    // primero extraemos los códigos de la imagen, luego buscamos el nombre.
     const ocrPrompt = `Lee TODO el texto visible en esta etiqueta de zapatilla ${brand} y devuelve este JSON:
 {
   "rawText": "copia EXACTAMENTE todo el texto visible, línea a línea separado por \\n",
@@ -1859,28 +1855,6 @@ ASICS / ONITSUKA TIGER: La etiqueta tiene:
 Prioridad máxima: "rawText" debe ser transcripción literal completa.
 Para el resto, aplica la estructura de la marca. Si no ves un dato pon "". Solo el JSON.`;
 
-    // Modelos con soporte multimodal (imagen+texto) — actualizados junio 2026
-    const OCR_MODELS = [
-      "gemini-2.5-flash-preview-05-20",   // versión concreta mayo 2026 (más estable)
-      "gemini-2.5-flash",                  // alias genérico
-      "gemini-2.0-flash",                  // GA estable
-      "gemini-1.5-flash",                  // fallback probado
-    ];
-
-    async function geminiCall(model: string, body: object, timeoutMs = 30000): Promise<any> {
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), timeoutMs);
-      try {
-        const r = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-          { method: "POST", headers: { "Content-Type": "application/json" }, signal: ctrl.signal, body: JSON.stringify(body) }
-        );
-        const data = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(data?.error?.message || `HTTP ${r.status}`);
-        return data;
-      } finally { clearTimeout(t); }
-    }
-
     function extractJson(text: string): any | null {
       const m = text.match(/```json\s*([\s\S]*?)```/) || text.match(/\{[\s\S]*\}/);
       const raw = m ? (m[1] || m[0]) : null;
@@ -1889,56 +1863,59 @@ Para el resto, aplica la estructura de la marca. Si no ves un dato pon "". Solo 
     }
 
     try {
+      const openaiKey = process.env.OPENAI_API_KEY || "";
+      if (!openaiKey) return res.status(500).json({ error: "OPENAI_API_KEY no configurada en el servidor" });
+
       const mimeMatch = imageBase64.match(/^data:([^;]+);/);
       const mimeType = mimeMatch?.[1] || "image/jpeg";
       const base64Data = imageBase64.includes(",") ? imageBase64.split(",")[1] : imageBase64;
-      console.log(`[OCR] mimeType detectado: ${mimeType}, base64 len: ${base64Data.length}`);
-      let ocrResult: any = null;
-      let lastError = "";
+      console.log(`[OCR] mimeType: ${mimeType}, base64 len: ${base64Data.length}`);
 
-      // ── Paso 1: OCR de imagen ──────────────────────────────────────────────
-      for (const model of OCR_MODELS) {
+      let ocrResult: any = null;
+
+      // ── Paso 1: OCR con GPT-4o vision ────────────────────────────────────────
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 35000);
+        let ocrRaw = "";
         try {
-          const data = await geminiCall(model, {
-            contents: [{ parts: [
-              { inlineData: { mimeType, data: base64Data } },
-              { text: ocrPrompt }
-            ]}],
-            generationConfig: { responseMimeType: "application/json" },
+          const r = await fetch("https://api.openai.com/v1/chat/completions", {
+            method: "POST",
+            headers: { "Authorization": `Bearer ${openaiKey}`, "Content-Type": "application/json" },
+            signal: ctrl.signal,
+            body: JSON.stringify({
+              model: "gpt-4o",
+              messages: [{ role: "user", content: [
+                { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Data}`, detail: "high" } },
+                { type: "text", text: ocrPrompt }
+              ]}],
+              response_format: { type: "json_object" },
+              max_tokens: 1500,
+            }),
           });
-          // Con responseMimeType:json el texto ya es JSON puro, sin markdown
-          const raw = data.candidates?.[0]?.content?.parts?.find((p: any) => p.text)?.text || "";
-          console.log(`[OCR] ${model} raw (100ch):`, raw.slice(0, 100));
-          // Intentar parsear directo; extractJson como fallback
-          let parsed: any = null;
-          try { parsed = JSON.parse(raw); } catch { parsed = extractJson(raw); }
-          if (parsed) {
-            const hasAnyData = parsed.model || parsed.sku || parsed.reference || parsed.date || parsed.sizes?.fr;
-            if (!hasAnyData) {
-              console.warn(`[OCR] ${model} JSON vacío, pruebo siguiente`);
-              lastError = "empty_json";
-              continue;
-            }
-            ocrResult = parsed;
-            console.log(`[OCR] ${model} OK → sku=${ocrResult.model}, fr=${ocrResult.sizes?.fr}`);
-            break;
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(data?.error?.message || `HTTP ${r.status}`);
+          ocrRaw = data.choices?.[0]?.message?.content || "";
+        } finally { clearTimeout(t); }
+
+        console.log(`[OCR] gpt-4o raw (100ch):`, ocrRaw.slice(0, 100));
+        try { ocrResult = JSON.parse(ocrRaw); } catch { ocrResult = extractJson(ocrRaw); }
+
+        if (ocrResult) {
+          const hasAnyData = ocrResult.model || ocrResult.sku || ocrResult.reference || ocrResult.date || ocrResult.sizes?.fr;
+          if (!hasAnyData) {
+            console.warn("[OCR] gpt-4o devolvió JSON vacío");
+            ocrResult = null;
+          } else {
+            console.log(`[OCR] gpt-4o OK → model=${ocrResult.model}, fr=${ocrResult.sizes?.fr}`);
           }
-          lastError = "no_json: " + raw.slice(0, 200);
-          console.warn(`[OCR] ${model} no_json:`, raw.slice(0, 200));
-        } catch (e: any) {
-          lastError = e.message;
-          console.error(`[OCR] ${model} ERROR:`, lastError);
         }
+      } catch (e: any) {
+        console.error("[OCR] gpt-4o ERROR:", e.message);
       }
 
       if (!ocrResult) {
-        console.error(`[OCR] Todos los modelos fallaron. Último error: ${lastError}`);
-        const userMsg = lastError.startsWith("HTTP 429") || lastError.includes("quota")
-          ? "Límite de API alcanzado. Espera 1 minuto e inténtalo de nuevo."
-          : lastError.startsWith("HTTP 4") || lastError.startsWith("HTTP 5")
-            ? `Error de API Gemini: ${lastError}. Inténtalo de nuevo.`
-            : "No se pudo leer la etiqueta. Asegúrate de que la foto sea nítida e inténtalo de nuevo.";
-        return res.status(500).json({ error: userMsg });
+        return res.status(500).json({ error: "No se pudo leer la etiqueta. Asegúrate de que la foto sea nítida e inténtalo de nuevo." });
       }
 
       // ── Post-proceso: normalizar campos por marca ──────────────────────────
@@ -2038,50 +2015,52 @@ Para el resto, aplica la estructura de la marca. Si no ves un dato pon "". Solo 
         if (asicsLvl) ocrResult.lvl = asicsLvl[1].toUpperCase();
       }
 
-      // ── Paso 2: Búsqueda web con googleSearch para identificar el modelo ──
-      // Esta llamada es solo texto, sin imagen → compatible con googleSearch
+      // ── Paso 2: Identificar modelo con GPT-4o ──────────────────────────────
       const sku = ocrResult.model || ocrResult.sku || "";
       const sizeFr = ocrResult.sizes?.fr || "";
       let modelName = "Desconocido";
       let color = "Desconocido";
 
       if (sku && sku !== "Desconocido" && sku !== "") {
-        // gemini-2.0-flash deprecated mayo 2026 → usar solo 2.5-flash con más timeout
-        const SEARCH_MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-preview-05-20"];
-        for (const searchModel of SEARCH_MODELS) {
-          try {
-            // Construir query con toda la info disponible para máxima precisión
-            const sizeInfo = ocrResult.sizes?.fr ? `talla EU ${ocrResult.sizes.fr}` : "";
-            const searchPrompt = `Usa Google Search para identificar exactamente esta zapatilla ${brand}.
+        try {
+          const searchPrompt = `Identifica exactamente este modelo de zapatilla ${brand} usando el código de artículo.
 
-Datos de la etiqueta:
-- Código de modelo / Art. No: ${sku}
+Datos:
+- Código de artículo: ${sku}
 - Marca: ${brand}
-${sizeInfo ? `- Talla: ${sizeInfo}` : ""}
-${ocrResult.date ? `- Fecha: ${ocrResult.date}` : ""}
+${ocrResult.sizes?.fr ? `- Talla EU: ${ocrResult.sizes.fr}` : ""}
 
-TAREA: Busca "${brand} ${sku}" en Google y encuentra el nombre comercial EXACTO de este modelo (ej: "Adidas Samba OG", "New Balance 530 Grey", "Asics Gel-Kayano 14 White Blue").
+Devuelve SOLO este JSON:
+{"modelName":"nombre comercial completo (ej: Adidas Samba OG, New Balance 530, Asics Gel-Kayano 14)","color":"color principal en francés minúsculas (ej: blanc, noir, gris et bleu)"}`;
 
-Devuelve SOLO este JSON sin markdown ni texto extra:
-{"modelName":"nombre comercial completo y exacto incluyendo colorway si lo encuentras","color":"color principal descrito en francés en minúsculas (ej: blanc et bleu, noir, gris et vert)"}`;
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 20000);
+          let searchRaw = "";
+          try {
+            const r = await fetch("https://api.openai.com/v1/chat/completions", {
+              method: "POST",
+              headers: { "Authorization": `Bearer ${openaiKey}`, "Content-Type": "application/json" },
+              signal: ctrl.signal,
+              body: JSON.stringify({
+                model: "gpt-4o",
+                messages: [{ role: "user", content: searchPrompt }],
+                response_format: { type: "json_object" },
+                max_tokens: 200,
+              }),
+            });
+            const data = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(data?.error?.message || `HTTP ${r.status}`);
+            searchRaw = data.choices?.[0]?.message?.content || "";
+          } finally { clearTimeout(t); }
 
-            const searchData = await geminiCall(searchModel, {
-              contents: [{ parts: [{ text: searchPrompt }] }],
-              tools: [{ google_search: {} }]
-            }, 35000);  // 35s — search+generation necesita más tiempo que un OCR normal
-
-            const searchText = searchData.candidates?.[0]?.content?.parts?.find((p: any) => p.text)?.text || "";
-            console.log(`[OCR] Search ${searchModel} raw:`, searchText.slice(0, 300));
-            const sr = extractJson(searchText);
-            if (sr?.modelName && sr.modelName !== "Desconocido" && sr.modelName.length > 3) {
-              modelName = sr.modelName;
-              color = sr.color || "Desconocido";
-              console.log(`[OCR] Search OK (${searchModel}): ${modelName} / ${color}`);
-              break;
-            }
-          } catch (e: any) {
-            console.warn(`[OCR] Search ${searchModel} failed:`, e.message);
+          const sr = extractJson(searchRaw);
+          if (sr?.modelName && sr.modelName.length > 3) {
+            modelName = sr.modelName;
+            color = sr.color || "Desconocido";
+            console.log(`[OCR] Search OK: ${modelName} / ${color}`);
           }
+        } catch (e: any) {
+          console.warn("[OCR] Search failed:", e.message);
         }
       }
 
@@ -2326,111 +2305,68 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
     const { imageBase64, brand, detections, customPrompt } = req.body;
     if (!detections) return res.status(400).json({ error: "Se requieren los datos detectados" });
 
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY no configurada en el servidor" });
+    const openaiKey = process.env.OPENAI_API_KEY || "";
+    if (!openaiKey) return res.status(500).json({ error: "OPENAI_API_KEY no configurada en el servidor" });
 
     const brandPrompt = buildTonguePrompt(brand, detections, customPrompt || "", false);
 
-    // Deadline global: 110s (margen seguro bajo Railway timeout de ~120s)
-    const GLOBAL_DEADLINE = Date.now() + 110_000;
-    // 1 intento por modelo con 40s: 5 modelos × 40s = 200s máx pero el deadline lo corta
-    // En la práctica: si los 3 primeros fallan rápido (<5s por 404), los 5 modelos se prueban
-    const ATTEMPT_TIMEOUT_MS = 40_000;
-
     try {
-      // Partes: [foto a editar, texto]
-      const parts: any[] = [];
-      let aspectRatio: string | null = null;
-      if (imageBase64) {
-        const base64Data = imageBase64.includes(",") ? imageBase64.split(",")[1] : imageBase64;
-        parts.push({ inlineData: { mimeType: "image/jpeg", data: base64Data } });
-        const dims = jpegDimsFromBase64(base64Data);
-        if (dims && dims.w > 0 && dims.h > 0) aspectRatio = pickGeminiAspect(dims.w, dims.h);
-      }
-      parts.push({ text: brandPrompt });
+      const openai = new OpenAI({ apiKey: openaiKey });
+      const base64Data = imageBase64
+        ? (imageBase64.includes(",") ? imageBase64.split(",")[1] : imageBase64)
+        : null;
 
-      // Modelos de generación de imagen — en orden de preferencia
-      const IMG_MODELS = [
-        "gemini-3-pro-image",                      // GA máxima calidad (mayo 2026)
-        "gemini-3.1-flash-image",                  // GA rápido (mayo 2026)
-        "gemini-2.5-flash-image",                  // GA estable
-        "gemini-2.0-flash-preview-image-generation", // Preview anterior — fallback
-        "gemini-2.0-flash-exp",                    // Experimental conocido que genera imágenes
-      ];
-      const MAX_RETRIES_PER_MODEL = 1; // 1 intento por modelo — así los 5 modelos tienen tiempo
+      // Intentar con gpt-image-1 (edición de imagen) y dall-e-2 como fallback
+      const IMG_MODELS = ["gpt-image-1", "dall-e-2"];
       let lastErr = "";
-      let lastTextResponse = "";
 
       for (const model of IMG_MODELS) {
-        // Si se nos acaba el tiempo global, parar ya
-        if (Date.now() >= GLOBAL_DEADLINE) break;
+        try {
+          console.log(`[tongue] intentando ${model}...`);
+          let response: any;
 
-        for (let attempt = 1; attempt <= MAX_RETRIES_PER_MODEL; attempt++) {
-          if (Date.now() >= GLOBAL_DEADLINE) break;
-
-          const body: any = {
-            contents: [{ parts }],
-            generationConfig: {
-              responseModalities: ["TEXT", "IMAGE"],
-              temperature: 0.35 + (attempt - 1) * 0.1,
-            },
-          };
-          if (aspectRatio) body.generationConfig.imageConfig = { aspectRatio };
-
-          let r: Awaited<ReturnType<typeof fetch>>;
-          let data: any;
-          try {
-            const ctrl = new AbortController();
-            // Timeout = mínimo entre el límite del intento y el deadline global
-            const msLeft = Math.max(5000, GLOBAL_DEADLINE - Date.now());
-            const effectiveTimeout = Math.min(ATTEMPT_TIMEOUT_MS, msLeft);
-            const genTimer = setTimeout(() => ctrl.abort(), effectiveTimeout);
-            try {
-              r = await fetch(
-                `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-                { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: ctrl.signal }
-              );
-            } finally {
-              clearTimeout(genTimer);
-            }
-            data = await r.json();
-          } catch (fetchErr: any) {
-            lastErr = fetchErr.message || String(fetchErr);
-            console.error(`[tongue] ${model} attempt ${attempt} fetch error:`, lastErr);
-            continue;
+          if (base64Data) {
+            // Edición de imagen existente
+            const mimeType = imageBase64.match(/^data:([^;]+);/)?.[1] || "image/jpeg";
+            const imgBuffer = Buffer.from(base64Data, "base64");
+            const imgFile = new File([imgBuffer], "tongue.jpg", { type: mimeType });
+            response = await openai.images.edit({
+              model,
+              image: imgFile,
+              prompt: brandPrompt,
+              n: 1,
+              size: model === "gpt-image-1" ? "auto" : "1024x1024",
+            } as any);
+          } else {
+            // Sin imagen: generación desde texto (fallback)
+            response = await openai.images.generate({
+              model: "dall-e-3",
+              prompt: brandPrompt.slice(0, 4000),
+              n: 1,
+              size: "1024x1024",
+              response_format: "b64_json",
+            });
           }
 
-          if (!r!.ok) {
-            lastErr = data?.error?.message || `HTTP ${r!.status}`;
-            console.error(`[tongue] ${model} attempt ${attempt} HTTP ${r!.status}:`, lastErr.slice(0, 200));
-            if (r!.status === 429) {
-              // Rate limit — espera exponencial antes de reintentar
-              await new Promise(resolve => setTimeout(resolve, attempt * 4000));
-            }
-            // No hacer break: siempre continuar al siguiente intento/modelo
-            continue;
+          const b64 = response.data?.[0]?.b64_json;
+          const url = response.data?.[0]?.url;
+          if (b64) {
+            console.log(`[tongue] ${model} OK`);
+            return res.json({ image: `data:image/png;base64,${b64}`, model });
           }
-
-          // Busca primera parte con inlineData (la imagen)
-          const partsResp = data.candidates?.[0]?.content?.parts || [];
-          for (const p of partsResp) {
-            if (p.inlineData?.data) {
-              return res.json({ image: `data:image/png;base64,${p.inlineData.data}`, model, attempt, aspectRatio });
-            }
-            if (p.text) lastTextResponse = p.text.slice(0, 200);
+          if (url) {
+            console.log(`[tongue] ${model} OK (URL)`);
+            return res.json({ image: url, model });
           }
-          console.warn(`[tongue] ${model} attempt ${attempt}: sin imagen, texto:`, lastTextResponse.slice(0, 100));
+          lastErr = `${model}: sin imagen en respuesta`;
+          console.warn(`[tongue] ${lastErr}`);
+        } catch (e: any) {
+          lastErr = `${model}: ${e.message?.slice(0, 200)}`;
+          console.error(`[tongue] ${lastErr}`);
         }
       }
 
-      console.error("[tongue] todos los modelos fallaron. lastText:", lastTextResponse, "lastErr:", lastErr.slice(0, 300));
-      res.status(422).json({
-        error: lastTextResponse
-          ? `Gemini respondió texto en vez de imagen: ${lastTextResponse.slice(0, 120)}…`
-          : lastErr
-            ? `Error de generación: ${lastErr.slice(0, 200)}`
-            : "Ningún modelo devolvió imagen. Inténtalo de nuevo.",
-      });
+      res.status(422).json({ error: `Error de generación: ${lastErr}` });
     } catch (err: any) {
       console.error("Tongue generate error:", err.message);
       res.status(500).json({ error: err.message });
@@ -2670,72 +2606,48 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
     ADIDAS: "400", "NEW BALANCE": "038", ASICS: "456", ONITSUKA: "456",
   };
 
-  // Reuse the same model-retry logic as tongue generation
-  async function runGeminiImageGeneration(
-    prompt: string, imageBase64: string | null, aspectRatio: string | null,
-    globalDeadline: number, attemptTimeout: number, apiKey: string,
-    referenceBase64: string | null = null   // imagen de referencia del admin (opcional)
+  // Image generation via OpenAI (gpt-image-1 edit or dall-e-3 generation)
+  async function runOpenAIImageGeneration(
+    prompt: string, imageBase64: string | null,
+    openaiKey: string
   ): Promise<{ image: string; model: string } | null> {
-    // Modelos GA de generación de imagen (desde 28 may 2026; -preview deprecados)
-    const IMG_MODELS = [
-      "gemini-3-pro-image",
-      "gemini-3.1-flash-image",
-      "gemini-2.5-flash-image",
-    ];
-    const MAX_RETRIES = 2;
-    const parts: any[] = [];
-    // Orden: [referencia (si existe), foto a editar, texto del prompt]
-    // Gemini procesa los inputs en orden — la referencia primero maximiza su influencia
-    if (referenceBase64) {
-      const refB64 = referenceBase64.includes(",") ? referenceBase64.split(",")[1] : referenceBase64;
-      parts.push({ inlineData: { mimeType: "image/jpeg", data: refB64 } });
-    }
-    if (imageBase64) {
-      const b64 = imageBase64.includes(",") ? imageBase64.split(",")[1] : imageBase64;
-      parts.push({ inlineData: { mimeType: "image/jpeg", data: b64 } });
-    }
-    parts.push({ text: prompt });
+    const openai = new OpenAI({ apiKey: openaiKey });
+    const IMG_MODELS = ["gpt-image-1", "dall-e-2"];
+
     for (const model of IMG_MODELS) {
-      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-        if (Date.now() >= globalDeadline) return null;
-        const body: any = {
-          contents: [{ parts }],
-          generationConfig: {
-            responseModalities: ["TEXT", "IMAGE"],
-            temperature: 0.35 + (attempt - 1) * 0.1,
-          },
-        };
-        if (aspectRatio) body.generationConfig.imageConfig = { aspectRatio };
-        try {
-          const ctrl = new AbortController();
-          const effectiveTimeout = Math.min(attemptTimeout, Math.max(5000, globalDeadline - Date.now()));
-          const timer = setTimeout(() => ctrl.abort(), effectiveTimeout);
-          let r: any, data: any;
-          try {
-            r = await fetch(
-              `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-              { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: ctrl.signal }
-            );
-            data = await r.json();
-          } finally { clearTimeout(timer); }
+      try {
+        console.log(`[imggen] intentando ${model}...`);
+        let response: any;
 
-          if (!r.ok) {
-            console.error(`[imggen] ${model} attempt ${attempt} HTTP ${r.status}:`, JSON.stringify(data).slice(0, 200));
-            if (r.status === 429) await new Promise(res => setTimeout(res, attempt * 4000));
-            continue; // siempre continuar — nunca break para no saltarse modelos restantes
-          }
-
-          for (const p of (data.candidates?.[0]?.content?.parts || [])) {
-            if (p.inlineData?.data) {
-              console.log(`[imggen] ${model} attempt ${attempt} OK`);
-              return { image: `data:image/png;base64,${p.inlineData.data}`, model };
-            }
-          }
-          console.warn(`[imggen] ${model} attempt ${attempt}: sin imagen en respuesta`);
-        } catch (err: any) {
-          console.error(`[imggen] ${model} attempt ${attempt} error:`, err.message?.slice(0, 100));
-          continue;
+        if (imageBase64) {
+          const b64 = imageBase64.includes(",") ? imageBase64.split(",")[1] : imageBase64;
+          const mimeType = imageBase64.match(/^data:([^;]+);/)?.[1] || "image/jpeg";
+          const imgBuffer = Buffer.from(b64, "base64");
+          const imgFile = new File([imgBuffer], "box.jpg", { type: mimeType });
+          response = await openai.images.edit({
+            model,
+            image: imgFile,
+            prompt: prompt.slice(0, 4000),
+            n: 1,
+            size: model === "gpt-image-1" ? "auto" : "1024x1024",
+          } as any);
+        } else {
+          response = await openai.images.generate({
+            model: "dall-e-3",
+            prompt: prompt.slice(0, 4000),
+            n: 1,
+            size: "1024x1024",
+            response_format: "b64_json",
+          });
         }
+
+        const b64out = response.data?.[0]?.b64_json;
+        const url = response.data?.[0]?.url;
+        if (b64out) { console.log(`[imggen] ${model} OK`); return { image: `data:image/png;base64,${b64out}`, model }; }
+        if (url)    { console.log(`[imggen] ${model} OK (URL)`); return { image: url, model }; }
+        console.warn(`[imggen] ${model}: sin imagen`);
+      } catch (err: any) {
+        console.error(`[imggen] ${model} error:`, err.message?.slice(0, 150));
       }
     }
     return null;
@@ -2744,8 +2656,8 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
   app.post("/api/box/generate", geminiLimiter, requireLicense as any, async (req: any, res) => {
     const { imageBase64, brand, detections, customPrompt } = req.body;
     if (!detections) return res.status(400).json({ error: "Se requieren los datos detectados" });
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY no configurada" });
+    const openaiKey = process.env.OPENAI_API_KEY || "";
+    if (!openaiKey) return res.status(500).json({ error: "OPENAI_API_KEY no configurada" });
 
     const barcodeValue = generateEAN13(EAN_PREFIXES[brand] || "400");
 
@@ -2776,7 +2688,7 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
       if (dims && dims.w > 0 && dims.h > 0) aspectRatio = pickGeminiAspect(dims.w, dims.h);
     }
 
-    const result = await runGeminiImageGeneration(prompt, imageBase64, aspectRatio, Date.now() + 90_000, 35_000, apiKey, boxRefBase64);
+    const result = await runOpenAIImageGeneration(prompt, imageBase64, openaiKey);
     if (!result) return res.status(503).json({ error: "No se pudo generar la imagen de caja. Inténtalo de nuevo." });
 
     res.json({ ...result, barcodeValue });
@@ -2787,10 +2699,8 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
   app.post("/api/dual/generate", geminiLimiter, requireLicense as any, async (req: any, res) => {
     const { tongueImageBase64, boxImageBase64, brand, detections, tonguePrompt, boxPrompt } = req.body;
     if (!detections) return res.status(400).json({ error: "Se requieren los datos detectados" });
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY no configurada" });
-
-    const GLOBAL_DEADLINE = Date.now() + 90_000;
+    const openaiKey = process.env.OPENAI_API_KEY || "";
+    if (!openaiKey) return res.status(500).json({ error: "OPENAI_API_KEY no configurada" });
 
     // Get admin prompts
     const [tpRes, bpRes] = await Promise.all([
@@ -2804,17 +2714,10 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
     const barcodeValue = generateEAN13(EAN_PREFIXES[brand] || "400");
     const boxFullPrompt = buildBoxPrompt(brand, detections, adminBoxPrompt, barcodeValue);
 
-    const getAspect = (b64: string | null) => {
-      if (!b64) return null;
-      const data = b64.includes(",") ? b64.split(",")[1] : b64;
-      const dims = jpegDimsFromBase64(data);
-      return (dims && dims.w > 0 && dims.h > 0) ? pickGeminiAspect(dims.w, dims.h) : null;
-    };
-
     // Run both in parallel
     const [tongueResult, boxResult] = await Promise.all([
-      runGeminiImageGeneration(tongueFullPrompt, tongueImageBase64 || null, getAspect(tongueImageBase64 || null), GLOBAL_DEADLINE, 45_000, apiKey),
-      runGeminiImageGeneration(boxFullPrompt, boxImageBase64 || null, getAspect(boxImageBase64 || null), GLOBAL_DEADLINE, 45_000, apiKey),
+      runOpenAIImageGeneration(tongueFullPrompt, tongueImageBase64 || null, openaiKey),
+      runOpenAIImageGeneration(boxFullPrompt, boxImageBase64 || null, openaiKey),
     ]);
 
     if (!tongueResult && !boxResult)
