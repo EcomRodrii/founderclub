@@ -95,6 +95,9 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
   const [boxPromptSaving, setBoxPromptSaving] = useState<Record<Brand, boolean>>({ 'ADIDAS': false, 'NEW BALANCE': false, 'ASICS': false, 'ONITSUKA': false });
   const [boxPromptSaved, setBoxPromptSaved] = useState<Record<Brand, boolean>>({ 'ADIDAS': false, 'NEW BALANCE': false, 'ASICS': false, 'ONITSUKA': false });
 
+  // Token editing per license (licenseId → draft value string)
+  const [editingTokens, setEditingTokens] = useState<Record<number, string>>({});
+
   // References
   const [refs, setRefs] = useState<any[]>([]);
   const [newRefBrand, setNewRefBrand] = useState<Brand>('ADIDAS');
@@ -148,6 +151,15 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
     setBoxPromptSaving(prev => ({ ...prev, [brand]: false }));
     setBoxPromptSaved(prev => ({ ...prev, [brand]: true }));
     setTimeout(() => setBoxPromptSaved(prev => ({ ...prev, [brand]: false })), 2000);
+  };
+
+  const saveLicenseTokens = async (licenseId: number) => {
+    const raw = editingTokens[licenseId];
+    const tokens = (raw === '' || raw === null || raw === undefined) ? null : parseInt(raw, 10);
+    if (raw !== '' && tokens !== null && (isNaN(tokens) || tokens < 0)) return;
+    await client.post(`/api/admin/licenses/${licenseId}/tokens`, { tokens });
+    setEditingTokens(prev => { const n = { ...prev }; delete n[licenseId]; return n; });
+    loadTab('licenses');
   };
 
   // Compress image to max 900px before storing as base64
@@ -412,7 +424,7 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
               <table className="w-full text-sm min-w-[700px]">
                 <thead>
                   <tr className="border-b border-zinc-800">
-                    {['Clave', 'Tipo', 'Usuario', 'Expira', 'HWID', 'Acceso', 'Activa', 'Acciones'].map(h => (
+                    {['Clave', 'Tipo', 'Usuario', 'Expira', 'HWID', 'Acceso', 'Tokens', 'Activa', 'Acciones'].map(h => (
                       <th key={h} className="text-left text-xs text-zinc-500 font-medium px-4 py-3">{h}</th>
                     ))}
                   </tr>
@@ -447,6 +459,34 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
                         >
                           {hasAcademia ? '🎓 Academia' : '🔒 Solo Fantasma'}
                         </button>
+                      </td>
+
+                      {/* Columna tokens */}
+                      <td className="px-4 py-3">
+                        {l.id in editingTokens ? (
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="number" min={0} placeholder="∞"
+                              value={editingTokens[l.id]}
+                              onChange={e => setEditingTokens(prev => ({ ...prev, [l.id]: e.target.value }))}
+                              className="w-16 bg-zinc-800 border border-violet-500 rounded-lg px-2 py-1 text-xs text-white focus:outline-none"
+                              autoFocus
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') saveLicenseTokens(l.id);
+                                if (e.key === 'Escape') setEditingTokens(prev => { const n = { ...prev }; delete n[l.id]; return n; });
+                              }}
+                            />
+                            <button onClick={() => saveLicenseTokens(l.id)} className="text-acid text-xs px-1.5 py-1 rounded hover:text-white transition">✓</button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setEditingTokens(prev => ({ ...prev, [l.id]: l.image_tokens ?? '' }))}
+                            className="text-xs text-zinc-400 hover:text-white font-mono flex items-center gap-1 transition"
+                            title="Editar tokens"
+                          >
+                            🪙 {l.image_tokens === null || l.image_tokens === undefined ? '∞' : l.image_tokens}
+                          </button>
+                        )}
                       </td>
 
                       <td className="px-4 py-3">

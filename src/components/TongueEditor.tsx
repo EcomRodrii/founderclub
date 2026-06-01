@@ -177,12 +177,25 @@ export default function TongueEditor() {
   const [loadingBox, setLoadingBox] = useState(false);
   const boxFileInputRef = useRef<HTMLInputElement>(null);
 
+  // ── Token balance ─────────────────────────────────────────────────────────
+  // undefined = cargando, null = ilimitado, number = saldo restante
+  const [tokenBalance, setTokenBalance] = useState<number | null | undefined>(undefined);
+
+  const refreshTokens = () => {
+    const token = localStorage.getItem('fc_token') || '';
+    fetch('/api/user/tokens', { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data !== null) setTokenBalance(data.tokens); })
+      .catch(() => {});
+  };
+
   // ── UI state ─────────────────────────────────────────────────────────────
   const [showAllData, setShowAllData] = useState(false);
   const [showPrompt, setShowPrompt]   = useState(false);
 
-  // Load admin-defined prompts from server on mount
+  // Load admin-defined prompts from server on mount + token balance
   useEffect(() => {
+    refreshTokens();
     fetch('/api/tongue/prompts')
       .then(r => r.ok ? r.json() : [])
       .then((rows: { brand: string; prompt: string }[]) => {
@@ -378,12 +391,14 @@ export default function TongueEditor() {
       const data = await res.json();
       if (!res.ok) {
         if (res.status === 429) throw new Error('Demasiadas peticiones. Espera unos segundos.');
+        if (res.status === 402) throw new Error(data.error || 'Sin tokens de generación. Contacta al administrador.');
         if (res.status === 422) throw new Error(data.error || 'Gemini no generó imagen. Inténtalo de nuevo.');
         throw new Error(data.error || `Error (${res.status}). Inténtalo de nuevo.`);
       }
       if (data.image) {
         setGeneratedImage(data.image);
         setStatus('✓ Lengüeta generada');
+        refreshTokens();
       } else {
         throw new Error('Sin imagen en la respuesta. Inténtalo de nuevo.');
       }
@@ -416,10 +431,12 @@ export default function TongueEditor() {
       const data = await res.json();
       if (!res.ok) {
         if (res.status === 429) throw new Error('Demasiadas peticiones. Espera unos segundos.');
+        if (res.status === 402) throw new Error(data.error || 'Sin tokens de generación. Contacta al administrador.');
         throw new Error(data.error || `Error (${res.status}). Inténtalo de nuevo.`);
       }
       if (data.image) {
         setBoxImage(data.image);
+        refreshTokens();
       } else {
         throw new Error('Sin imagen en la respuesta. Inténtalo de nuevo.');
       }
@@ -843,8 +860,23 @@ export default function TongueEditor() {
               )}
             </div>
 
+            {/* Badge de tokens (solo si tiene límite, no si es ilimitado/null) */}
+            {tokenBalance !== undefined && tokenBalance !== null && (
+              <div className={`flex items-center justify-center gap-1.5 text-[11px] py-2 px-3 rounded-xl border ${
+                tokenBalance === 0
+                  ? 'bg-red-500/10 border-red-500/20 text-red-400'
+                  : tokenBalance <= 3
+                    ? 'bg-yellow-500/10 border-yellow-500/20 text-yellow-400'
+                    : 'bg-white/5 border-white/10 text-white/40'
+              }`}>
+                🪙 {tokenBalance === 0
+                  ? 'Sin tokens · contacta al admin'
+                  : `${tokenBalance} token${tokenBalance !== 1 ? 's' : ''} restante${tokenBalance !== 1 ? 's' : ''}`}
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-3">
-              <button onClick={generateModifiedTongue} disabled={loading}
+              <button onClick={generateModifiedTongue} disabled={loading || tokenBalance === 0}
                 className="py-5 bg-acid hover:bg-acid/90 text-black font-black rounded-2xl flex flex-col items-center gap-2 transition disabled:opacity-50">
                 {loading
                   ? <RefreshCcw className="w-5 h-5 animate-spin" />
@@ -852,7 +884,7 @@ export default function TongueEditor() {
                 <span className="text-xs tracking-wider">LENGÜETA</span>
               </button>
 
-              <button onClick={generateBoxLabel} disabled={loadingBox || !detections}
+              <button onClick={generateBoxLabel} disabled={loadingBox || !detections || tokenBalance === 0}
                 className="py-5 bg-white/8 hover:bg-white/12 text-white font-black rounded-2xl flex flex-col items-center gap-2 border border-white/10 hover:border-white/20 transition disabled:opacity-40">
                 {loadingBox
                   ? <RefreshCcw className="w-5 h-5 animate-spin" />

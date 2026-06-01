@@ -332,6 +332,10 @@ export async function initDB() {
       prompt     TEXT NOT NULL DEFAULT '',
       updated_at TIMESTAMP DEFAULT NOW()
     )`,
+
+    // ── Token de generación de imágenes por licencia ───────────────────────────
+    // NULL = ilimitado, número = tokens restantes
+    `ALTER TABLE licenses ADD COLUMN IF NOT EXISTS image_tokens INTEGER DEFAULT NULL`,
   ];
   for (const sql of migrations) {
     await pool.query(sql).catch(() => {}); // silently ignore if column already exists

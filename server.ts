@@ -93,6 +93,38 @@ function requireWorkerSecret(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
+// ─── Helpers: token de generación de imágenes ────────────────────────────────
+
+async function checkTokens(
+  req: AuthRequest, res: Response, needed: number
+): Promise<{ ok: boolean; licenseId?: number }> {
+  if (req.user?.is_admin) return { ok: true };
+  const result = await pool.query(
+    `SELECT id, image_tokens FROM licenses
+     WHERE user_id = $1 AND is_active = TRUE
+       AND (expires_at IS NULL OR expires_at > NOW())
+     LIMIT 1`,
+    [req.user!.id]
+  );
+  const lic = result.rows[0];
+  if (!lic) { res.status(403).json({ error: "Licencia requerida" }); return { ok: false }; }
+  if (lic.image_tokens === null) return { ok: true, licenseId: lic.id }; // ilimitado
+  if (lic.image_tokens < needed) {
+    res.status(402).json({ error: "Sin tokens de generación. Contacta al administrador." });
+    return { ok: false };
+  }
+  return { ok: true, licenseId: lic.id };
+}
+
+async function deductTokens(licenseId: number | undefined, amount: number): Promise<void> {
+  if (!licenseId) return;
+  pool.query(
+    `UPDATE licenses SET image_tokens = image_tokens - $1
+     WHERE id = $2 AND image_tokens IS NOT NULL`,
+    [amount, licenseId]
+  ).catch(() => {});
+}
+
 // ─── Helper: generate license key ────────────────────────────────────────────
 
 function generateLicenseKey(): string {
@@ -402,6 +434,22 @@ async function startServer() {
     res.json({ user, license: lic });
   });
 
+  // ── Token de generación ──────────────────────────────────────────────────────
+
+  app.get("/api/user/tokens", requireAuth as any, async (req: AuthRequest, res) => {
+    if (req.user?.is_admin) return res.json({ tokens: null }); // admin = ilimitado
+    const result = await pool.query(
+      `SELECT image_tokens FROM licenses
+       WHERE user_id = $1 AND is_active = TRUE
+         AND (expires_at IS NULL OR expires_at > NOW())
+       LIMIT 1`,
+      [req.user!.id]
+    );
+    const lic = result.rows[0];
+    if (!lic) return res.json({ tokens: 0 });
+    res.json({ tokens: lic.image_tokens }); // null = ilimitado, número = saldo
+  });
+
   // ── License Routes ──────────────────────────────────────────────────────────
 
   app.post("/api/auth/activate-license", requireAuth as any, async (req: AuthRequest, res) => {
@@ -545,6 +593,21 @@ async function startServer() {
     const result = await pool.query(
       "UPDATE licenses SET features = $1 WHERE id = $2 RETURNING *",
       [clean, req.params.id]
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: "Licencia no encontrada" });
+    res.json(result.rows[0]);
+  });
+
+  // ── Gestión de tokens por licencia ─────────────────────────────────────────
+
+  app.post("/api/admin/licenses/:id/tokens", requireAdmin as any, async (req, res) => {
+    const { tokens } = req.body; // número o null
+    if (tokens !== null && (typeof tokens !== "number" || !Number.isInteger(tokens) || tokens < 0)) {
+      return res.status(400).json({ error: "tokens debe ser entero >= 0 o null (ilimitado)" });
+    }
+    const result = await pool.query(
+      "UPDATE licenses SET image_tokens = $1 WHERE id = $2 RETURNING id, image_tokens",
+      [tokens ?? null, req.params.id]
     );
     if (!result.rows[0]) return res.status(404).json({ error: "Licencia no encontrada" });
     res.json(result.rows[0]);
@@ -2329,6 +2392,9 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
     const { imageBase64, brand, detections, customPrompt } = req.body;
     if (!detections) return res.status(400).json({ error: "Se requieren los datos detectados" });
 
+    const tokenCheck = await checkTokens(req, res, 1);
+    if (!tokenCheck.ok) return;
+
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY no configurada en el servidor" });
 
@@ -2418,6 +2484,7 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
           const partsResp = data.candidates?.[0]?.content?.parts || [];
           for (const p of partsResp) {
             if (p.inlineData?.data) {
+              deductTokens(tokenCheck.licenseId, 1);
               return res.json({ image: `data:image/png;base64,${p.inlineData.data}`, model, attempt, aspectRatio });
             }
             if (p.text) lastTextResponse = p.text.slice(0, 200);
@@ -2750,6 +2817,10 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
   app.post("/api/box/generate", geminiLimiter, requireLicense as any, async (req: any, res) => {
     const { imageBase64, brand, detections, customPrompt } = req.body;
     if (!detections) return res.status(400).json({ error: "Se requieren los datos detectados" });
+
+    const tokenCheck = await checkTokens(req, res, 1);
+    if (!tokenCheck.ok) return;
+
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY no configurada" });
 
@@ -2785,6 +2856,7 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
     const result = await runGeminiImageGeneration(prompt, imageBase64, aspectRatio, Date.now() + 90_000, 35_000, apiKey, boxRefBase64);
     if (!result) return res.status(503).json({ error: "No se pudo generar la imagen de caja. Inténtalo de nuevo." });
 
+    deductTokens(tokenCheck.licenseId, 1);
     res.json({ ...result, barcodeValue });
   });
 
@@ -2793,6 +2865,10 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
   app.post("/api/dual/generate", geminiLimiter, requireLicense as any, async (req: any, res) => {
     const { tongueImageBase64, boxImageBase64, brand, detections, tonguePrompt, boxPrompt } = req.body;
     if (!detections) return res.status(400).json({ error: "Se requieren los datos detectados" });
+
+    const tokenCheck = await checkTokens(req, res, 2);
+    if (!tokenCheck.ok) return;
+
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY no configurada" });
 
@@ -2825,6 +2901,10 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
 
     if (!tongueResult && !boxResult)
       return res.status(503).json({ error: "Ambas generaciones fallaron. Inténtalo de nuevo." });
+
+    // Deducir solo los tokens realmente generados
+    const generated = (tongueResult ? 1 : 0) + (boxResult ? 1 : 0);
+    if (generated > 0) deductTokens(tokenCheck.licenseId, generated);
 
     res.json({
       tongue: tongueResult,
