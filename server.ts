@@ -2567,21 +2567,24 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
     const sizes = d.sizes || {};
 
     const BOX_PREAMBLE = hasReference
-      ? (`Tienes DOS imágenes adjuntas: ` +
+      ? (`TAREA: EDITAR IMAGEN EXISTENTE — NO generar imagen nueva. ` +
+         `Tienes DOS imágenes adjuntas: ` +
          `IMAGE 1 (primera imagen) es una etiqueta de caja AUTÉNTICA de referencia — ` +
          `estudia exactamente su formato, tipografía, disposición y calidad de impresión. ` +
          `IMAGE 2 (segunda imagen) es la foto real de la etiqueta de caja que debes editar. ` +
-         `REGLA CRÍTICA ABSOLUTA: el código de barras de IMAGE 2 (las barras/rayas verticales negras y ` +
-         `el número EAN impreso bajo ellas) JAMÁS se toca — debe quedar EXACTAMENTE igual. ` +
-         `La etiqueta completa, el fondo de la caja, la perspectiva, la iluminación y todos los logos también se preservan. ` +
-         `SOLO se modifican los campos de texto específicos indicados a continuación en IMAGE 2.`)
-      : (`Te adjunto la foto de la etiqueta adhesiva blanca de la caja de zapatillas. ` +
-         `REGLA CRÍTICA ABSOLUTA: el código de barras (las barras/rayas verticales negras y ` +
-         `el número EAN impreso bajo ellas) JAMÁS se toca — debe quedar EXACTAMENTE igual que ` +
-         `en la foto original, con las mismas rayas, mismo número, misma posición. ` +
-         `La etiqueta completa, el fondo azul de la caja, la perspectiva, la iluminación y ` +
-         `todos los logos también se preservan intactos. ` +
-         `SOLO se modifican los campos de texto específicos indicados a continuación.`);
+         `La imagen de salida debe ser IDÉNTICA a IMAGE 2 excepto por los campos de texto específicos indicados abajo. ` +
+         `PRESERVA AL 100%: código de barras (barras + número EAN), fondo, perspectiva, iluminación, logos, modelo, tallas. ` +
+         `SOLO cambia los campos de texto indicados. No regeneres nada desde cero.`)
+      : (`TAREA: EDITAR IMAGEN EXISTENTE — NO generar imagen nueva desde cero. ` +
+         `La imagen adjunta es la foto REAL de una etiqueta de caja de zapatillas. ` +
+         `La imagen de salida debe ser PIXEL-PERFECT idéntica a la foto adjunta, ` +
+         `excepto únicamente por los campos de texto que se indican abajo para sustituir. ` +
+         `PRESERVA AL 100% sin ninguna alteración: ` +
+         `código de barras completo (todas las barras verticales + número EAN), ` +
+         `fondo y color de la caja, perspectiva y ángulo, iluminación y sombras, ` +
+         `todos los logos de marca, nombre del modelo, tabla de tallas, país de fabricación. ` +
+         `Literalmente todo queda igual excepto los campos de texto señalados. ` +
+         `No recrees ni regeneres la imagen — edita solo lo indicado.`);
 
     if (brand === "ADIDAS") {
       // Códigos de correlación: derivados de los seriales de la lengüeta.
