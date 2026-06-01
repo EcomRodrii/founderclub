@@ -789,6 +789,23 @@ const DEFAULT_CONFIGS: RepostConfig[] = [
   makeConfig({ id: 'normal', label: '#8', desc: 'Sesgar X + flip',         frameVPct: 0, frameHPct: 0, skewX: -0.5, flipChance: 0.5 }),
 ];
 
+// ─── Parámetros de transformación únicos por foto ────────────────────────────
+// Genera valores geométricos completamente aleatorios cada vez que se procesa
+// una imagen. Con 50 personas usando la misma herramienta, o la misma persona
+// subiendo la misma foto varias veces, CADA resultado es único e irrepetible.
+// Los parámetros de intensidad (crop, noise, perspectiva base) vienen de REPOST_BASE.
+function randomizeTransform(): Pick<ModeConfig, 'skewX' | 'skewY' | 'rotateDegMax' | 'flipChance' | 'perspectiveMax'> {
+  const rnd = (a: number, b: number) => +(a + Math.random() * (b - a)).toFixed(2);
+  const coin = (p: number) => Math.random() < p;
+  return {
+    skewX:          coin(0.6) ? rnd(-1.8, 1.8) : 0,
+    skewY:          coin(0.6) ? rnd(-1.8, 1.8) : 0,
+    rotateDegMax:   coin(0.55) ? rnd(0.5, 2.5) : 0,
+    flipChance:     coin(0.45) ? 0.5 : 0,
+    perspectiveMax: rnd(3, 10),   // siempre algo de warp de perspectiva
+  };
+}
+
 function summarizeConfig(c: RepostConfig): string {
   const parts: string[] = [];
   if (c.skewX || c.skewY) parts.push(`Sesgar X: ${c.skewX ?? 0}  Y: ${c.skewY ?? 0}`);
@@ -916,7 +933,10 @@ export default function ImageUniquifier() {
 
     for (let i = 0; i < arr.length; i++) {
       const entry = entries[i];
-      const mc = cfgs[i % cfgs.length];
+      // Mezcla el config cíclico (para editTitle/editDescription) con parámetros
+      // geométricos completamente nuevos por imagen → cada proceso es irrepetible,
+      // aunque 50 personas suban la misma foto o la misma persona la suba 5 veces.
+      const mc: RepostConfig = { ...cfgs[i % cfgs.length], ...randomizeTransform() };
       try {
         const origBuf = await arr[i].arrayBuffer();
         const origHash = await sha1Short(origBuf);
