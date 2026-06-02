@@ -298,22 +298,23 @@ async function uniquifyImage(
         }
         if (cfg.rotateDegMax > 0) {
           const angle = rnd(-cfg.rotateDegMax, cfg.rotateDegMax) * Math.PI / 180;
-          const cos = Math.cos(angle), sin = Math.sin(angle);
-          const scale = 1 / (Math.abs(cos) + Math.abs(sin));
+          const ac = Math.abs(Math.cos(angle)), as = Math.abs(Math.sin(angle));
+          // Escala correcta para imágenes rectangulares: agranda la imagen (>1) para
+          // que la imagen rotada CUBRA todas las esquinas del canvas sin bordes negros.
+          // La fórmula 1/(cos+sin) solo funciona para cuadrados; fotos portrait/landscape
+          // con esa fórmula dejan esquinas vacías que el JPEG rellena de negro.
+          const scale = Math.max(ac + (H / W) * as, (W / H) * as + ac);
           ctx.translate(W / 2, H / 2);
           ctx.rotate(angle);
           ctx.scale(scale, scale);
           ctx.translate(-W / 2, -H / 2);
         }
-        // Skew (sesgar) X/Y: transformación afín VISIBLE. Cada unidad del UI = 0.05
-        // de shear (≈3°). 0.5 → 0.025 (~1.5°), 2 → 0.1 (~5.7°). Suficiente para que
-        // el cliente note la diferencia entre fotos del mismo lote.
+        // Skew (sesgar) X/Y: escala compensada para fotos rectangulares.
         const skX = (cfg.skewX ?? 0) * 0.05;
         const skY = (cfg.skewY ?? 0) * 0.05;
         if (skX !== 0 || skY !== 0) {
-          // Compensa para que la imagen siga cubriendo el canvas completo.
-          const sxAbs = Math.abs(skX), syAbs = Math.abs(skY);
-          const scaleComp = 1 / (1 + Math.max(sxAbs, syAbs));
+          // scaleComp > 1: agranda la imagen para que el shear cubra todas las esquinas.
+          const scaleComp = 1 + Math.abs(skX) * (H / W) + Math.abs(skY) * (W / H);
           ctx.translate(W / 2, H / 2);
           ctx.transform(1, skY, skX, 1, 0, 0);
           ctx.scale(scaleComp, scaleComp);
@@ -776,33 +777,33 @@ function makeConfig(partial: Partial<ModeConfig> & Pick<ModeConfig, 'id' | 'labe
   } as RepostConfig;
 }
 
-// Presets iniciales — sin marco visible. La unicidad viene del crop + noise + perspectiva + EXIF.
-// Configs pares (#2, #4, #6, #8) añaden flip horizontal: máxima variación de embedding CNN.
+// Presets — sin marcos, sin rotación, sin skew. Solo técnicas 100% invisibles.
+// Cada imagen aplica además randomizeTransform() → flip y perspectiva únicos por foto.
 const DEFAULT_CONFIGS: RepostConfig[] = [
-  makeConfig({ id: 'normal', label: '#1', desc: 'Sesgar X+Y suave',        skewX: 0.5,  skewY: 0.5,  frameVPct: 0, frameHPct: 0 }),
-  makeConfig({ id: 'normal', label: '#2', desc: 'Sesgar inverso + flip',   skewX: -0.5, skewY: -0.5, frameVPct: 0, frameHPct: 0, flipChance: 0.5 }),
-  makeConfig({ id: 'normal', label: '#3', desc: 'Rotar +2°',               rotateDegMax: 2, frameVPct: 0, frameHPct: 0 }),
-  makeConfig({ id: 'normal', label: '#4', desc: 'Rotar -2° + flip',        rotateDegMax: 2, frameVPct: 0, frameHPct: 0, flipChance: 0.5 }),
-  makeConfig({ id: 'normal', label: '#5', desc: 'Sin sesgar + perspectiva extra',  frameVPct: 0, frameHPct: 0, perspectiveMax: 8 }),
-  makeConfig({ id: 'normal', label: '#6', desc: 'Sesgar sutil + flip',     frameVPct: 0, frameHPct: 0, skewX: -0.5, skewY: -0.2, flipChance: 0.5 }),
-  makeConfig({ id: 'normal', label: '#7', desc: 'Sesgar Y + perspectiva',  frameVPct: 0, frameHPct: 0, skewY: -0.3, perspectiveMax: 6 }),
-  makeConfig({ id: 'normal', label: '#8', desc: 'Sesgar X + flip',         frameVPct: 0, frameHPct: 0, skewX: -0.5, flipChance: 0.5 }),
+  makeConfig({ id: 'normal', label: '#1', desc: 'Crop + ruido',            frameVPct: 0, frameHPct: 0 }),
+  makeConfig({ id: 'normal', label: '#2', desc: 'Crop + ruido + flip',     frameVPct: 0, frameHPct: 0, flipChance: 0.5 }),
+  makeConfig({ id: 'normal', label: '#3', desc: 'Perspectiva media',       frameVPct: 0, frameHPct: 0, perspectiveMax: 5 }),
+  makeConfig({ id: 'normal', label: '#4', desc: 'Perspectiva media + flip',frameVPct: 0, frameHPct: 0, flipChance: 0.5, perspectiveMax: 5 }),
+  makeConfig({ id: 'normal', label: '#5', desc: 'Perspectiva fuerte',      frameVPct: 0, frameHPct: 0, perspectiveMax: 9 }),
+  makeConfig({ id: 'normal', label: '#6', desc: 'Perspectiva fuerte + flip',frameVPct: 0, frameHPct: 0, flipChance: 0.5, perspectiveMax: 9 }),
+  makeConfig({ id: 'normal', label: '#7', desc: 'Crop extra',              frameVPct: 0, frameHPct: 0, cropPctMin: 2.5, cropPctMax: 4 }),
+  makeConfig({ id: 'normal', label: '#8', desc: 'Crop extra + flip',       frameVPct: 0, frameHPct: 0, flipChance: 0.5, cropPctMin: 2.5, cropPctMax: 4 }),
 ];
 
 // ─── Parámetros de transformación únicos por foto ────────────────────────────
-// Genera valores geométricos completamente aleatorios cada vez que se procesa
-// una imagen. Con 50 personas usando la misma herramienta, o la misma persona
-// subiendo la misma foto varias veces, CADA resultado es único e irrepetible.
-// Los parámetros de intensidad (crop, noise, perspectiva base) vienen de REPOST_BASE.
-function randomizeTransform(): Pick<ModeConfig, 'skewX' | 'skewY' | 'rotateDegMax' | 'flipChance' | 'perspectiveMax'> {
+// Genera parámetros INVISIBLES completamente aleatorios por imagen.
+// Con 50 personas o la misma persona subiendo la misma foto varias veces,
+// cada resultado es irrepetible. Solo usa técnicas que NO crean bordes visibles:
+//   · flip horizontal (espejo total — cubre el canvas completo, sin bordes)
+//   · perspective warp (desplaza esquinas ±px — clamping al borde, sin bordes)
+// La rotación y el skew están EXCLUIDOS: crean marcos negros en fotos portrait/landscape
+// porque la fórmula de escala depende del aspect ratio y la foto queda visible.
+function randomizeTransform(): Pick<ModeConfig, 'flipChance' | 'perspectiveMax'> {
   const rnd = (a: number, b: number) => +(a + Math.random() * (b - a)).toFixed(2);
   const coin = (p: number) => Math.random() < p;
   return {
-    skewX:          coin(0.6) ? rnd(-1.8, 1.8) : 0,
-    skewY:          coin(0.6) ? rnd(-1.8, 1.8) : 0,
-    rotateDegMax:   coin(0.55) ? rnd(0.5, 2.5) : 0,
     flipChance:     coin(0.45) ? 0.5 : 0,
-    perspectiveMax: rnd(3, 10),   // siempre algo de warp de perspectiva
+    perspectiveMax: rnd(3, 10),
   };
 }
 
@@ -896,13 +897,13 @@ export default function ImageUniquifier() {
   // Aleatorio: perturba los valores numéricos de cada config para que el lote sea
   // diferente sin perder la idea (sesgar, rotar, marco). El número de filas no cambia.
   const randomizeConfigs = () => {
-    const rnd = (a: number, b: number) => +(a + Math.random() * (b - a)).toFixed(2);
-    setConfigs(prev => prev.map(c => ({
+    setConfigs(prev => prev.map((c, i) => ({
       ...c,
-      skewX:        Math.random() < 0.5 ? rnd(-2, 2) : 0,
-      skewY:        Math.random() < 0.5 ? rnd(-2, 2) : 0,
-      rotateDegMax: Math.random() < 0.5 ? rnd(0.5, 3) : 0,
-      flipChance:   Math.random() < 0.5 ? 0.5 : 0,
+      skewX:        0,
+      skewY:        0,
+      rotateDegMax: 0,
+      flipChance:   i % 2 === 1 ? 0.5 : 0,   // pares sin flip, impares con flip
+      perspectiveMax: 3 + Math.random() * 7,  // 3-10 px, siempre diferente
       frameVPct:    0,
       frameHPct:    0,
     })));
