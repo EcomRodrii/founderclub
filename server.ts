@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import crypto from "crypto";
 import express, { Request, Response, NextFunction } from "express";
 import axios from "axios";
 import https from "https";
@@ -15,6 +16,32 @@ import { pool, initDB } from "./db.js";
 dotenv.config({ path: ".env.local" });
 
 const JWT_SECRET = process.env.JWT_SECRET || "changeme-use-a-real-secret";
+
+// ── Control Panel: cifrado AES-256 para IBAN y contraseñas Vinted ─────────────
+const CTRL_KEY = (process.env.CONTROL_ENCRYPTION_KEY || "laminecontrol-key-32chars-secure").slice(0, 32).padEnd(32, "0");
+
+function ctrlEncrypt(text: string): string {
+  if (!text) return "";
+  const iv = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv("aes-256-cbc", Buffer.from(CTRL_KEY), iv);
+  let enc = cipher.update(text, "utf8", "hex");
+  enc += cipher.final("hex");
+  return iv.toString("hex") + ":" + enc;
+}
+
+function ctrlDecrypt(text: string): string {
+  if (!text || !text.includes(":")) return text;
+  try {
+    const [ivHex, enc] = text.split(":");
+    const decipher = crypto.createDecipheriv("aes-256-cbc", Buffer.from(CTRL_KEY), Buffer.from(ivHex, "hex"));
+    let dec = decipher.update(enc, "hex", "utf8");
+    dec += decipher.final("utf8");
+    return dec;
+  } catch { return ""; }
+}
+
+// Código de invitación para registrarse en el panel de control
+const CONTROL_INVITE_CODE = process.env.CONTROL_INVITE_CODE || "lamine2024control";
 
 // ─── Auth Middleware ──────────────────────────────────────────────────────────
 
@@ -1762,17 +1789,46 @@ async function startServer() {
   // CONTROL PANEL — Gestión de cuentas Vinted
   // ══════════════════════════════════════════════
 
-  // GET todas las cuentas del usuario
+  // Registro exclusivo con código de invitación
+  app.post("/api/control/register", authLimiter, async (req, res) => {
+    const { username, email, password, invite_code } = req.body;
+    if (!invite_code || invite_code !== CONTROL_INVITE_CODE)
+      return res.status(403).json({ error: "Código de invitación incorrecto" });
+    if (!username || !email || !password)
+      return res.status(400).json({ error: "Faltan campos obligatorios" });
+    if (password.length < 8)
+      return res.status(400).json({ error: "Contraseña mínimo 8 caracteres" });
+    const exists = await pool.query("SELECT id FROM users WHERE email=$1", [email]);
+    if (exists.rows[0]) return res.status(409).json({ error: "Email ya registrado" });
+    const hash = await bcrypt.hash(password, 12);
+    const r = await pool.query(
+      "INSERT INTO users (username, email, password_hash) VALUES ($1,$2,$3) RETURNING id, username, email",
+      [username, email, hash]
+    );
+    const token = jwt.sign({ id: r.rows[0].id }, JWT_SECRET, { expiresIn: "7d" });
+    res.json({ token, user: r.rows[0] });
+  });
+
+  // Helper para descifrar una fila
+  function decryptRow(row: any) {
+    return {
+      ...row,
+      vinted_pass: row.vinted_pass ? ctrlDecrypt(row.vinted_pass) : "",
+      iban:        row.iban        ? ctrlDecrypt(row.iban)        : "",
+    };
+  }
+
+  // GET todas las cuentas del usuario (datos sensibles descifrados)
   app.get("/api/control/accounts", requireAuth as any, async (req: AuthRequest, res) => {
     const r = await pool.query(
       `SELECT id, vinted_username, real_name, gmail, vinted_pass, phone, device, iban, dac7, status, notes, created_at
        FROM control_vinted_accounts WHERE owner_user_id=$1 ORDER BY created_at DESC`,
       [req.user!.id]
     );
-    res.json(r.rows);
+    res.json(r.rows.map(decryptRow));
   });
 
-  // POST crear cuenta
+  // POST crear cuenta (cifra IBAN y contraseña)
   app.post("/api/control/accounts", requireAuth as any, async (req: AuthRequest, res) => {
     const { vinted_username, real_name, gmail, vinted_pass, phone, device, iban, dac7, status, notes } = req.body;
     if (!vinted_username) return res.status(400).json({ error: "vinted_username requerido" });
@@ -1780,13 +1836,16 @@ async function startServer() {
       `INSERT INTO control_vinted_accounts
         (owner_user_id, vinted_username, real_name, gmail, vinted_pass, phone, device, iban, dac7, status, notes)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-      [req.user!.id, vinted_username, real_name||null, gmail||null, vinted_pass||null,
-       phone||null, device||null, iban||null, !!dac7, status||'disponible', notes||null]
+      [req.user!.id, vinted_username, real_name||null, gmail||null,
+       vinted_pass ? ctrlEncrypt(vinted_pass) : null,
+       phone||null, device||null,
+       iban ? ctrlEncrypt(iban) : null,
+       !!dac7, status||'disponible', notes||null]
     );
-    res.json(r.rows[0]);
+    res.json(decryptRow(r.rows[0]));
   });
 
-  // PUT editar cuenta
+  // PUT editar cuenta (cifra IBAN y contraseña)
   app.put("/api/control/accounts/:id", requireAuth as any, async (req: AuthRequest, res) => {
     const { vinted_username, real_name, gmail, vinted_pass, phone, device, iban, dac7, status, notes } = req.body;
     const r = await pool.query(
@@ -1794,12 +1853,15 @@ async function startServer() {
         vinted_username=$1, real_name=$2, gmail=$3, vinted_pass=$4, phone=$5,
         device=$6, iban=$7, dac7=$8, status=$9, notes=$10, updated_at=NOW()
        WHERE id=$11 AND owner_user_id=$12 RETURNING *`,
-      [vinted_username, real_name||null, gmail||null, vinted_pass||null, phone||null,
-       device||null, iban||null, !!dac7, status||'disponible', notes||null,
+      [vinted_username, real_name||null, gmail||null,
+       vinted_pass ? ctrlEncrypt(vinted_pass) : null,
+       phone||null, device||null,
+       iban ? ctrlEncrypt(iban) : null,
+       !!dac7, status||'disponible', notes||null,
        req.params.id, req.user!.id]
     );
     if (!r.rows[0]) return res.status(404).json({ error: "Cuenta no encontrada" });
-    res.json(r.rows[0]);
+    res.json(decryptRow(r.rows[0]));
   });
 
   // DELETE eliminar cuenta
