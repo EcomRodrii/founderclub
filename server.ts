@@ -189,6 +189,7 @@ async function startServer() {
       /^chrome-extension:\/\//.test(origin) ||
       /^https?:\/\/localhost/.test(origin) ||
       /^https?:\/\/founderclub-production\.up\.railway\.app/.test(origin) ||
+      /^https?:\/\/lamineresell\.com/.test(origin) ||
       !origin;
     if (allowed) {
       res.setHeader("Access-Control-Allow-Origin", origin || "*");
@@ -1754,6 +1755,59 @@ async function startServer() {
   });
   app.delete("/api/profits/sales/:id", requireAuth as any, async (req: AuthRequest, res) => {
     await pool.query("DELETE FROM sales WHERE id=$1 AND user_id=$2", [req.params.id, req.user!.id]);
+    res.json({ ok: true });
+  });
+
+  // ══════════════════════════════════════════════
+  // CONTROL PANEL — Gestión de cuentas Vinted
+  // ══════════════════════════════════════════════
+
+  // GET todas las cuentas del usuario
+  app.get("/api/control/accounts", requireAuth as any, async (req: AuthRequest, res) => {
+    const r = await pool.query(
+      `SELECT id, vinted_username, real_name, gmail, vinted_pass, phone, device, iban, dac7, status, notes, created_at
+       FROM control_vinted_accounts WHERE owner_user_id=$1 ORDER BY created_at DESC`,
+      [req.user!.id]
+    );
+    res.json(r.rows);
+  });
+
+  // POST crear cuenta
+  app.post("/api/control/accounts", requireAuth as any, async (req: AuthRequest, res) => {
+    const { vinted_username, real_name, gmail, vinted_pass, phone, device, iban, dac7, status, notes } = req.body;
+    if (!vinted_username) return res.status(400).json({ error: "vinted_username requerido" });
+    const r = await pool.query(
+      `INSERT INTO control_vinted_accounts
+        (owner_user_id, vinted_username, real_name, gmail, vinted_pass, phone, device, iban, dac7, status, notes)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+      [req.user!.id, vinted_username, real_name||null, gmail||null, vinted_pass||null,
+       phone||null, device||null, iban||null, !!dac7, status||'disponible', notes||null]
+    );
+    res.json(r.rows[0]);
+  });
+
+  // PUT editar cuenta
+  app.put("/api/control/accounts/:id", requireAuth as any, async (req: AuthRequest, res) => {
+    const { vinted_username, real_name, gmail, vinted_pass, phone, device, iban, dac7, status, notes } = req.body;
+    const r = await pool.query(
+      `UPDATE control_vinted_accounts SET
+        vinted_username=$1, real_name=$2, gmail=$3, vinted_pass=$4, phone=$5,
+        device=$6, iban=$7, dac7=$8, status=$9, notes=$10, updated_at=NOW()
+       WHERE id=$11 AND owner_user_id=$12 RETURNING *`,
+      [vinted_username, real_name||null, gmail||null, vinted_pass||null, phone||null,
+       device||null, iban||null, !!dac7, status||'disponible', notes||null,
+       req.params.id, req.user!.id]
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: "Cuenta no encontrada" });
+    res.json(r.rows[0]);
+  });
+
+  // DELETE eliminar cuenta
+  app.delete("/api/control/accounts/:id", requireAuth as any, async (req: AuthRequest, res) => {
+    await pool.query(
+      "DELETE FROM control_vinted_accounts WHERE id=$1 AND owner_user_id=$2",
+      [req.params.id, req.user!.id]
+    );
     res.json({ ok: true });
   });
   // Toggle reembolso (PATCH /api/profits/sales/:id/refund con body { refunded: true/false })

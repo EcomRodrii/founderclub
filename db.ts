@@ -177,6 +177,23 @@ export async function initDB() {
       updated_at TIMESTAMP DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS control_vinted_accounts (
+      id SERIAL PRIMARY KEY,
+      owner_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      vinted_username VARCHAR(100) NOT NULL,
+      real_name VARCHAR(100),
+      gmail VARCHAR(255),
+      vinted_pass TEXT,
+      phone VARCHAR(50),
+      device VARCHAR(200),
+      iban VARCHAR(60),
+      dac7 BOOLEAN DEFAULT FALSE,
+      status VARCHAR(20) DEFAULT 'disponible',
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+
     CREATE TABLE IF NOT EXISTS device_sessions (
       id SERIAL PRIMARY KEY,
       user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
