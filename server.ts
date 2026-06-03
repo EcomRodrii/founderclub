@@ -1864,12 +1864,19 @@ async function startServer() {
     res.json(decryptRow(r.rows[0]));
   });
 
-  // DELETE eliminar cuenta
+  // DELETE eliminar cuenta Vinted
   app.delete("/api/control/accounts/:id", requireAuth as any, async (req: AuthRequest, res) => {
     await pool.query(
       "DELETE FROM control_vinted_accounts WHERE id=$1 AND owner_user_id=$2",
       [req.params.id, req.user!.id]
     );
+    res.json({ ok: true });
+  });
+
+  // DELETE eliminar cuenta de usuario + todos sus datos (GDPR derecho al olvido)
+  app.delete("/api/control/me", requireAuth as any, async (req: AuthRequest, res) => {
+    await pool.query("DELETE FROM control_vinted_accounts WHERE owner_user_id=$1", [req.user!.id]);
+    await pool.query("DELETE FROM users WHERE id=$1", [req.user!.id]);
     res.json({ ok: true });
   });
   // Toggle reembolso (PATCH /api/profits/sales/:id/refund con body { refunded: true/false })
