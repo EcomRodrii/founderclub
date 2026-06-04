@@ -10,7 +10,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { injectRandomExif, cloneExifFrom } from '../lib/randomExif';
 
-const authFetch = (url: string, body: any, timeoutMs = 95_000) => {
+const authFetch = (url: string, body: any, timeoutMs = 150_000) => {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   return fetch(url, {
@@ -273,7 +273,7 @@ export default function TongueEditor() {
     } catch (err: any) {
       const msg = err.message || String(err);
       if (err.name === 'AbortError' || msg.includes('aborted')) {
-        setError('Tiempo de espera agotado (>90s). Inténtalo de nuevo.');
+        setError('Generación lenta (>2 min). La IA estaba ocupada — inténtalo de nuevo.');
       } else if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('Load failed')) {
         setError('Sin conexión. Comprueba tu internet e inténtalo de nuevo.');
       } else {

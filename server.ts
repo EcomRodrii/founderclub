@@ -2547,11 +2547,10 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
 
     const brandPrompt = buildTonguePrompt(brand, detections, customPrompt || "", false);
 
-    // Deadline global: 110s (margen seguro bajo Railway timeout de ~120s)
-    const GLOBAL_DEADLINE = Date.now() + 110_000;
-    // 1 intento por modelo con 40s: 5 modelos × 40s = 200s máx pero el deadline lo corta
-    // En la práctica: si los 3 primeros fallan rápido (<5s por 404), los 5 modelos se prueban
-    const ATTEMPT_TIMEOUT_MS = 40_000;
+    // Deadline global: 140s (deja margen sobre el cliente que espera 150s)
+    const GLOBAL_DEADLINE = Date.now() + 140_000;
+    // 1 intento por modelo con 45s: modelos rápidos fallan en <2s (404), el que funciona tiene 45s
+    const ATTEMPT_TIMEOUT_MS = 45_000;
 
     try {
       // Partes: [foto a editar, texto]
@@ -2565,15 +2564,14 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
       }
       parts.push({ text: brandPrompt });
 
-      // Modelos de generación de imagen — en orden de preferencia
+      // Modelos de generación de imagen — rápidos primero, más capaces como fallback
       const IMG_MODELS = [
-        "gemini-3-pro-image",                      // GA máxima calidad (mayo 2026)
-        "gemini-3.1-flash-image",                  // GA rápido (mayo 2026)
-        "gemini-2.5-flash-image",                  // GA estable
+        "gemini-3.1-flash-image",                  // GA rápido (junio 2026) — primero
+        "gemini-2.5-flash-image",                  // GA estable — segundo
+        "gemini-3-pro-image",                      // GA alta calidad (más lento)
         "gemini-2.0-flash-preview-image-generation", // Preview anterior — fallback
-        "gemini-2.0-flash-exp",                    // Experimental conocido que genera imágenes
       ];
-      const MAX_RETRIES_PER_MODEL = 1; // 1 intento por modelo — así los 5 modelos tienen tiempo
+      const MAX_RETRIES_PER_MODEL = 1; // 1 intento por modelo — así todos tienen tiempo
       let lastErr = "";
       let lastTextResponse = "";
 
