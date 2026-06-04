@@ -2233,6 +2233,7 @@ Para el resto, aplica la estructura de la marca. Si no ves un dato pon "". Solo 
       const sizeFr = ocrResult.sizes?.fr || "";
       let modelName = "Desconocido";
       let color = "Desconocido";
+      let gender = "Femme";   // default — la gran mayoría son zapatillas de mujer en Vinted
 
       if (sku && sku !== "Desconocido" && sku !== "") {
         // gemini-2.0-flash deprecated mayo 2026 → usar solo 2.5-flash con más timeout
@@ -2249,10 +2250,12 @@ Datos de la etiqueta:
 ${sizeInfo ? `- Talla: ${sizeInfo}` : ""}
 ${ocrResult.date ? `- Fecha: ${ocrResult.date}` : ""}
 
-TAREA: Busca "${brand} ${sku}" en Google y encuentra el nombre comercial EXACTO de este modelo (ej: "Adidas Samba OG", "New Balance 530 Grey", "Asics Gel-Kayano 14 White Blue").
-
-Devuelve SOLO este JSON sin markdown ni texto extra:
-{"modelName":"nombre comercial completo y exacto incluyendo colorway si lo encuentras","color":"color principal descrito en francés en minúsculas (ej: blanc et bleu, noir, gris et vert)"}`;
+TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown ni texto extra):
+{
+  "modelName": "nombre comercial EXACTO del modelo incluyendo el colorway oficial (ej: Adidas Samba OG White Black, Adidas Samba Jane, New Balance 574 Grey)",
+  "colorway": "colorway/color principal en francés, primera letra mayúscula, solo la primera parte (ej: Beige, Blanc, Noir, Gris)",
+  "gender": "Femme o Homme o Unisexe — según a quién está destinado este modelo según Google"
+}`;
 
             const searchData = await geminiCall(searchModel, {
               contents: [{ parts: [{ text: searchPrompt }] }],
@@ -2264,8 +2267,9 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
             const sr = extractJson(searchText);
             if (sr?.modelName && sr.modelName !== "Desconocido" && sr.modelName.length > 3) {
               modelName = sr.modelName;
-              color = sr.color || "Desconocido";
-              console.log(`[OCR] Search OK (${searchModel}): ${modelName} / ${color}`);
+              color = sr.colorway || sr.color || "Desconocido";
+              gender = sr.gender === "Homme" ? "Homme" : sr.gender === "Unisexe" ? "Unisexe" : "Femme";
+              console.log(`[OCR] Search OK (${searchModel}): ${modelName} / ${color} / ${gender}`);
               break;
             }
           } catch (e: any) {
@@ -2276,6 +2280,38 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
 
       // ── Ensamblar respuesta final ──────────────────────────────────────────
       const frSize = sizeFr || ocrResult.sizes?.fr || "";
+
+      // Limpiar talla FR: "37 1/2" → "37,5" | "38 2/3" → "38" (fracciones raras → entero)
+      const cleanFrSize = (s: string): string => {
+        if (!s) return s;
+        const half = s.match(/^(\d+)\s+1\/2$/);
+        if (half) return `${half[1]},5`;
+        return s.replace(/\s+\d+\/\d+$/, ""); // quita cualquier fracción restante
+      };
+      const frSizeClean = cleanFrSize(frSize);
+
+      // Colour: primera parte del colorway ("Beige et Blanc" → "Beige")
+      const mainColor = (color && color !== "Desconocido")
+        ? color.split(/ et | \/ /)[0].trim()
+        : "";
+      const colorCap = mainColor
+        ? mainColor.charAt(0).toUpperCase() + mainColor.slice(1).toLowerCase()
+        : "";
+
+      // SKU formateado según marca: "A: JQ5874" (Adidas), "NB {sku}" (NB), "{sku}" (resto)
+      const skuFormatted = brandLow.includes("adidas") ? `A: ${sku}` :
+                           brandLow.includes("new balance") || brandLow === "nb" ? `NB ${sku}` :
+                           sku;
+
+      // Título en formato natural para Vinted FR (no comercial)
+      // Formato: {ModelName} - {Color} - {Género} / Pointure {talla} - {SKU}
+      const colorDash  = colorCap ? ` - ${colorCap}` : "";
+      const sizePart   = frSizeClean ? ` / Pointure ${frSizeClean}` : "";
+      const skuPart    = skuFormatted ? ` - ${skuFormatted}` : "";
+
+      const listingTitle = modelName !== "Desconocido"
+        ? `${modelName}${colorDash} - ${gender}${sizePart}${skuPart}`
+        : `${brand} ${sku}${colorDash} - ${gender}${sizePart}`;
 
       // 10 raisons de vente naturelles pour Vinted FR (template pool)
       const VINTED_TEMPLATES = [
@@ -2292,23 +2328,11 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
       ];
       const randDesc = VINTED_TEMPLATES[Math.floor(Math.random() * VINTED_TEMPLATES.length)];
 
-      // Colour: keep first colour only ("blanc et bleu" → "Blanc")
-      const mainColor = (color && color !== "Desconocido")
-        ? (color.split(/ et | \/ /)[0].trim())
-        : "";
-      const colorCap = mainColor ? mainColor.charAt(0).toUpperCase() + mainColor.slice(1) : "";
-      const colorPart = colorCap ? ` | ${colorCap}` : "";
-
-      // Title: SEO-optimised for Vinted France
-      const listingTitle = modelName !== "Desconocido"
-        ? `${modelName} | Pointure ${frSize}${colorPart} | Très bon état`
-        : `${brand} ${sku} | Pointure ${frSize}${colorPart}`;
-
       // Description: French template + product fields
       const descFields = [
         colorCap ? `Couleur : ${colorCap}` : null,
-        `Modèle : ${sku}`,
-        `Pointure : ${frSize}`,
+        `Modèle : ${skuFormatted}`,
+        frSizeClean ? `Pointure : ${frSizeClean}` : null,
       ].filter(Boolean).join("\n");
       const listingDescription = `${randDesc}\n\n${descFields}`;
 
