@@ -97,9 +97,25 @@ function buildNBRef1(): string      { return _dayBatchCode(6) + _rndD(6); }
 function buildNBRef2(): string      { return _dayBatchCode(4) + _rndD(3); }
 function buildNBBrandCode(): string { return _rndA(4) + _rndD(4) + ' ' + _rndA(3); }
 
-// ADIDAS: # + batch(4) + unit(5) = #XXXXXXXXX
-function buildAdidasRef(): string         { return '#' + _dayBatchCode(4) + _rndD(5); }
-function buildAdidasBrandSerial(): string { return _rndAN(7) + '<' + _rndD(5); }
+// ADIDAS: # + 9 dígitos completamente aleatorios (antes usaba _dayBatchCode → siempre iguales)
+function buildAdidasRef(): string { return '#' + _rndD(9); }
+
+// ADIDAS DATE: rango de fabricación realista 12/25 → 04/26
+function buildAdidasDate(): string {
+  const pool = ['12/25', '01/26', '02/26', '03/26', '04/26'];
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+// ADIDAS BRAND SERIAL: 1ª MAYÚSCULA + 2ª minúscula + 5 chars mixtos (12% '@') + '<' + 6 dígitos
+// Ejemplo real: E1QWSTF<906601 → ahora: Eq@WtF2<831047
+function buildAdidasBrandSerial(): string {
+  const U   = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const l   = 'abcdefghijklmnopqrstuvwxyz';
+  const mix = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  const pick = (s: string) => s[Math.floor(Math.random() * s.length)];
+  const rndChar = () => Math.random() < 0.12 ? '@' : pick(mix);
+  return pick(U) + pick(l) + rndChar() + rndChar() + rndChar() + rndChar() + rndChar() + '<' + _rndD(6);
+}
 
 // ASICS: 1 letra + 6 dígitos; serial 15 chars (6 letras + 9 dígitos)
 function buildAsicsRef(): string         { return _rndA(1) + _rndD(6); }
@@ -325,7 +341,7 @@ export default function TongueEditor() {
     } else if (activeBrand === 'ASICS') {
       n.reference = buildAsicsRef(); n.brandSerial = buildAsicsBrandSerial();
     } else {
-      n.reference = buildAdidasRef(); n.brandSerial = buildAdidasBrandSerial();
+      n.reference = buildAdidasRef(); n.brandSerial = buildAdidasBrandSerial(); n.date = buildAdidasDate();
     }
     setDetections(n);
   };
