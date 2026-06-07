@@ -17,6 +17,16 @@ dotenv.config({ path: ".env.local" });
 
 const JWT_SECRET = process.env.JWT_SECRET || "changeme-use-a-real-secret";
 
+// ── Genera un session_token único, lo persiste en la BD y devuelve el JWT ──────
+// Llamar en TODOS los endpoints de login. Garantiza una sola sesión activa por usuario:
+// si alguien comparte credenciales y otra persona hace login, el session_token
+// se sobreescribe → el token anterior queda inválido automáticamente.
+async function mintSessionToken(userId: number, expiresIn = "30d"): Promise<string> {
+  const sid = randomUUID();
+  await pool.query("UPDATE users SET session_token = $1 WHERE id = $2", [sid, userId]);
+  return jwt.sign({ id: userId, sid }, JWT_SECRET, { expiresIn } as any);
+}
+
 // ── Control Panel: cifrado AES-256 para IBAN y contraseñas Vinted ─────────────
 const CTRL_KEY = (process.env.CONTROL_ENCRYPTION_KEY || "laminecontrol-key-32chars-secure").slice(0, 32).padEnd(32, "0");
 
@@ -57,8 +67,17 @@ async function requireAuth(req: AuthRequest, res: Response, next: NextFunction) 
 
     // ── Standard user JWT ──
     if (decoded.id) {
-      const result = await pool.query("SELECT id, username, email, is_admin FROM users WHERE id = $1", [decoded.id]);
+      const result = await pool.query("SELECT id, username, email, is_admin, session_token FROM users WHERE id = $1", [decoded.id]);
       if (!result.rows[0]) return res.status(401).json({ error: "Usuario no encontrado" });
+
+      // Anti credential-sharing: el sid del token debe coincidir con el session_token de la BD.
+      // Si alguien hace login desde otro dispositivo, session_token cambia → este token queda muerto.
+      const storedSid = result.rows[0].session_token;
+      const tokenSid  = decoded.sid;
+      if (storedSid && tokenSid !== storedSid) {
+        return res.status(401).json({ error: "Sesión cerrada. Alguien inició sesión con esta cuenta en otro dispositivo. Vuelve a entrar." });
+      }
+
       req.user = result.rows[0];
       return next();
     }
@@ -184,6 +203,14 @@ async function startServer() {
     ALTER TABLE order_labels ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'captured';
   `).catch(() => {});
 
+  // ── Anti credential-sharing: session token por usuario ───────────────────────
+  // session_token se genera en cada login y se valida en cada petición.
+  // Si alguien comparte sus credenciales y otra persona hace login,
+  // el session_token cambia → el token anterior queda inválido automáticamente.
+  await pool.query(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS session_token VARCHAR(64);
+  `).catch(() => {});
+
   // ── Report Jobs Table ────────────────────────────────────────────────────────
   await pool.query(`
     CREATE TABLE IF NOT EXISTS report_jobs (
@@ -280,7 +307,7 @@ async function startServer() {
         [username, email.trim().toLowerCase(), hash]
       );
       const user = result.rows[0];
-      const token = jwt.sign({ id: user.id }, JWT_SECRET, { expiresIn: "30d" });
+      const token = await mintSessionToken(user.id);
       res.json({
         ok: true, token,
         user: { id: user.id, email: user.email, role: user.is_admin ? "admin" : "user" },
@@ -353,7 +380,7 @@ async function startServer() {
         userRow = await tryLazyMigrateFromAk47(email.trim().toLowerCase(), password) as any;
         if (!userRow) return res.status(401).json({ ok: false, error: "invalid_credentials" });
         // La contraseña ya fue validada por ak47, darle token directo
-        const token = jwt.sign({ id: userRow.id }, JWT_SECRET, { expiresIn: "30d" });
+        const token = await mintSessionToken(userRow.id);
         const licRes = await pool.query(
           "SELECT type, expires_at, features FROM licenses WHERE user_id=$1 AND is_active=TRUE AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1",
           [userRow.id]
@@ -369,7 +396,7 @@ async function startServer() {
       if (!(await bcrypt.compare(password, userRow.password_hash)))
         return res.status(401).json({ ok: false, error: "invalid_credentials" });
 
-      const token = jwt.sign({ id: userRow.id }, JWT_SECRET, { expiresIn: "30d" });
+      const token = await mintSessionToken(userRow.id);
       const licRes = await pool.query(
         "SELECT type, expires_at FROM licenses WHERE user_id=$1 AND is_active=TRUE AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1",
         [userRow.id]
@@ -400,7 +427,7 @@ async function startServer() {
         [username.trim(), email.trim().toLowerCase(), hash]
       );
       const user = result.rows[0];
-      const token = jwt.sign({ id: user.id }, JWT_SECRET, { expiresIn: "30d" });
+      const token = await mintSessionToken(user.id);
       res.json({ token, user });
     } catch (err: any) {
       if (err.code === "23505") {
@@ -420,7 +447,7 @@ async function startServer() {
     if (!user || !(await bcrypt.compare(password, user.password_hash)))
       return res.status(401).json({ error: "Credenciales incorrectas" });
 
-    const token = jwt.sign({ id: user.id }, JWT_SECRET, { expiresIn: "30d" });
+    const token = await mintSessionToken(user.id);
     res.json({
       token,
       user: { id: user.id, username: user.username, email: user.email, is_admin: user.is_admin },
@@ -1482,7 +1509,7 @@ async function startServer() {
       const lic = licRes.rows[0];
       if (!lic && !user.is_admin)
         return res.status(403).json({ ok: false, error: "license_not_active" });
-      const token = jwt.sign({ id: user.id }, JWT_SECRET, { expiresIn: "30d" });
+      const token = await mintSessionToken(user.id);
       res.json({
         ok: true, token,
         account: { email: user.email, status: "active", createdAt: user.created_at },
@@ -1522,7 +1549,7 @@ async function startServer() {
           await pool.query("UPDATE licenses SET user_id=$1 WHERE id=$2", [user.id, lic.rows[0].id]);
         }
       }
-      const token = jwt.sign({ id: user.id }, JWT_SECRET, { expiresIn: "30d" });
+      const token = await mintSessionToken(user.id);
       res.json({ ok: true, token, account: { email: user.email, status: "active", createdAt: user.created_at } });
     } catch {
       res.status(500).json({ ok: false, error: "server_error" });
@@ -3435,7 +3462,7 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
       const user = result.rows[0];
       if (!user || !(await bcrypt.compare(password, user.password_hash)))
         return res.status(401).json({ ok: false, error: "invalid_credentials" });
-      const token = jwt.sign({ id: user.id }, JWT_SECRET, { expiresIn: "30d" });
+      const token = await mintSessionToken(user.id);
       const licRes = await pool.query(
         "SELECT type, expires_at FROM licenses WHERE user_id=$1 AND is_active=TRUE AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1",
         [user.id]
