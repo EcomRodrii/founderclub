@@ -13,7 +13,7 @@ interface AdminPanelProps {
   onBack?: () => void;
 }
 
-type Tab = 'stats' | 'users' | 'licenses' | 'sessions' | 'prompts' | 'references';
+type Tab = 'stats' | 'users' | 'activity' | 'licenses' | 'sessions' | 'prompts' | 'references';
 
 const BRANDS = ['ADIDAS', 'NEW BALANCE', 'ASICS', 'ONITSUKA'] as const;
 type Brand = typeof BRANDS[number];
@@ -68,6 +68,7 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
   const [tab, setTab] = useState<Tab>('stats');
   const [stats, setStats] = useState<any>(null);
   const [users, setUsers] = useState<any[]>([]);
+  const [activity, setActivity] = useState<any[]>([]);
   const [licenses, setLicenses] = useState<any[]>([]);
   const [sessions, setSessions] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -115,6 +116,7 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
     try {
       if (t === 'stats') setStats(await client.get('/api/admin/stats'));
       else if (t === 'users') setUsers(await client.get('/api/admin/users'));
+      else if (t === 'activity') setActivity(await client.get('/api/admin/activity'));
       else if (t === 'licenses') setLicenses(await client.get('/api/admin/licenses'));
       else if (t === 'sessions') setSessions(await client.get('/api/admin/sessions'));
       else if (t === 'prompts') {
@@ -219,13 +221,35 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
   };
 
   const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
-    { id: 'stats', label: 'Stats', icon: <Activity className="w-4 h-4" /> },
-    { id: 'users', label: 'Usuarios', icon: <Users className="w-4 h-4" /> },
-    { id: 'licenses', label: 'Licencias', icon: <Key className="w-4 h-4" /> },
-    { id: 'sessions', label: 'Sesiones', icon: <Globe className="w-4 h-4" /> },
-    { id: 'prompts', label: 'Prompts', icon: <FileText className="w-4 h-4" /> },
+    { id: 'stats',      label: 'Stats',       icon: <Activity className="w-4 h-4" /> },
+    { id: 'users',      label: 'Usuarios',    icon: <Users className="w-4 h-4" /> },
+    { id: 'activity',   label: 'Actividad',   icon: <Clock className="w-4 h-4" /> },
+    { id: 'licenses',   label: 'Licencias',   icon: <Key className="w-4 h-4" /> },
+    { id: 'sessions',   label: 'Sesiones',    icon: <Globe className="w-4 h-4" /> },
+    { id: 'prompts',    label: 'Prompts',     icon: <FileText className="w-4 h-4" /> },
     { id: 'references', label: 'Referencias', icon: <ImagePlus className="w-4 h-4" /> },
   ];
+
+  // helpers
+  function timeAgo(d: string | null): string {
+    if (!d) return '—';
+    const s = Math.floor((Date.now() - new Date(d).getTime()) / 1000);
+    if (s < 60) return 'ahora mismo';
+    if (s < 3600) return `hace ${Math.floor(s/60)}m`;
+    if (s < 86400) return `hace ${Math.floor(s/3600)}h`;
+    if (s < 86400*7) return `hace ${Math.floor(s/86400)}d`;
+    return formatDate(d);
+  }
+  function isOnline(d: string | null): boolean {
+    if (!d) return false;
+    return (Date.now() - new Date(d).getTime()) < 10 * 60 * 1000; // < 10 min
+  }
+  function actionLabel(a: string): { label: string; color: string } {
+    if (a === 'login') return { label: '🔑 Login', color: 'text-blue-400' };
+    if (a.startsWith('lengueta:scan'))     return { label: `📷 Escaneo ${a.split(':')[2] || ''}`, color: 'text-acid' };
+    if (a.startsWith('lengueta:generate')) return { label: `✨ Generación ${a.split(':')[2] || ''}`, color: 'text-violet-400' };
+    return { label: a, color: 'text-zinc-400' };
+  }
 
   return (
     <div className="min-h-screen bg-zinc-950 text-white">
@@ -293,55 +317,94 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
 
         {/* Users */}
         {tab === 'users' && (
-          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-x-auto">
-            <table className="w-full text-sm min-w-[600px]">
-              <thead>
-                <tr className="border-b border-zinc-800">
-                  {['Usuario', 'Email', 'Licencia', 'Tipo', 'Expira', 'HWID', 'IP', 'Rol', ''].map(h => (
-                    <th key={h} className="text-left text-xs text-zinc-500 font-medium px-4 py-3">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {users.map(u => (
-                  <tr key={u.id} className="border-b border-zinc-800/60 hover:bg-zinc-800/30 transition">
-                    <td className="px-4 py-3 font-medium">{u.username}</td>
-                    <td className="px-4 py-3 text-zinc-400 text-xs">{u.email}</td>
-                    <td className="px-4 py-3">
-                      {u.license_key ? (
-                        <span className="font-mono text-xs text-zinc-300 flex items-center">
-                          {truncate(u.license_key, 14)}
-                          <CopyButton text={u.license_key} />
-                        </span>
-                      ) : <span className="text-zinc-600 text-xs">Sin licencia</span>}
-                    </td>
-                    <td className="px-4 py-3">{u.license_type ? <Badge type={u.license_type} /> : '—'}</td>
-                    <td className="px-4 py-3 text-xs text-zinc-400">{formatDate(u.expires_at)}</td>
-                    <td className="px-4 py-3 text-xs text-zinc-500 flex items-center">
-                      <Fingerprint className="w-3 h-3 mr-1" />{truncate(u.hwid, 10)}
-                    </td>
-                    <td className="px-4 py-3 text-xs text-zinc-500">{u.ip || '—'}</td>
-                    <td className="px-4 py-3">
-                      {u.is_admin
-                        ? <span className="text-xs text-violet-400 font-medium">Admin</span>
-                        : <span className="text-xs text-zinc-500">User</span>}
-                    </td>
-                    <td className="px-4 py-3">
-                      <button
-                        onClick={async () => { await client.patch(`/api/admin/users/${u.id}/toggle-admin`); loadTab('users'); }}
-                        className="text-xs text-zinc-500 hover:text-violet-400 transition"
-                        title={u.is_admin ? 'Quitar admin' : 'Hacer admin'}
-                      >
-                        {u.is_admin ? <ShieldOff className="w-4 h-4" /> : <Shield className="w-4 h-4" />}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {users.length === 0 && !loading && (
-              <p className="text-center text-zinc-600 py-8 text-sm">Sin usuarios todavía</p>
+          <div className="space-y-3">
+            {/* Online now banner */}
+            {users.filter(u => isOnline(u.last_seen_at)).length > 0 && (
+              <div className="flex items-center gap-2 bg-green-500/10 border border-green-500/20 rounded-xl px-4 py-2.5 text-sm text-green-400">
+                <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse shrink-0" />
+                <span><strong>{users.filter(u => isOnline(u.last_seen_at)).length}</strong> usuario(s) activos ahora mismo (últimos 10 min)</span>
+              </div>
             )}
+            <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-x-auto">
+              <table className="w-full text-sm min-w-[900px]">
+                <thead>
+                  <tr className="border-b border-zinc-800">
+                    {['', 'Usuario', 'Email', 'Último login', 'Visto por última vez', 'Última IP', 'Licencia', 'Tipo', 'Expira', ''].map(h => (
+                      <th key={h} className="text-left text-xs text-zinc-500 font-medium px-4 py-3">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {users.map(u => {
+                    const online = isOnline(u.last_seen_at);
+                    return (
+                      <tr key={u.id} className={`border-b border-zinc-800/60 hover:bg-zinc-800/30 transition ${online ? 'bg-green-500/5' : ''}`}>
+                        <td className="px-3 py-3">
+                          <span className={`w-2 h-2 rounded-full inline-block ${online ? 'bg-green-400 animate-pulse' : 'bg-zinc-700'}`} title={online ? 'Online ahora' : 'Offline'} />
+                        </td>
+                        <td className="px-4 py-3 font-medium">
+                          {u.username}
+                          {u.is_admin && <span className="ml-1.5 text-[10px] text-violet-400 border border-violet-500/30 rounded px-1">admin</span>}
+                        </td>
+                        <td className="px-4 py-3 text-zinc-400 text-xs">{u.email}</td>
+                        <td className="px-4 py-3 text-xs text-zinc-300" title={u.last_login_at || ''}>{timeAgo(u.last_login_at)}</td>
+                        <td className="px-4 py-3 text-xs" title={u.last_seen_at || ''}>
+                          <span className={online ? 'text-green-400 font-medium' : 'text-zinc-400'}>{timeAgo(u.last_seen_at)}</span>
+                        </td>
+                        <td className="px-4 py-3 text-xs text-zinc-500 font-mono">{u.last_ip || '—'}</td>
+                        <td className="px-4 py-3">
+                          {u.license_key
+                            ? <span className="font-mono text-xs text-zinc-300 flex items-center">{truncate(u.license_key, 14)}<CopyButton text={u.license_key} /></span>
+                            : <span className="text-zinc-600 text-xs">Sin licencia</span>}
+                        </td>
+                        <td className="px-4 py-3">{u.license_type ? <Badge type={u.license_type} /> : '—'}</td>
+                        <td className="px-4 py-3 text-xs text-zinc-400">{formatDate(u.expires_at)}</td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <button onClick={async () => { await client.patch(`/api/admin/users/${u.id}/toggle-admin`); loadTab('users'); }}
+                              className="text-zinc-500 hover:text-violet-400 transition" title={u.is_admin ? 'Quitar admin' : 'Hacer admin'}>
+                              {u.is_admin ? <ShieldOff className="w-4 h-4" /> : <Shield className="w-4 h-4" />}
+                            </button>
+                            <button
+                              onClick={async () => { if (confirm(`¿Cerrar sesión de ${u.username}?`)) { await client.post(`/api/admin/users/${u.id}/force-logout`, {}); loadTab('users'); } }}
+                              className="text-zinc-500 hover:text-red-400 transition" title="Forzar cierre de sesión">
+                              <LogOut className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              {users.length === 0 && !loading && (
+                <p className="text-center text-zinc-600 py-8 text-sm">Sin usuarios todavía</p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Activity feed */}
+        {tab === 'activity' && (
+          <div className="space-y-2">
+            <p className="text-xs text-zinc-500 mb-3">Últimas 300 acciones · se actualiza al recargar</p>
+            <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden">
+              {activity.length === 0 && !loading && (
+                <p className="text-center text-zinc-600 py-8 text-sm">Sin actividad todavía. Se registra a partir del próximo login.</p>
+              )}
+              {activity.map(a => {
+                const { label, color } = actionLabel(a.action);
+                return (
+                  <div key={a.id} className="flex items-center gap-4 px-5 py-3 border-b border-zinc-800/60 hover:bg-zinc-800/20 transition text-sm">
+                    <span className="text-zinc-600 text-xs w-32 shrink-0">{timeAgo(a.created_at)}</span>
+                    <span className="font-medium text-white w-28 shrink-0 truncate">{a.username}</span>
+                    <span className="text-zinc-500 text-xs w-36 shrink-0 truncate">{a.email}</span>
+                    <span className={`font-medium shrink-0 ${color}`}>{label}</span>
+                    <span className="text-zinc-600 text-xs ml-auto font-mono">{a.ip || '—'}</span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
 

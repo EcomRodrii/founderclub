@@ -18,13 +18,19 @@ dotenv.config({ path: ".env.local" });
 const JWT_SECRET = process.env.JWT_SECRET || "changeme-use-a-real-secret";
 
 // ── Genera un session_token único, lo persiste en la BD y devuelve el JWT ──────
-// Llamar en TODOS los endpoints de login. Garantiza una sola sesión activa por usuario:
-// si alguien comparte credenciales y otra persona hace login, el session_token
-// se sobreescribe → el token anterior queda inválido automáticamente.
-async function mintSessionToken(userId: number, expiresIn = "30d"): Promise<string> {
+async function mintSessionToken(userId: number, expiresIn = "30d", ip?: string): Promise<string> {
   const sid = randomUUID();
-  await pool.query("UPDATE users SET session_token = $1 WHERE id = $2", [sid, userId]);
+  await pool.query(
+    "UPDATE users SET session_token=$1, last_login_at=NOW(), last_seen_at=NOW(), last_ip=$2 WHERE id=$3",
+    [sid, ip || null, userId]
+  );
   return jwt.sign({ id: userId, sid }, JWT_SECRET, { expiresIn } as any);
+}
+
+// ── Registra una acción en el log de actividad (fire-and-forget) ─────────────
+function logActivity(userId: number, action: string, ip?: string) {
+  pool.query("INSERT INTO activity_log(user_id,action,ip) VALUES($1,$2,$3)", [userId, action, ip || null])
+    .catch(() => {});
 }
 
 // ── Control Panel: cifrado AES-256 para IBAN y contraseñas Vinted ─────────────
@@ -71,7 +77,6 @@ async function requireAuth(req: AuthRequest, res: Response, next: NextFunction) 
       if (!result.rows[0]) return res.status(401).json({ error: "Usuario no encontrado" });
 
       // Anti credential-sharing: el sid del token debe coincidir con el session_token de la BD.
-      // Si alguien hace login desde otro dispositivo, session_token cambia → este token queda muerto.
       const storedSid = result.rows[0].session_token;
       const tokenSid  = decoded.sid;
       if (storedSid && tokenSid !== storedSid) {
@@ -79,6 +84,9 @@ async function requireAuth(req: AuthRequest, res: Response, next: NextFunction) 
       }
 
       req.user = result.rows[0];
+      // Actualiza last_seen_at e ip en background (sin bloquear la petición)
+      const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip;
+      pool.query("UPDATE users SET last_seen_at=NOW(), last_ip=$1 WHERE id=$2", [ip, decoded.id]).catch(() => {});
       return next();
     }
 
@@ -204,11 +212,27 @@ async function startServer() {
   `).catch(() => {});
 
   // ── Anti credential-sharing: session token por usuario ───────────────────────
-  // session_token se genera en cada login y se valida en cada petición.
-  // Si alguien comparte sus credenciales y otra persona hace login,
-  // el session_token cambia → el token anterior queda inválido automáticamente.
   await pool.query(`
     ALTER TABLE users ADD COLUMN IF NOT EXISTS session_token VARCHAR(64);
+  `).catch(() => {});
+
+  // ── Tracking de actividad para el admin ──────────────────────────────────────
+  await pool.query(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at  TIMESTAMP;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen_at   TIMESTAMP;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS last_ip        VARCHAR(60);
+  `).catch(() => {});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS activity_log (
+      id         SERIAL PRIMARY KEY,
+      user_id    INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      action     VARCHAR(80) NOT NULL,
+      ip         VARCHAR(60),
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_activity_log_uid  ON activity_log(user_id);
+    CREATE INDEX IF NOT EXISTS idx_activity_log_time ON activity_log(created_at DESC);
   `).catch(() => {});
 
   // ── Report Jobs Table ────────────────────────────────────────────────────────
@@ -372,15 +396,15 @@ async function startServer() {
     const { email, password } = req.body;
     if (!email || !password)
       return res.status(400).json({ ok: false, error: "email_and_password_required" });
+    const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip;
     try {
       let userRow = (await pool.query("SELECT * FROM users WHERE email = $1", [email.trim().toLowerCase()])).rows[0];
 
       if (!userRow) {
-        // No está en Postgres → intentar migración lazy desde ak47
         userRow = await tryLazyMigrateFromAk47(email.trim().toLowerCase(), password) as any;
         if (!userRow) return res.status(401).json({ ok: false, error: "invalid_credentials" });
-        // La contraseña ya fue validada por ak47, darle token directo
-        const token = await mintSessionToken(userRow.id);
+        const token = await mintSessionToken(userRow.id, "30d", ip);
+        logActivity(userRow.id, "login", ip);
         const licRes = await pool.query(
           "SELECT type, expires_at, features FROM licenses WHERE user_id=$1 AND is_active=TRUE AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1",
           [userRow.id]
@@ -396,7 +420,8 @@ async function startServer() {
       if (!(await bcrypt.compare(password, userRow.password_hash)))
         return res.status(401).json({ ok: false, error: "invalid_credentials" });
 
-      const token = await mintSessionToken(userRow.id);
+      const token = await mintSessionToken(userRow.id, "30d", ip);
+      logActivity(userRow.id, "login", ip);
       const licRes = await pool.query(
         "SELECT type, expires_at FROM licenses WHERE user_id=$1 AND is_active=TRUE AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1",
         [userRow.id]
@@ -447,7 +472,9 @@ async function startServer() {
     if (!user || !(await bcrypt.compare(password, user.password_hash)))
       return res.status(401).json({ error: "Credenciales incorrectas" });
 
-    const token = await mintSessionToken(user.id);
+    const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip;
+    const token = await mintSessionToken(user.id, "30d", ip);
+    logActivity(user.id, "login", ip);
     res.json({
       token,
       user: { id: user.id, username: user.username, email: user.email, is_admin: user.is_admin },
@@ -554,11 +581,31 @@ async function startServer() {
   app.get("/api/admin/users", requireAdmin as any, async (_req, res) => {
     const result = await pool.query(`
       SELECT u.id, u.username, u.email, u.is_admin, u.created_at,
+        u.last_login_at, u.last_seen_at, u.last_ip,
         l.key AS license_key, l.type AS license_type, l.expires_at, l.is_active AS license_active,
         l.hwid, l.ip
       FROM users u
       LEFT JOIN licenses l ON l.user_id = u.id AND l.is_active = TRUE
-      ORDER BY u.created_at DESC
+      ORDER BY COALESCE(u.last_seen_at, u.created_at) DESC
+    `);
+    res.json(result.rows);
+  });
+
+  // ── Forzar cierre de sesión de un usuario (admin) ─────────────────────────────
+  app.post("/api/admin/users/:id/force-logout", requireAdmin as any, async (req, res) => {
+    await pool.query("UPDATE users SET session_token = NULL WHERE id = $1", [req.params.id]);
+    res.json({ ok: true });
+  });
+
+  // ── Feed de actividad reciente ────────────────────────────────────────────────
+  app.get("/api/admin/activity", requireAdmin as any, async (_req, res) => {
+    const result = await pool.query(`
+      SELECT al.id, al.action, al.ip, al.created_at,
+             u.id AS user_id, u.username, u.email
+      FROM activity_log al
+      JOIN users u ON u.id = al.user_id
+      ORDER BY al.created_at DESC
+      LIMIT 300
     `);
     res.json(result.rows);
   });
@@ -2565,6 +2612,7 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
   app.post("/api/tongue/generate", geminiLimiter, requireLicense as any, async (req: AuthRequest, res) => {
     const { imageBase64, brand, detections, customPrompt } = req.body;
     if (!detections) return res.status(400).json({ error: "Se requieren los datos detectados" });
+    if (req.user?.id) logActivity(req.user.id, `lengueta:generate:${brand || '?'}`, (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip);
 
     const tokenCheck = await checkTokens(req, res, 1);
     if (!tokenCheck.ok) return;
