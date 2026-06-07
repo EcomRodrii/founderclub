@@ -32,16 +32,65 @@ interface DetectionResult {
   brandSerial: string;
   date: string;
   lvl: string;
-  sizes: {
-    us: string;
-    uk: string;
-    fr: string;
-    jp: string;
-  };
+  sizes: { us: string; uk: string; fr: string; jp: string; };
   modelName: string;
   color: string;
+  gender: string;
+  frSizeClean: string;
   listingTitle: string;
   listingDescription: string;
+}
+
+// ── Plantillas de descripción (mismas que el servidor) ────────────────────────
+const DESC_TEMPLATES = [
+  "Je les vends parce qu'elles sont malheureusement trop petites pour moi. C'est vraiment une très belle paire qui mérite de trouver une nouvelle propriétaire.",
+  "Je les vends car j'ai déjà une paire très similaire et je ne les utilise finalement pas. Elles sont en très bon état et méritent d'être portées.",
+  "Je les vends parce qu'elles ne correspondent plus à mon style actuel. Elles sont pourtant magnifiques et en excellent état.",
+  "Je les vends car je les ai achetées sur un coup de cœur, mais je ne les porte finalement jamais. Elles méritent de ne pas rester dans un placard.",
+  "Je les vends pour faire un peu de place dans mon dressing. Elles sont très jolies et feront certainement le bonheur de quelqu'un.",
+  "Je les vends car c'était un cadeau que je n'ai malheureusement jamais eu l'occasion de porter. Elles sont comme neuves.",
+  "Je les vends parce que j'ai trop de paires et je fais un peu de tri. Elles sont superbes et méritent d'être portées.",
+  "Je les vends car je me suis trompée de taille lors de l'achat. Elles sont très belles et en parfait état.",
+  "Je les vends parce que je les avais achetées pour une occasion spéciale qui a finalement été annulée. Elles n'ont donc jamais servi.",
+  "Je les vends car elles restent dans leur boîte et je préfère qu'elles profitent à quelqu'un qui les portera davantage. Elles sont vraiment très jolies.",
+];
+
+// ── Genera título y descripción aleatorios a partir de los datos detectados ───
+function randomizeText(d: DetectionResult, brand: string): { listingTitle: string; listingDescription: string } {
+  const modelName  = d.modelName || '';
+  const color      = d.color && d.color !== 'Desconocido' ? d.color.split(/ et | \/ /)[0].trim() : '';
+  const colorCap   = color ? color.charAt(0).toUpperCase() + color.slice(1).toLowerCase() : '';
+  const gender     = d.gender || 'Femme';
+  const size       = d.frSizeClean || d.sizes?.fr || '';
+  const sku        = d.model || d.sku || '';
+  const brandLow   = brand.toLowerCase();
+  const skuTag     = brandLow.includes('adidas') ? `A: ${sku}` :
+                     (brandLow.includes('new balance') || brandLow === 'nb') ? `NB ${sku}` : sku;
+
+  const colorDash  = colorCap ? ` - ${colorCap}` : '';
+  const sizePart   = size ? ` / Pointure ${size}` : '';
+  const skuPart    = skuTag ? ` - ${skuTag}` : '';
+
+  // 4 variaciones de título — se elige una al azar
+  const titleVariants = [
+    modelName ? `${modelName}${colorDash} - ${gender}${sizePart}${skuPart}` : `${brand} ${sku}${colorDash}`,
+    modelName ? `${modelName}${colorDash} | ${size ? `Pointure ${size} | ` : ''}${gender}${skuPart}` : '',
+    modelName ? `${modelName}${colorDash} - ${size ? `Taille ${size} - ` : ''}${gender}${skuPart}` : '',
+    modelName ? `${modelName} | ${gender}${sizePart}${colorDash}${skuPart}` : '',
+  ].filter(Boolean) as string[];
+
+  const listingTitle = titleVariants[Math.floor(Math.random() * titleVariants.length)];
+
+  // Descripción: plantilla aleatoria + campos del producto
+  const template  = DESC_TEMPLATES[Math.floor(Math.random() * DESC_TEMPLATES.length)];
+  const descFields = [
+    colorCap ? `Couleur : ${colorCap}` : null,
+    skuTag   ? `Modèle : ${skuTag}` : null,
+    size     ? `Pointure : ${size}` : null,
+  ].filter(Boolean).join('\n');
+  const listingDescription = `${template}\n\n${descFields}`;
+
+  return { listingTitle, listingDescription };
 }
 
 // ── Point 2: Film grain / homogenización de compresión ───────────────────
@@ -999,9 +1048,21 @@ export default function TongueEditor() {
         {detections?.listingTitle && (
           <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
             className="bg-[#141414] border border-white/5 rounded-3xl p-5 space-y-4">
-            <div className="flex items-center gap-2">
-              <Zap className="w-4 h-4 text-acid" />
-              <h3 className="text-xs font-bold text-white/50 uppercase tracking-widest">Texto para Vinted</h3>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Zap className="w-4 h-4 text-acid" />
+                <h3 className="text-xs font-bold text-white/50 uppercase tracking-widest">Texto para Vinted</h3>
+              </div>
+              <button
+                onClick={() => {
+                  const { listingTitle, listingDescription } = randomizeText(detections, activeBrand);
+                  setDetections({ ...detections, listingTitle, listingDescription });
+                }}
+                className="flex items-center gap-1.5 text-[10px] font-bold text-black bg-acid hover:bg-acid/80 px-3 py-1.5 rounded-lg transition"
+                title="Generar variación aleatoria de título y descripción"
+              >
+                <Shuffle className="w-3 h-3" /> Aleatorizar
+              </button>
             </div>
 
             <div className="space-y-1">

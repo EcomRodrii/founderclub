@@ -2414,6 +2414,8 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
         ...ocrResult,
         modelName,
         color,
+        gender,
+        frSizeClean,
         listingTitle,
         listingDescription,
       });
