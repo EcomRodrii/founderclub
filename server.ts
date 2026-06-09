@@ -4276,6 +4276,201 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
     }
   });
 
+  // ════════════════════════════════════════════════════════════════════════════
+  // FASE 3 — Fleet workers (1 perfil de navegador = 1 cuenta Vinted = 1 worker)
+  // Auth worker: header X-Bazooka-Worker-Token (secreto de larga vida por worker).
+  // Regla: un job con target_vinted_id=X solo puede ejecutarse en la sesión de X.
+  // NUNCA guardar cookies/credenciales en fleet_jobs.payload.
+  // ════════════════════════════════════════════════════════════════════════════
+
+  const FLEET_LEASE_SEC = 120; // lease de 2 min; worker renueva cada ~50s
+
+  async function requireFleetWorker(req: AuthRequest & { worker?: any }, res: Response, next: NextFunction) {
+    const token = String(req.headers["x-bazooka-worker-token"] || "").trim();
+    if (!token) return res.status(401).json({ error: "missing_worker_token" });
+    const { rows } = await pool.query(
+      "SELECT id, license_id, vinted_id, status FROM fleet_workers WHERE token = $1",
+      [token]
+    );
+    if (!rows[0]) return res.status(401).json({ error: "invalid_worker" });
+    (req as any).worker = rows[0];
+    next();
+  }
+
+  // POST /api/fleet/worker/register  (Bearer ext JWT) — crea o recupera worker
+  // El token del worker es estable: ON CONFLICT devuelve el token ya almacenado.
+  app.post("/api/fleet/worker/register", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const lic = await getRosterLicense(req.user!.id);
+      if (!lic && !req.user!.is_admin) return res.status(403).json({ error: "licencia_requerida" });
+      const licId = lic?.id ?? 0;
+      const { vinted_id = null, device_hwid = "", ext_version = null } = req.body || {};
+      const newToken = crypto.randomBytes(24).toString("hex");
+      const { rows } = await pool.query(
+        `INSERT INTO fleet_workers
+           (license_id, vinted_id, device_hwid, token, ext_version, status, last_seen_at)
+         VALUES ($1,$2,$3,$4,$5,'online',NOW())
+         ON CONFLICT (license_id, device_hwid) DO UPDATE
+           SET vinted_id    = EXCLUDED.vinted_id,
+               ext_version  = EXCLUDED.ext_version,
+               status       = 'online',
+               last_seen_at = NOW()
+         RETURNING id, token`,
+        [licId, vinted_id, device_hwid, newToken, ext_version]
+      );
+      res.json({ data: rows[0] });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST /api/fleet/worker/ping  (X-Bazooka-Worker-Token) — heartbeat + telemetría
+  app.post("/api/fleet/worker/ping", requireFleetWorker as any, async (req: any, res: Response) => {
+    const { saturation = 0, running_jobs = 0, ext_version = null } = req.body || {};
+    await pool.query(
+      `UPDATE fleet_workers
+       SET last_seen_at = NOW(),
+           saturation   = $2,
+           running_jobs = $3,
+           ext_version  = COALESCE($4, ext_version),
+           status       = CASE WHEN status='paused' THEN 'paused' ELSE 'online' END
+       WHERE id = $1`,
+      [req.worker.id, saturation, running_jobs, ext_version]
+    ).catch(() => {});
+    res.json({ ok: true, paused: req.worker.status === "paused" });
+  });
+
+  // GET /api/fleet/worker/jobs/next  (X-Bazooka-Worker-Token) — CLAIM ATÓMICO
+  // Un solo UPDATE…WHERE id=(SELECT…FOR UPDATE SKIP LOCKED): nunca dos workers
+  // reclaman el mismo job.
+  app.get("/api/fleet/worker/jobs/next", requireFleetWorker as any, async (req: any, res: Response) => {
+    try {
+      const w = req.worker;
+      const { rows } = await pool.query(
+        `UPDATE fleet_jobs
+         SET status      = 'running',
+             worker_id   = $1,
+             attempts    = attempts + 1,
+             started_at  = NOW(),
+             lease_until = NOW() + ($4 || ' seconds')::interval,
+             updated_at  = NOW()
+         WHERE id = (
+           SELECT id FROM fleet_jobs
+           WHERE status = 'queued'
+             AND run_after <= NOW()
+             AND license_id = $2
+             AND (target_vinted_id IS NULL OR target_vinted_id = $3)
+           ORDER BY priority DESC, created_at ASC
+           FOR UPDATE SKIP LOCKED
+           LIMIT 1
+         )
+         RETURNING *`,
+        [w.id, w.license_id, w.vinted_id, String(FLEET_LEASE_SEC)]
+      );
+      if (!rows[0]) return res.status(204).end();
+      res.json({ data: rows[0] });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST /api/fleet/worker/jobs/:id/heartbeat  — renueva el lease mientras corre
+  app.post("/api/fleet/worker/jobs/:id/heartbeat", requireFleetWorker as any, async (req: any, res: Response) => {
+    await pool.query(
+      `UPDATE fleet_jobs
+       SET lease_until = NOW() + ($3 || ' seconds')::interval,
+           updated_at  = NOW()
+       WHERE id = $1 AND worker_id = $2 AND status = 'running'`,
+      [req.params.id, req.worker.id, String(FLEET_LEASE_SEC)]
+    ).catch(() => {});
+    res.json({ ok: true });
+  });
+
+  // POST /api/fleet/worker/jobs/:id  — reportar resultado (done | failed)
+  // En failed con reintentos restantes: re-encola con backoff exponencial.
+  app.post("/api/fleet/worker/jobs/:id", requireFleetWorker as any, async (req: any, res: Response) => {
+    try {
+      const { status, result = null, error = null } = req.body || {};
+      const wId = req.worker.id;
+      if (status === "done") {
+        await pool.query(
+          `UPDATE fleet_jobs
+           SET status      = 'done',
+               result      = $2,
+               error       = NULL,
+               updated_at  = NOW()
+           WHERE id = $1 AND worker_id = $3`,
+          [req.params.id, result != null ? JSON.stringify(result) : null, wId]
+        );
+        return res.json({ ok: true });
+      }
+      // failed → reintentar con backoff 2^n segundos si quedan intentos
+      const { rows } = await pool.query(
+        `UPDATE fleet_jobs
+         SET status      = CASE WHEN attempts < max_attempts THEN 'queued' ELSE 'failed' END,
+             worker_id   = NULL,
+             lease_until = NULL,
+             error       = $2,
+             run_after   = CASE WHEN attempts < max_attempts
+                                THEN NOW() + (POWER(2, attempts) || ' seconds')::interval
+                                ELSE run_after END,
+             updated_at  = NOW()
+         WHERE id = $1 AND worker_id = $3
+         RETURNING status, attempts, max_attempts`,
+        [req.params.id, error, wId]
+      );
+      res.json({ ok: true, job: rows[0] ?? null });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST /api/fleet/jobs  (requireAuth + licencia) — encolar un job
+  app.post("/api/fleet/jobs", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const lic = await getRosterLicense(req.user!.id);
+      if (!lic && !req.user!.is_admin) return res.status(403).json({ error: "licencia_requerida" });
+      const licId = lic?.id ?? 0;
+      const {
+        type, payload = {}, target_vinted_id = null,
+        priority = 0, max_attempts = 3, run_after = null,
+      } = req.body || {};
+      if (!type) return res.status(400).json({ error: "missing_type" });
+      const { rows } = await pool.query(
+        `INSERT INTO fleet_jobs
+           (license_id, target_vinted_id, type, payload, priority, max_attempts, run_after)
+         VALUES ($1,$2,$3,$4,$5,$6, COALESCE($7::timestamptz, NOW()))
+         RETURNING *`,
+        [licId, target_vinted_id, type, JSON.stringify(payload), priority, max_attempts, run_after]
+      );
+      res.status(201).json({ data: rows[0] });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GET /api/fleet/worker/overview  (requireAuth) — panel de estado de workers y cola
+  app.get("/api/fleet/worker/overview", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const lic = await getRosterLicense(req.user!.id);
+      if (!lic && !req.user!.is_admin) return res.json({ data: { workers: [], queue: [] } });
+      const [wRes, qRes] = await Promise.all([
+        pool.query(
+          `SELECT id, vinted_id, status, saturation, running_jobs, last_seen_at
+           FROM fleet_workers WHERE license_id = $1 ORDER BY last_seen_at DESC`,
+          [lic!.id]
+        ),
+        pool.query(
+          `SELECT status, COUNT(*)::int AS n FROM fleet_jobs WHERE license_id = $1 GROUP BY status`,
+          [lic!.id]
+        ),
+      ]);
+      res.json({ data: { workers: wRes.rows, queue: qRes.rows } });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // ── Extension: server-side inventory fetch (Blackstock-style proxy) ─────────
   // The server fetches items from Vinted using the stored session_cookie,
   // so the extension never needs to call Vinted directly.
@@ -5702,6 +5897,43 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
 </body>
 </html>`);
   });
+
+  // ── Fleet sweeper (cada 15 s) ─────────────────────────────────────────────
+  // 1. Re-encola jobs en 'running' cuya lease expiró y aún tienen reintentos.
+  // 2. Marca como 'failed' los que agotaron max_attempts.
+  // 3. Marca 'offline' los workers que no han hecho ping en 90 s.
+  setInterval(async () => {
+    try {
+      // Re-encolar con backoff 2^n si quedan reintentos
+      await pool.query(`
+        UPDATE fleet_jobs
+        SET status      = 'queued',
+            worker_id   = NULL,
+            lease_until = NULL,
+            run_after   = NOW() + (POWER(2, attempts) || ' seconds')::interval,
+            updated_at  = NOW()
+        WHERE status = 'running'
+          AND lease_until < NOW()
+          AND attempts < max_attempts
+      `);
+      // Fallar definitivamente los que agotaron reintentos
+      await pool.query(`
+        UPDATE fleet_jobs
+        SET status     = 'failed',
+            updated_at = NOW()
+        WHERE status = 'running'
+          AND lease_until < NOW()
+          AND attempts >= max_attempts
+      `);
+      // Marcar offline workers sin ping reciente
+      await pool.query(`
+        UPDATE fleet_workers
+        SET status = 'offline'
+        WHERE status NOT IN ('offline','paused')
+          AND last_seen_at < NOW() - INTERVAL '90 seconds'
+      `);
+    } catch (_) {/* swallow — no interrumpir el servidor por error del sweeper */}
+  }, 15_000);
 
   app.listen(PORT, "0.0.0.0", () => console.log(`Server running on http://localhost:${PORT}`));
 }

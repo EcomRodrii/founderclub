@@ -373,6 +373,52 @@ export async function initDB() {
       updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`,
     `CREATE INDEX IF NOT EXISTS idx_ext_vac_license ON extension_vinted_accounts(license_id)`,
+
+    // ── FASE 3: Fleet workers (1 perfil de navegador = 1 worker Vinted) ──────────
+    // device_hwid identifica de forma estable el perfil de Chrome.
+    // token = secreto portador de larga vida (rotado solo en re-registro explícito).
+    `CREATE TABLE IF NOT EXISTS fleet_workers (
+      id           BIGSERIAL PRIMARY KEY,
+      license_id   INTEGER NOT NULL REFERENCES licenses(id) ON DELETE CASCADE,
+      vinted_id    TEXT,
+      device_hwid  TEXT NOT NULL DEFAULT '',
+      token        TEXT NOT NULL UNIQUE,
+      ext_version  TEXT,
+      status       TEXT NOT NULL DEFAULT 'online',
+      saturation   INT NOT NULL DEFAULT 0,
+      running_jobs INT NOT NULL DEFAULT 0,
+      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (license_id, device_hwid)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_fleet_workers_license ON fleet_workers(license_id)`,
+
+    // ── FASE 3: Cola de trabajos distribuida ──────────────────────────────────────
+    // Claim atómico: FOR UPDATE SKIP LOCKED en GET /fleet/worker/jobs/next.
+    // NUNCA guardar cookies/credenciales en payload — solo ids y parámetros.
+    `CREATE TABLE IF NOT EXISTS fleet_jobs (
+      id               BIGSERIAL PRIMARY KEY,
+      license_id       INTEGER NOT NULL REFERENCES licenses(id) ON DELETE CASCADE,
+      target_vinted_id TEXT,
+      type             TEXT NOT NULL,
+      payload          JSONB NOT NULL DEFAULT '{}',
+      status           TEXT NOT NULL DEFAULT 'queued',
+      priority         INT NOT NULL DEFAULT 0,
+      attempts         INT NOT NULL DEFAULT 0,
+      max_attempts     INT NOT NULL DEFAULT 3,
+      run_after        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      lease_until      TIMESTAMPTZ,
+      worker_id        BIGINT REFERENCES fleet_workers(id) ON DELETE SET NULL,
+      result           JSONB,
+      error            TEXT,
+      started_at       TIMESTAMPTZ,
+      created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_fleet_jobs_claim
+       ON fleet_jobs (priority DESC, created_at)
+       WHERE status = 'queued'`,
+    `CREATE INDEX IF NOT EXISTS idx_fleet_jobs_license ON fleet_jobs(license_id)`,
   ];
   for (const sql of migrations) {
     await pool.query(sql).catch(() => {}); // silently ignore if column already exists
