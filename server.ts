@@ -4143,6 +4143,139 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
     }
   });
 
+  // ════════════════════════════════════════════════════════════════════════════
+  // MULTICUENTA ROSTER — metadatos de cuentas vinculadas (sin cookies ni pass)
+  // Regla: 1 vinted_id global → 1 licencia (UNIQUE en extension_vinted_accounts)
+  // ════════════════════════════════════════════════════════════════════════════
+
+  /** Devuelve la licencia activa del usuario (para roster). */
+  async function getRosterLicense(userId: number): Promise<{ id: number; max_accounts: number } | null> {
+    const r = await pool.query(
+      `SELECT id, max_accounts FROM licenses
+       WHERE user_id = $1 AND is_active = TRUE AND (expires_at IS NULL OR expires_at > NOW())
+       ORDER BY id DESC LIMIT 1`,
+      [userId]
+    );
+    return r.rows[0] ?? null;
+  }
+
+  // POST /api/extension/vinted/roster  ─ registra / actualiza cuenta (solo metadatos)
+  app.post("/api/extension/vinted/roster", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.user!.id;
+      const a      = req.body?.account ?? req.body ?? {};
+      const vintedId = String(a.vinted_id ?? a.id ?? "").trim();
+      if (!vintedId) return res.status(400).json({ error: "missing_vinted_id" });
+
+      const lic = await getRosterLicense(userId);
+      if (!lic && !req.user!.is_admin) return res.status(403).json({ error: "Licencia requerida o expirada" });
+
+      const licId  = lic?.id ?? 0;
+      const maxAcc = lic?.max_accounts ?? 999;
+
+      const c = await pool.connect();
+      try {
+        // ¿Ya existe este vinted_id en el roster global?
+        const { rows: ex } = await c.query(
+          "SELECT id, license_id FROM extension_vinted_accounts WHERE vinted_id = $1",
+          [vintedId]
+        );
+
+        if (ex[0]) {
+          if (ex[0].license_id !== licId)           // ⛔ vinculado a otra licencia
+            return res.status(422).json({ errors: { vinted_id: ["already_taken"] } });
+
+          // misma licencia → actualizar metadatos
+          const { rows } = await c.query(
+            `UPDATE extension_vinted_accounts
+             SET login=$2, title=$3, email=$4, country_code=$5, updated_at=NOW()
+             WHERE vinted_id=$1 RETURNING *`,
+            [vintedId, a.login ?? null, a.title ?? a.login ?? null,
+             a.email ?? null, a.country_code ?? null]
+          );
+          return res.json({ data: rows[0] });
+        }
+
+        // Nueva cuenta: verificar límite del plan
+        const { rows: cnt } = await c.query(
+          "SELECT COUNT(*)::int n FROM extension_vinted_accounts WHERE license_id = $1",
+          [licId]
+        );
+        if ((cnt[0].n as number) >= maxAcc && !req.user!.is_admin)
+          return res.status(403).json({ error: "account_limit_reached", limit: maxAcc });
+
+        try {
+          const { rows } = await c.query(
+            `INSERT INTO extension_vinted_accounts
+               (license_id, vinted_id, login, title, email, country_code)
+             VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+            [licId, vintedId, a.login ?? null, a.title ?? a.login ?? null,
+             a.email ?? null, a.country_code ?? null]
+          );
+          return res.status(201).json({ data: rows[0] });
+        } catch (e: any) {
+          if (e.code === "23505")                   // race condition → ya tomado
+            return res.status(422).json({ errors: { vinted_id: ["already_taken"] } });
+          throw e;
+        }
+      } finally { c.release(); }
+    } catch (e: any) {
+      console.error("POST /extension/vinted/roster", e);
+      res.status(500).json({ error: "server_error" });
+    }
+  });
+
+  // GET /api/extension/vinted/roster  ─ lista cuentas vinculadas a la licencia
+  app.get("/api/extension/vinted/roster", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const lic = await getRosterLicense(req.user!.id);
+      if (!lic && !req.user!.is_admin) return res.json({ data: [], total: 0, limit: 0 });
+      const { rows } = await pool.query(
+        `SELECT id, vinted_id, login, title, country_code, status, created_at, updated_at
+         FROM extension_vinted_accounts
+         WHERE license_id = $1
+         ORDER BY created_at DESC`,
+        [lic!.id]
+      );
+      res.json({ data: rows, total: rows.length, limit: lic!.max_accounts });
+    } catch (e: any) {
+      res.status(500).json({ error: "server_error" });
+    }
+  });
+
+  // GET /api/extension/vinted/roster/:vintedId  ─ comprueba propietario
+  // 401 si pertenece a otra licencia (dispara isDuplicate en la extensión)
+  app.get("/api/extension/vinted/roster/:vintedId", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const { rows } = await pool.query(
+        "SELECT * FROM extension_vinted_accounts WHERE vinted_id = $1",
+        [req.params.vintedId]
+      );
+      if (!rows[0]) return res.status(404).json({ error: "not_found" });
+      const lic = await getRosterLicense(req.user!.id);
+      if (!req.user!.is_admin && rows[0].license_id !== lic?.id)
+        return res.status(401).json({ error: "duplicate" });
+      res.json({ data: rows[0] });
+    } catch (e: any) {
+      res.status(500).json({ error: "server_error" });
+    }
+  });
+
+  // DELETE /api/extension/vinted/roster/:vintedId  ─ desvincular cuenta
+  app.delete("/api/extension/vinted/roster/:vintedId", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const lic = await getRosterLicense(req.user!.id);
+      if (!lic && !req.user!.is_admin) return res.json({ ok: false });
+      const { rowCount } = await pool.query(
+        "DELETE FROM extension_vinted_accounts WHERE vinted_id = $1 AND license_id = $2",
+        [req.params.vintedId, lic!.id]
+      );
+      res.json({ ok: (rowCount ?? 0) > 0 });
+    } catch (e: any) {
+      res.status(500).json({ error: "server_error" });
+    }
+  });
+
   // ── Extension: server-side inventory fetch (Blackstock-style proxy) ─────────
   // The server fetches items from Vinted using the stored session_cookie,
   // so the extension never needs to call Vinted directly.

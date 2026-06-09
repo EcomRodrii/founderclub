@@ -353,6 +353,26 @@ export async function initDB() {
     // ── Token de generación de imágenes por licencia ───────────────────────────
     // NULL = ilimitado, número = tokens restantes
     `ALTER TABLE licenses ADD COLUMN IF NOT EXISTS image_tokens INTEGER DEFAULT NULL`,
+
+    // ── Multicuenta roster: límite de cuentas por licencia ─────────────────────
+    `ALTER TABLE licenses ADD COLUMN IF NOT EXISTS max_accounts INTEGER NOT NULL DEFAULT 5`,
+
+    // ── Roster de cuentas Vinted vinculadas a una licencia ─────────────────────
+    // SOLO metadatos (login, vinted_id, país…) — NUNCA cookies ni contraseñas.
+    // vinted_id UNIQUE global = 1 cuenta : 1 licencia.
+    `CREATE TABLE IF NOT EXISTS extension_vinted_accounts (
+      id           BIGSERIAL PRIMARY KEY,
+      license_id   INTEGER NOT NULL REFERENCES licenses(id) ON DELETE CASCADE,
+      vinted_id    TEXT NOT NULL UNIQUE,
+      login        TEXT,
+      title        TEXT,
+      email        TEXT,
+      country_code TEXT,
+      status       TEXT NOT NULL DEFAULT 'active',
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_ext_vac_license ON extension_vinted_accounts(license_id)`,
   ];
   for (const sql of migrations) {
     await pool.query(sql).catch(() => {}); // silently ignore if column already exists
