@@ -12,7 +12,6 @@ import dotenv from "dotenv";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { pool, initDB } from "./db.js";
-import { publishToVinted, type VintedListingPayload } from "./vinted-publisher.js";
 
 dotenv.config({ path: ".env.local" });
 
@@ -4997,7 +4996,7 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
     };
 
     // Build payload
-    const payload: VintedListingPayload = {
+    const payload = {
       title:       listing.title,
       description: listing.description || "",
       price:       Number(listing.price),
@@ -5010,13 +5009,14 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
       domain:      account.domain || "es",
     };
 
-    // Run Puppeteer (non-blocking)
+    // Run Puppeteer (non-blocking) — lazy import so puppeteer never loads at server startup
+    const { publishToVinted } = await import("./vinted-publisher.js");
     publishToVinted(
       account.session_cookie || "",
       account.cookie || null,
       payload,
-      (event) => sendEvent(event)
-    ).then(async (result) => {
+      (event: any) => sendEvent(event)
+    ).then(async (result: any) => {
       const newStatus = result.published ? "published" : "failed";
       await pool.query(
         `UPDATE vinted_autopublish_listings
