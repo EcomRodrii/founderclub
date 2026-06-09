@@ -10,7 +10,7 @@ import Sidebar, { MobileTabBar, type Page } from './components/Sidebar';
 // 'photos' = Fantasma — siempre disponible para todos
 // 'academia' = desbloquea todo lo demás
 
-const ALL_PAGES: Page[] = ['dashboard', 'accounts', 'inventory', 'orders', 'profits', 'tongue', 'photos', 'boost', 'settings'];
+const ALL_PAGES: Page[] = ['dashboard', 'accounts', 'inventory', 'orders', 'profits', 'tongue', 'photos', 'boost', 'settings', 'publish'];
 
 function computeAllowedPages(license: any, isAdmin: boolean): Set<Page> {
   if (isAdmin) return new Set(ALL_PAGES);
@@ -54,9 +54,10 @@ import InventoryPage  from './components/pages/InventoryPage';
 import OrdersPage     from './components/pages/OrdersPage';
 import BoostPage      from './components/pages/BoostPage';
 import SettingsPage   from './components/pages/SettingsPage';
-import ProfitControl  from './components/ProfitControl';
-import TongueEditor   from './components/TongueEditor';
-import ImageUniquifier from './components/ImageUniquifier';
+import ProfitControl     from './components/ProfitControl';
+import TongueEditor      from './components/TongueEditor';
+import ImageUniquifier   from './components/ImageUniquifier';
+import VintedAutoPublish from './components/VintedAutoPublish';
 
 // ─── License activation ───────────────────────────────────────────────────────
 
@@ -252,6 +253,7 @@ function Dashboard({
       case 'orders':     return <OrdersPage      token={token} />;
       case 'boost':      return <BoostPage       token={token} />;
       case 'profits':    return <ProfitControl   token={token} />;
+      case 'publish':    return <VintedAutoPublish token={token} />;
       case 'tongue':     return <TongueEditor />;
       case 'photos':     return <ImageUniquifier />;
       case 'settings':   return (

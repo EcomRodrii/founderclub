@@ -12,6 +12,7 @@ import dotenv from "dotenv";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { pool, initDB } from "./db.js";
+import { publishToVinted, type VintedListingPayload } from "./vinted-publisher.js";
 
 dotenv.config({ path: ".env.local" });
 
@@ -253,6 +254,41 @@ async function startServer() {
     );
     CREATE INDEX IF NOT EXISTS idx_report_jobs_status ON report_jobs(status);
   `);
+
+  // ── Auto-publish: asegurar columnas vinted_id + session_cookie en vinted_accounts ──
+  await pool.query(`
+    ALTER TABLE vinted_accounts ADD COLUMN IF NOT EXISTS vinted_id   VARCHAR(50);
+    ALTER TABLE vinted_accounts ADD COLUMN IF NOT EXISTS session_cookie TEXT;
+    ALTER TABLE vinted_accounts ADD COLUMN IF NOT EXISTS updated_at  TIMESTAMP DEFAULT NOW();
+  `).catch(() => {});
+
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_vinted_accounts_uid
+      ON vinted_accounts(user_id, vinted_id) WHERE vinted_id IS NOT NULL;
+  `).catch(() => {});
+
+  // ── Auto-publish: tabla de borradores / anuncios publicados ─────────────────
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS vinted_autopublish_listings (
+      id           SERIAL PRIMARY KEY,
+      user_id      INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      title        TEXT    NOT NULL,
+      description  TEXT,
+      price        DECIMAL(10,2) NOT NULL DEFAULT 0,
+      condition    VARCHAR(30)  DEFAULT 'neuf_sans_etiquette',
+      brand        VARCHAR(100),
+      size         VARCHAR(20),
+      gender       VARCHAR(10)  DEFAULT 'men',
+      package_size VARCHAR(10)  DEFAULT 'small',
+      images       JSONB        DEFAULT '[]'::jsonb,
+      status       VARCHAR(20)  DEFAULT 'draft',
+      vinted_id    VARCHAR(50),
+      published_at TIMESTAMP,
+      created_at   TIMESTAMP    DEFAULT NOW(),
+      updated_at   TIMESTAMP    DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_vapl_user ON vinted_autopublish_listings(user_id);
+  `).catch(() => {});
 
   const app = express();
 
@@ -4807,6 +4843,204 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
       console.error("[ai/inbox/reply]", err?.message);
       return res.status(500).json({ ok: false, error: "openai_error" });
     }
+  });
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // AUTO-PUBLISH — gestión de borradores + publicación automática en Vinted
+  // ════════════════════════════════════════════════════════════════════════════
+
+  // GET /api/vinted/accounts — cuentas vinculadas con session_cookie
+  app.get("/api/vinted/accounts", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const r = await pool.query(
+        `SELECT id, username, vinted_id, domain, is_active, updated_at
+         FROM vinted_accounts
+         WHERE user_id = $1 AND is_active = TRUE
+         ORDER BY updated_at DESC NULLS LAST`,
+        [req.user!.id]
+      );
+      res.json({ ok: true, accounts: r.rows });
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // GET /api/autopublish/listings
+  app.get("/api/autopublish/listings", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const r = await pool.query(
+        `SELECT id, title, description, price, condition, brand, size, gender,
+                package_size, images, status, vinted_id, published_at, created_at, updated_at
+         FROM vinted_autopublish_listings
+         WHERE user_id = $1
+         ORDER BY created_at DESC`,
+        [req.user!.id]
+      );
+      res.json({ ok: true, listings: r.rows });
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // POST /api/autopublish/listings — crear borrador
+  app.post("/api/autopublish/listings", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const { title, description, price, condition, brand, size, gender, package_size, images } = req.body;
+      if (!title || price == null) return res.status(400).json({ ok: false, error: "title y price requeridos" });
+      const r = await pool.query(
+        `INSERT INTO vinted_autopublish_listings
+           (user_id, title, description, price, condition, brand, size, gender, package_size, images)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         RETURNING *`,
+        [
+          req.user!.id, title, description || null, Number(price),
+          condition || "neuf_sans_etiquette", brand || null, size || null,
+          gender || "men", package_size || "small",
+          JSON.stringify(images || []),
+        ]
+      );
+      res.json({ ok: true, listing: r.rows[0] });
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // PUT /api/autopublish/listings/:id — actualizar borrador
+  app.put("/api/autopublish/listings/:id", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const { title, description, price, condition, brand, size, gender, package_size, images } = req.body;
+      await pool.query(
+        `UPDATE vinted_autopublish_listings
+         SET title=$1, description=$2, price=$3, condition=$4, brand=$5,
+             size=$6, gender=$7, package_size=$8, images=$9, updated_at=NOW()
+         WHERE id=$10 AND user_id=$11`,
+        [
+          title, description || null, Number(price),
+          condition || "neuf_sans_etiquette", brand || null, size || null,
+          gender || "men", package_size || "small",
+          JSON.stringify(images || []),
+          req.params.id, req.user!.id,
+        ]
+      );
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // DELETE /api/autopublish/listings/:id
+  app.delete("/api/autopublish/listings/:id", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      await pool.query(
+        "DELETE FROM vinted_autopublish_listings WHERE id=$1 AND user_id=$2",
+        [req.params.id, req.user!.id]
+      );
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // POST /api/autopublish/listings/:id/publish — SSE stream
+  app.post("/api/autopublish/listings/:id/publish", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    const userId = req.user!.id;
+    const listingId = Number(req.params.id);
+
+    // Load listing
+    let listing: any;
+    try {
+      const lr = await pool.query(
+        "SELECT * FROM vinted_autopublish_listings WHERE id=$1 AND user_id=$2",
+        [listingId, userId]
+      );
+      if (!lr.rows[0]) return res.status(404).json({ ok: false, error: "Anuncio no encontrado" });
+      listing = lr.rows[0];
+    } catch (e: any) {
+      return res.status(500).json({ ok: false, error: e.message });
+    }
+
+    // Load stored session (most recently updated account)
+    let account: any;
+    try {
+      const ar = await pool.query(
+        `SELECT cookie, session_cookie, domain, vinted_id
+         FROM vinted_accounts
+         WHERE user_id=$1 AND is_active=TRUE
+         ORDER BY updated_at DESC NULLS LAST LIMIT 1`,
+        [userId]
+      );
+      account = ar.rows[0];
+    } catch { account = null; }
+
+    if (!account?.session_cookie && !account?.cookie) {
+      return res.status(400).json({
+        ok: false,
+        error: "No hay sesión de Vinted guardada. Abre vinted.es con la extensión activa."
+      });
+    }
+
+    // Mark as publishing
+    await pool.query(
+      "UPDATE vinted_autopublish_listings SET status='publishing', updated_at=NOW() WHERE id=$1",
+      [listingId]
+    ).catch(() => {});
+
+    // Set up SSE
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+
+    const sendEvent = (data: object) => {
+      if (!res.writableEnded) res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    // Build payload
+    const payload: VintedListingPayload = {
+      title:       listing.title,
+      description: listing.description || "",
+      price:       Number(listing.price),
+      condition:   listing.condition || "neuf_sans_etiquette",
+      brand:       listing.brand || "",
+      size:        listing.size || undefined,
+      gender:      listing.gender || "men",
+      images:      Array.isArray(listing.images) ? listing.images : (JSON.parse(listing.images || "[]")),
+      packageSize: listing.package_size || "small",
+      domain:      account.domain || "es",
+    };
+
+    // Run Puppeteer (non-blocking)
+    publishToVinted(
+      account.session_cookie || "",
+      account.cookie || null,
+      payload,
+      (event) => sendEvent(event)
+    ).then(async (result) => {
+      const newStatus = result.published ? "published" : "failed";
+      await pool.query(
+        `UPDATE vinted_autopublish_listings
+         SET status=$1, vinted_id=$2, published_at=$3, updated_at=NOW()
+         WHERE id=$4`,
+        [
+          newStatus,
+          result.vintedId || null,
+          result.published ? new Date() : null,
+          listingId,
+        ]
+      ).catch(() => {});
+      logActivity(userId, `autopublish_${newStatus}`, req.ip);
+      if (!res.writableEnded) res.end();
+    }).catch((err) => {
+      sendEvent({ type: "error", step: "fatal", message: `Error fatal: ${err.message}` });
+      pool.query(
+        "UPDATE vinted_autopublish_listings SET status='failed', updated_at=NOW() WHERE id=$1",
+        [listingId]
+      ).catch(() => {});
+      if (!res.writableEnded) res.end();
+    });
+
+    req.on("close", () => { if (!res.writableEnded) res.end(); });
   });
 
   // ── Vinted Sessions — list accounts linked to user ──────────────────────
