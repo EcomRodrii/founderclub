@@ -5436,6 +5436,9 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
       if (!res.writableEnded) res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
+    // Primer evento inmediato — hace visible el log panel antes de que Puppeteer arranque
+    sendEvent({ type: "log", step: "init", message: "⏳ Iniciando publicación automática..." });
+
     // Build payload
     const payload = {
       title:       listing.title,
@@ -5450,8 +5453,18 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
       domain:      account.domain || "es",
     };
 
-    // Run Puppeteer (non-blocking) — lazy import so puppeteer never loads at server startup
-    const { publishToVinted } = await import("./vinted-publisher.js");
+    // Run Puppeteer — lazy import + try-catch explícito para capturar errores de carga del módulo
+    let publishToVinted: any;
+    try {
+      const mod = await import("./vinted-publisher.js");
+      publishToVinted = mod.publishToVinted;
+    } catch (importErr: any) {
+      sendEvent({ type: "error", step: "import", message: `❌ Error al cargar el motor de publicación: ${importErr.message}` });
+      await pool.query("UPDATE vinted_autopublish_listings SET status='failed', updated_at=NOW() WHERE id=$1", [listingId]).catch(() => {});
+      if (!res.writableEnded) res.end();
+      return;
+    }
+
     publishToVinted(
       account.session_cookie || "",
       account.cookie || null,
@@ -5472,7 +5485,7 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
       ).catch(() => {});
       logActivity(userId, `autopublish_${newStatus}`, req.ip);
       if (!res.writableEnded) res.end();
-    }).catch((err) => {
+    }).catch((err: any) => {
       sendEvent({ type: "error", step: "fatal", message: `Error fatal: ${err.message}` });
       pool.query(
         "UPDATE vinted_autopublish_listings SET status='failed', updated_at=NOW() WHERE id=$1",
