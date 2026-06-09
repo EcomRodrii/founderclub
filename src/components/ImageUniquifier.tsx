@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   Upload, Download, Image as ImageIcon,
   CheckCircle2, RefreshCcw, Trash2, Shuffle,
-  ZapOff, Images, Plus, Pencil, ChevronDown, ChevronUp, RotateCcw
+  ZapOff, Images, Zap, FlipHorizontal2
 } from 'lucide-react';
 
 // ─── Cómo detecta Vinted duplicados ──────────────────────────────────────────
@@ -79,14 +79,6 @@ interface ModeConfig {
   // Si true, inyecta EXIF aleatorio realista (cámara, fecha, ISO, focal…).
   // Hace que la foto parezca tomada con móvil en vez de JPEG limpio.
   randomExif: boolean;
-  // Sesgar (skew) horizontal/vertical. Valores en "unidades" (0.5 ≈ leve, 2 ≈ fuerte).
-  // Se aplica como transformación afín antes del draw. Cambia la geometría sin rotar.
-  skewX?: number;
-  skewY?: number;
-  // Marco (crop) independiente por eje. Si están definidos, sobreescriben cropPctMin/Max.
-  // % de borde recortado en cada eje. P.ej. frameVPct=0, frameHPct=10 → solo recorta laterales.
-  frameVPct?: number;
-  frameHPct?: number;
 }
 
 const MODES: ModeConfig[] = [
@@ -118,9 +110,9 @@ const MODES: ModeConfig[] = [
     id: 'normal', label: 'NORMAL',
     desc: 'Equilibrio perfecto. Recomendado para uso diario.',
     trimMin: 1, trimMax: 3,
-    cropPctMin: 0.5, cropPctMax: 2.0,
+    cropPctMin: 1.0, cropPctMax: 3.0,
     pixelNoiseMax: 1,
-    blockNoiseMax: 2, blockSize: 20,
+    blockNoiseMax: 2, blockSize: 18,
     lineWarpMax: 0,
     brightMax: 3,
     gradientMax: 0,
@@ -142,17 +134,17 @@ const MODES: ModeConfig[] = [
     id: 'fuerte', label: 'FUERTE',
     desc: 'Invisible al ojo. Rompe pHash + embedding CNN.',
     trimMin: 2, trimMax: 4,
-    cropPctMin: 1.0, cropPctMax: 3.0,
+    cropPctMin: 2.0, cropPctMax: 5.0,
     pixelNoiseMax: 2,
-    blockNoiseMax: 2, blockSize: 16,
+    blockNoiseMax: 3, blockSize: 14,
     lineWarpMax: 1,
     brightMax: 4,
     gradientMax: 4,
-    rotateDegMax: 0.3,
-    qualityMin: 0.87, qualityMax: 0.92,
+    rotateDegMax: 0.5,
+    qualityMin: 0.86, qualityMax: 0.92,
     flipChance: 0,
-    aspectStretchMax: 0,
-    perspectiveMax: 0,
+    aspectStretchMax: 0.015,
+    perspectiveMax: 3,
     bgShiftMax: 0,
     bgTolerance: 0,
     textureAmp: 0,
@@ -298,26 +290,11 @@ async function uniquifyImage(
         }
         if (cfg.rotateDegMax > 0) {
           const angle = rnd(-cfg.rotateDegMax, cfg.rotateDegMax) * Math.PI / 180;
-          const ac = Math.abs(Math.cos(angle)), as = Math.abs(Math.sin(angle));
-          // Escala correcta para imágenes rectangulares: agranda la imagen (>1) para
-          // que la imagen rotada CUBRA todas las esquinas del canvas sin bordes negros.
-          // La fórmula 1/(cos+sin) solo funciona para cuadrados; fotos portrait/landscape
-          // con esa fórmula dejan esquinas vacías que el JPEG rellena de negro.
-          const scale = Math.max(ac + (H / W) * as, (W / H) * as + ac);
+          const cos = Math.cos(angle), sin = Math.sin(angle);
+          const scale = 1 / (Math.abs(cos) + Math.abs(sin));
           ctx.translate(W / 2, H / 2);
           ctx.rotate(angle);
           ctx.scale(scale, scale);
-          ctx.translate(-W / 2, -H / 2);
-        }
-        // Skew (sesgar) X/Y: escala compensada para fotos rectangulares.
-        const skX = (cfg.skewX ?? 0) * 0.05;
-        const skY = (cfg.skewY ?? 0) * 0.05;
-        if (skX !== 0 || skY !== 0) {
-          // scaleComp > 1: agranda la imagen para que el shear cubra todas las esquinas.
-          const scaleComp = 1 + Math.abs(skX) * (H / W) + Math.abs(skY) * (W / H);
-          ctx.translate(W / 2, H / 2);
-          ctx.transform(1, skY, skX, 1, 0, 0);
-          ctx.scale(scaleComp, scaleComp);
           ctx.translate(-W / 2, -H / 2);
         }
         ctx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, W, H);
@@ -329,10 +306,13 @@ async function uniquifyImage(
         // Cambia las coordenadas geométricas de cada keypoint → no matchea.
         if (cfg.perspectiveMax > 0) {
           const pAmp = cfg.perspectiveMax;
-          const dTLx = rnd(-pAmp, pAmp), dTLy = rnd(-pAmp, pAmp);
-          const dTRx = rnd(-pAmp, pAmp), dTRy = rnd(-pAmp, pAmp);
-          const dBLx = rnd(-pAmp, pAmp), dBLy = rnd(-pAmp, pAmp);
-          const dBRx = rnd(-pAmp, pAmp), dBRy = rnd(-pAmp, pAmp);
+          // Esquinas desplazadas SOLO hacia dentro: la zona muestreada queda
+          // siempre DENTRO de la imagen, así no se clampean los bordes y NO
+          // aparece el "marco" distorsionado. Mantiene la unicidad geométrica.
+          const dTLx = rnd(0, pAmp),  dTLy = rnd(0, pAmp);
+          const dTRx = rnd(-pAmp, 0), dTRy = rnd(0, pAmp);
+          const dBLx = rnd(0, pAmp),  dBLy = rnd(-pAmp, 0);
+          const dBRx = rnd(-pAmp, 0), dBRy = rnd(-pAmp, 0);
           const srcP = ctx.getImageData(0, 0, W, H);
           const dstP = ctx.createImageData(W, H);
           const sd = srcP.data, dd = dstP.data;
@@ -597,31 +577,10 @@ async function uniquifyImage(
           ctx.restore();
         }
 
-        // ── 5e. Marco blanco VISIBLE (border, no crop) ────────────────────
-        // Si frameVPct o frameHPct > 0, envuelve la imagen procesada en un canvas
-        // mayor con padding blanco. A diferencia del crop simétrico, esto SE VE.
-        let outCanvas: HTMLCanvasElement = canvas;
-        const fvPct = (cfg.frameVPct ?? 0) / 100;
-        const fhPct = (cfg.frameHPct ?? 0) / 100;
-        if (fvPct > 0 || fhPct > 0) {
-          const padV = Math.round(H * fvPct);
-          const padH = Math.round(W * fhPct);
-          const bigW = W + padH * 2;
-          const bigH = H + padV * 2;
-          const big = document.createElement('canvas');
-          big.width = bigW;
-          big.height = bigH;
-          const bctx = big.getContext('2d')!;
-          bctx.fillStyle = '#ffffff';
-          bctx.fillRect(0, 0, bigW, bigH);
-          bctx.drawImage(canvas, padH, padV);
-          outCanvas = big;
-        }
-
         // ── 6. JPEG con calidad variable ──────────────────────────────────
         // Cuantización diferente → artefactos de compresión únicos.
         const quality = rnd(cfg.qualityMin, cfg.qualityMax);
-        let dataUrl = outCanvas.toDataURL('image/jpeg', quality);
+        let dataUrl = canvas.toDataURL('image/jpeg', quality);
 
         // ── 7. EXIF aleatorio realista (si está activo) ──────────────────
         // Inyecta metadata creíble (cámara, fecha, ISO, focal…) para que la
@@ -652,6 +611,38 @@ async function uniquifyImage(
   });
 }
 
+// ─── Wrapper adversarial con CLIP (modo NUCLEAR) ───────────────────────────
+// Genera hasta MAX_TRIES variantes y se queda con la que más lejos esté del
+// embedding original. Si alcanza TARGET_DIST antes, sale temprano.
+// El embedding original se calcula UNA sola vez por imagen (cache externo).
+
+const ADV_MAX_TRIES = 5;
+const ADV_TARGET_DIST = 0.14;
+
+async function uniquifyImageAdversarial(
+  file: File,
+  cfg: ModeConfig,
+  origEmbed: Float32Array,
+  onAttempt?: (i: number, dist: number) => void
+): Promise<{ dataUrl: string; noiseLevel: number; dimChange: string; size: number; cosineDist: number }> {
+  const { embedDataUrl, cosineDistance } = await import('../lib/clipAdversarial');
+  let best: { result: Awaited<ReturnType<typeof uniquifyImage>>; dist: number } | null = null;
+  for (let i = 0; i < ADV_MAX_TRIES; i++) {
+    const result = await uniquifyImage(file, cfg);
+    let dist = 0;
+    try {
+      const emb = await embedDataUrl(result.dataUrl);
+      dist = cosineDistance(origEmbed, emb);
+    } catch (e) {
+      console.warn('[adversarial] embedding falló, intento sin score', e);
+    }
+    onAttempt?.(i + 1, dist);
+    if (!best || dist > best.dist) best = { result, dist };
+    if (dist >= ADV_TARGET_DIST) break;
+  }
+  return { ...best!.result, cosineDist: best!.dist };
+}
+
 // ─── Helpers UI ───────────────────────────────────────────────────────────────
 
 function formatSize(b: number) {
@@ -661,29 +652,7 @@ function formatSize(b: number) {
 }
 
 function dl(dataUrl: string, name: string) {
-  // Convertir data URL grande a Blob URL — más fiable en Chrome para JPEGs pesados.
-  let href = dataUrl;
-  let revoke: string | null = null;
-  try {
-    if (dataUrl.startsWith('data:')) {
-      const [meta, b64] = dataUrl.split(',');
-      const mime = meta.match(/:(.*?);/)?.[1] || 'image/jpeg';
-      const bin = atob(b64);
-      const buf = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
-      const blob = new Blob([buf], { type: mime });
-      href = URL.createObjectURL(blob);
-      revoke = href;
-    }
-  } catch { /* fallback al data url */ }
-  const a = document.createElement('a');
-  a.href = href;
-  a.download = name;
-  a.rel = 'noopener';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  if (revoke) setTimeout(() => URL.revokeObjectURL(revoke!), 1000);
+  const a = document.createElement('a'); a.href = dataUrl; a.download = name; a.click();
 }
 
 async function dataUrlToFile(dataUrl: string, name: string): Promise<File> {
@@ -707,117 +676,42 @@ function canShareFiles(): boolean {
 const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
 async function saveOne(dataUrl: string, filename: string): Promise<void> {
-  // Siempre forzamos descarga vía <a download>. navigator.share daba problemas
-  // silenciosos cuando el usuario cerraba el sheet o el navegador lo bloqueaba.
-  dl(dataUrl, filename);
+  if (canShareFiles()) {
+    const file = await dataUrlToFile(dataUrl, filename);
+    await navigator.share({ files: [file], title: filename });
+  } else {
+    dl(dataUrl, filename);
+  }
 }
 
 async function saveAll(
   items: { dataUrl: string; filename: string }[],
   onProgress?: (n: number) => void
 ): Promise<void> {
-  items.forEach((item, idx) => {
-    setTimeout(() => {
-      dl(item.dataUrl, item.filename);
-      onProgress?.(idx + 1);
-    }, idx * 200);
-  });
-}
-
-// ─── Repost configs (multi-modificación cíclica) ──────────────────────────────
-// Cada fila de la tabla "Configuración de repost" es una RepostConfig.
-// processFiles aplica configs[i % configs.length] a cada foto subida.
-
-interface RepostConfig extends ModeConfig {
-  rid: string;                              // id único de la fila
-  editTitle: 'auto' | 'manual';
-  editDescription: 'auto' | 'manual';
-}
-
-// Base común — configuración FUERTE anti-detección.
-// Cada técnica rompe una capa diferente del sistema de deduplicación de Vinted:
-//   crop 1.5-3.5%  → pHash distancia Hamming máxima (derrota paso 1)
-//   blockNoise ±4 en bloques 16px → cada parche del embedder CNN ve estadísticas distintas (derrota paso 2)
-//   lineWarp ±1px  → layout espacial único por imagen
-//   perspectiveMax 4px → coordenadas de keypoints SIFT/ORB cambian (derrota paso 3)
-//   randomExif     → EXIF de iPhone/Samsung realista, foto parece tomada con móvil
-const REPOST_BASE: Omit<ModeConfig, 'id' | 'label' | 'desc'> = {
-  trimMin: 2, trimMax: 4,
-  cropPctMin: 1.5, cropPctMax: 3.5,   // ↑ crop más agresivo → rompe pHash con margen
-  pixelNoiseMax: 2,
-  blockNoiseMax: 4, blockSize: 16,     // ↑ bloques más pequeños y más ruido → rompe embedding CNN
-  lineWarpMax: 1,                       // ↑ ondulación sinusoidal por filas → layout espacial único
-  brightMax: 3,
-  gradientMax: 2,                       // gradiente diagonal sutil
-  rotateDegMax: 0,
-  qualityMin: 0.87, qualityMax: 0.93,  // ↑ más variación de artefactos JPEG
-  flipChance: 0,
-  aspectStretchMax: 0.01,               // stretch mínimo de proporción
-  perspectiveMax: 4,                    // ↑ warp de perspectiva → rompe SIFT/ORB
-  bgShiftMax: 0,
-  bgTolerance: 0,
-  textureAmp: 0,
-  offCenterKeepMin: 0,
-  offCenterKeepMax: 0,
-  toneCurveAmp: 0,
-  distractorChance: 0,
-  randomExif: true,                     // ↑ EXIF realista de móvil en cada foto
-};
-
-let RID_SEQ = 0;
-const nextRid = () => `rc-${Date.now()}-${++RID_SEQ}`;
-
-function makeConfig(partial: Partial<ModeConfig> & Pick<ModeConfig, 'id' | 'label' | 'desc'>): RepostConfig {
-  return {
-    ...REPOST_BASE,
-    ...partial,
-    rid: nextRid(),
-    editTitle: 'auto',
-    editDescription: 'auto',
-  } as RepostConfig;
-}
-
-// Presets — sin marcos, sin rotación, sin skew. Solo técnicas 100% invisibles.
-// Cada imagen aplica además randomizeTransform() → flip y perspectiva únicos por foto.
-const DEFAULT_CONFIGS: RepostConfig[] = [
-  makeConfig({ id: 'normal', label: '#1', desc: 'Crop + ruido',            frameVPct: 0, frameHPct: 0 }),
-  makeConfig({ id: 'normal', label: '#2', desc: 'Crop + ruido + flip',     frameVPct: 0, frameHPct: 0, flipChance: 0.5 }),
-  makeConfig({ id: 'normal', label: '#3', desc: 'Perspectiva media',       frameVPct: 0, frameHPct: 0, perspectiveMax: 5 }),
-  makeConfig({ id: 'normal', label: '#4', desc: 'Perspectiva media + flip',frameVPct: 0, frameHPct: 0, flipChance: 0.5, perspectiveMax: 5 }),
-  makeConfig({ id: 'normal', label: '#5', desc: 'Perspectiva fuerte',      frameVPct: 0, frameHPct: 0, perspectiveMax: 9 }),
-  makeConfig({ id: 'normal', label: '#6', desc: 'Perspectiva fuerte + flip',frameVPct: 0, frameHPct: 0, flipChance: 0.5, perspectiveMax: 9 }),
-  makeConfig({ id: 'normal', label: '#7', desc: 'Crop extra',              frameVPct: 0, frameHPct: 0, cropPctMin: 2.5, cropPctMax: 4 }),
-  makeConfig({ id: 'normal', label: '#8', desc: 'Crop extra + flip',       frameVPct: 0, frameHPct: 0, flipChance: 0.5, cropPctMin: 2.5, cropPctMax: 4 }),
-];
-
-// ─── Parámetros de transformación únicos por foto ────────────────────────────
-// Genera parámetros INVISIBLES completamente aleatorios por imagen.
-// Con 50 personas o la misma persona subiendo la misma foto varias veces,
-// cada resultado es irrepetible. Solo usa técnicas que NO crean bordes visibles:
-//   · flip horizontal (espejo total — cubre el canvas completo, sin bordes)
-//   · perspective warp (desplaza esquinas ±px — clamping al borde, sin bordes)
-// La rotación y el skew están EXCLUIDOS: crean marcos negros en fotos portrait/landscape
-// porque la fórmula de escala depende del aspect ratio y la foto queda visible.
-function randomizeTransform(): Pick<ModeConfig, 'flipChance' | 'perspectiveMax'> {
-  const rnd = (a: number, b: number) => +(a + Math.random() * (b - a)).toFixed(2);
-  const coin = (p: number) => Math.random() < p;
-  return {
-    flipChance:     coin(0.45) ? 0.5 : 0,
-    perspectiveMax: rnd(3, 10),
-  };
-}
-
-function summarizeConfig(c: RepostConfig): string {
-  const parts: string[] = [];
-  if (c.skewX || c.skewY) parts.push(`Sesgar X: ${c.skewX ?? 0}  Y: ${c.skewY ?? 0}`);
-  if (c.rotateDegMax) parts.push(`Rotar ±${c.rotateDegMax}°`);
-  const fv = c.frameVPct ?? 0, fh = c.frameHPct ?? 0;
-  if (fv === fh && fv > 0) parts.push(`Marco ${fv}%`);
-  else if (fv || fh) parts.push(`Marco V:${fv}% H:${fh}%`);
-  if (c.flipChance > 0) parts.push('Flip 50%');
-  // Siempre muestra el crop invisible
-  parts.push(`Crop invisible + ruido ±${c.blockNoiseMax}`);
-  return parts.join(' · ');
+  if (canShareFiles()) {
+    try {
+      const files = await Promise.all(items.map(i => dataUrlToFile(i.dataUrl, i.filename)));
+      if (navigator.canShare({ files })) {
+        await navigator.share({ files, title: `${files.length} fotos únicas` });
+        onProgress?.(files.length);
+        return;
+      }
+    } catch { /* continuar con fallback */ }
+    for (let i = 0; i < items.length; i++) {
+      try {
+        const file = await dataUrlToFile(items[i].dataUrl, items[i].filename);
+        await navigator.share({ files: [file], title: items[i].filename });
+        onProgress?.(i + 1);
+      } catch { /* usuario canceló */ }
+    }
+  } else {
+    items.forEach((item, idx) => {
+      setTimeout(() => {
+        dl(item.dataUrl, item.filename);
+        onProgress?.(idx + 1);
+      }, idx * 120);
+    });
+  }
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -826,150 +720,119 @@ interface ProcessedImage {
   id: string; originalName: string; originalUrl: string;
   processedUrl: string | null; originalSize: number; processedSize: number;
   status: 'processing' | 'done' | 'error'; noiseLevel: number; dimChange: string; mode: Mode;
-  hashShort?: string;          // SHA-1 corto de la procesada (prueba visual de unicidad)
-  originalHashShort?: string;  // SHA-1 corto de la original
-}
-
-async function sha1Short(input: string | ArrayBuffer): Promise<string> {
-  const buf = typeof input === 'string'
-    ? new TextEncoder().encode(input)
-    : new Uint8Array(input);
-  const hash = await crypto.subtle.digest('SHA-1', buf);
-  const hex = Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
-  return hex.slice(0, 10);
-}
-
-// ─── Sub-componente: campo numérico para el editor ───────────────────────────
-
-function NumField({
-  label, value, onChange, step = 1, min, max,
-}: {
-  label: string; value: number; onChange: (v: number) => void;
-  step?: number; min?: number; max?: number;
-}) {
-  return (
-    <label className="flex flex-col gap-1">
-      <span className="text-[10px] uppercase tracking-wider text-white/40">{label}</span>
-      <input
-        type="number"
-        value={value}
-        step={step}
-        min={min}
-        max={max}
-        onChange={e => {
-          const v = parseFloat(e.target.value);
-          onChange(Number.isFinite(v) ? v : 0);
-        }}
-        className="bg-black border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/90 focus:border-acid focus:outline-none"
-      />
-    </label>
-  );
+  cosineDist?: number; advAttempts?: number;
 }
 
 // ─── Componente ───────────────────────────────────────────────────────────────
 
 export default function ImageUniquifier() {
-  const [configs, setConfigs]       = useState<RepostConfig[]>(DEFAULT_CONFIGS);
-  const [expandedRid, setExpandedRid] = useState<string | null>(null);
+  const [activeMode, setActiveMode] = useState<Mode>('normal');
   const [images, setImages]         = useState<ProcessedImage[]>([]);
   const [dragging, setDragging]     = useState(false);
   const [savingAll, setSavingAll]   = useState(false);
   const [savedCount, setSavedCount] = useState(0);
-  const [configsOpen, setConfigsOpen]   = useState(false);
+  const [nuclearMode, setNuclearMode]   = useState(false);
+  const [clipLoading, setClipLoading]   = useState(false);
+  const [clipReady, setClipReady]       = useState(false);
+  const [clipError, setClipError]       = useState<string | null>(null);
+  const [clipProgress, setClipProgress] = useState(0);
+  const [flipEnabled, setFlipEnabled]   = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const updateConfig = (rid: string, patch: Partial<RepostConfig>) => {
-    setConfigs(prev => prev.map(c => c.rid === rid ? { ...c, ...patch } : c));
-  };
-  const removeConfig = (rid: string) => {
-    setConfigs(prev => prev.length <= 1 ? prev : prev.filter(c => c.rid !== rid));
-  };
-  const addConfig = () => {
-    setConfigs(prev => [
-      ...prev,
-      makeConfig({ id: 'normal', label: `#${prev.length + 1}`, desc: 'Nueva configuración', frameVPct: 0, frameHPct: 0 }),
-    ]);
-  };
-  const resetConfigs = () => {
-    setConfigs(DEFAULT_CONFIGS.map(c => ({ ...c, rid: nextRid() })));
-    setImages([]);
-  };
-  // Aleatorio: perturba los valores numéricos de cada config para que el lote sea
-  // diferente sin perder la idea (sesgar, rotar, marco). El número de filas no cambia.
-  const randomizeConfigs = () => {
-    setConfigs(prev => prev.map((c, i) => ({
-      ...c,
-      skewX:        0,
-      skewY:        0,
-      rotateDegMax: 0,
-      flipChance:   i % 2 === 1 ? 0.5 : 0,   // pares sin flip, impares con flip
-      perspectiveMax: 3 + Math.random() * 7,  // 3-10 px, siempre diferente
-      frameVPct:    0,
-      frameHPct:    0,
-    })));
-  };
+  const cfg        = MODES.find(m => m.id === activeMode)!;
+  const techniques = TECHNIQUES[activeMode];
 
-  const processFiles = useCallback(async (files: FileList | File[], cfgs: RepostConfig[]) => {
-    // Acepta cualquier archivo cuyo type sea image/* o cuya extensión parezca imagen.
-    // iOS/Android a veces devuelven HEIC/HEIF con type vacío.
-    const looksLikeImage = (f: File) =>
-      f.type.startsWith('image/') ||
-      /\.(jpe?g|png|webp|gif|bmp|heic|heif|avif)$/i.test(f.name);
-    const all = Array.from(files);
-    const arr = all.filter(looksLikeImage);
-    if (!cfgs.length) { console.warn('[uniquify] sin configs'); return; }
-    if (!arr.length) {
-      console.warn('[uniquify] ningún archivo pasa el filtro de imagen:', all.map(f => `${f.name} (${f.type || 'sin type'})`));
-      alert('No se reconoció ningún archivo como imagen. Asegúrate de subir JPG, PNG, WEBP o HEIC.');
-      return;
+  const ensureCLIP = useCallback(async () => {
+    if (clipReady) return true;
+    setClipError(null);
+    setClipLoading(true);
+    setClipProgress(0);
+    try {
+      const { loadCLIP } = await import('../lib/clipAdversarial');
+      await loadCLIP((pct) => setClipProgress(pct));
+      setClipReady(true);
+      setClipLoading(false);
+      return true;
+    } catch (e: any) {
+      setClipError(e?.message || 'No se pudo cargar CLIP');
+      setClipLoading(false);
+      setNuclearMode(false);
+      return false;
     }
-    const entries: ProcessedImage[] = arr.map((f, i) => ({
-      id: `${Date.now()}-${Math.random().toString(36).slice(2)}-${i}`,
+  }, [clipReady]);
+
+  const handleToggleNuclear = useCallback(async () => {
+    if (nuclearMode) { setNuclearMode(false); return; }
+    setNuclearMode(true);
+    if (!clipReady) await ensureCLIP();
+  }, [nuclearMode, clipReady, ensureCLIP]);
+
+  const processFiles = useCallback(async (files: FileList | File[], mode: Mode) => {
+    const baseMc = MODES.find(m => m.id === mode)!;
+    // El toggle de espejo fuerza el flip en cualquier modo (lo más efectivo
+    // contra la detección). Si está OFF, se respeta el flipChance del modo.
+    const mc = { ...baseMc, flipChance: flipEnabled ? 1 : baseMc.flipChance };
+    const arr = Array.from(files).filter(f => f.type.startsWith('image/'));
+    if (!arr.length) return;
+    const useNuclear = nuclearMode && clipReady;
+    const entries: ProcessedImage[] = arr.map(f => ({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       originalName: f.name, originalUrl: URL.createObjectURL(f),
       processedUrl: null, originalSize: f.size, processedSize: 0,
-      status: 'processing', noiseLevel: 0, dimChange: '',
-      mode: cfgs[i % cfgs.length].id,
+      status: 'processing', noiseLevel: 0, dimChange: '', mode,
     }));
     setImages(prev => [...entries, ...prev]);
 
+    // Pre-import CLIP helpers si vamos a usarlos
+    const clipHelpers = useNuclear ? await import('../lib/clipAdversarial') : null;
+
     for (let i = 0; i < arr.length; i++) {
       const entry = entries[i];
-      // Mezcla el config cíclico (para editTitle/editDescription) con parámetros
-      // geométricos completamente nuevos por imagen → cada proceso es irrepetible,
-      // aunque 50 personas suban la misma foto o la misma persona la suba 5 veces.
-      const mc: RepostConfig = { ...cfgs[i % cfgs.length], ...randomizeTransform() };
       try {
-        const origBuf = await arr[i].arrayBuffer();
-        const origHash = await sha1Short(origBuf);
-        setImages(prev => prev.map(img => img.id === entry.id ? { ...img, originalHashShort: origHash } : img));
-        const res = await uniquifyImage(arr[i], mc);
-        const procHash = await sha1Short(res.dataUrl);
-        setImages(prev => prev.map(img =>
-          img.id === entry.id
-            ? { ...img, processedUrl: res.dataUrl, processedSize: res.size, status: 'done', noiseLevel: res.noiseLevel, dimChange: res.dimChange, hashShort: procHash }
-            : img
-        ));
+        if (useNuclear && clipHelpers) {
+          // Original embedding (una vez)
+          const origDataUrl = await new Promise<string>((resolve, reject) => {
+            const r = new FileReader();
+            r.onload = () => resolve(r.result as string);
+            r.onerror = reject;
+            r.readAsDataURL(arr[i]);
+          });
+          const origEmb = await clipHelpers.embedDataUrl(origDataUrl);
+          let attempts = 0;
+          const res = await uniquifyImageAdversarial(arr[i], mc, origEmb, (n) => { attempts = n; });
+          setImages(prev => prev.map(img =>
+            img.id === entry.id
+              ? { ...img, processedUrl: res.dataUrl, processedSize: res.size, status: 'done', noiseLevel: res.noiseLevel, dimChange: res.dimChange, cosineDist: res.cosineDist, advAttempts: attempts }
+              : img
+          ));
+        } else {
+          const res = await uniquifyImage(arr[i], mc);
+          setImages(prev => prev.map(img =>
+            img.id === entry.id
+              ? { ...img, processedUrl: res.dataUrl, processedSize: res.size, status: 'done', noiseLevel: res.noiseLevel, dimChange: res.dimChange }
+              : img
+          ));
+        }
       } catch (e) {
         console.error('[uniquify] error', e);
         setImages(prev => prev.map(img => img.id === entry.id ? { ...img, status: 'error' } : img));
       }
     }
-  }, []);
+  }, [nuclearMode, clipReady, flipEnabled]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault(); setDragging(false); processFiles(e.dataTransfer.files, configs);
-  }, [processFiles, configs]);
+    e.preventDefault(); setDragging(false); processFiles(e.dataTransfer.files, activeMode);
+  }, [processFiles, activeMode]);
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) processFiles(e.target.files, configs);
+    if (e.target.files) processFiles(e.target.files, activeMode);
     e.target.value = '';
   };
 
   const reprocess = async (id: string) => {
     const entry = images.find(img => img.id === id); if (!entry) return;
-    // Regenera con la primera config disponible (los presets cíclicos solo importan en lote).
-    const mc = configs[0];
-    if (!mc) return;
+    const baseMc = MODES.find(m => m.id === entry.mode)!;
+    const mc = { ...baseMc, flipChance: flipEnabled ? 1 : baseMc.flipChance };
     setImages(prev => prev.map(img => img.id === id ? { ...img, status: 'processing', processedUrl: null } : img));
     try {
       const blob = await fetch(entry.originalUrl).then(r => r.blob());
@@ -1011,7 +874,114 @@ export default function ImageUniquifier() {
   return (
     <div className="space-y-6">
 
-      {/* Drop Zone — arriba del todo */}
+      {/* Modos 2×2 */}
+      <div className="grid grid-cols-2 gap-3">
+        {MODES.map(m => {
+          const active    = activeMode === m.id;
+          const isExtremo = m.id === 'extremo';
+          return (
+            <button key={m.id} onClick={() => setActiveMode(m.id)}
+              className={`p-5 rounded-2xl border-2 text-left transition-all ${
+                active && isExtremo ? 'border-red-700 bg-red-950/60'
+                : active            ? 'border-white/30 bg-white/10'
+                : 'border-white/[0.08] bg-white/[0.03] hover:border-white/15'
+              }`}>
+              <p className={`text-sm font-black uppercase tracking-widest mb-1 ${
+                active && isExtremo ? 'text-red-400' : active ? 'text-white' : 'text-white/40'
+              }`}>{m.label}</p>
+              <p className={`text-[11px] leading-snug ${active ? 'text-white/60' : 'text-white/25'}`}>{m.desc}</p>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Toggle: voltear horizontal (espejo) */}
+      <button
+        onClick={() => setFlipEnabled(v => !v)}
+        className={`w-full flex items-center justify-between gap-3 rounded-2xl border-2 p-4 transition-all ${
+          flipEnabled ? 'border-acid bg-acid-soft' : 'border-white/[0.08] bg-white/[0.02] hover:border-white/15'
+        }`}
+      >
+        <div className="flex items-center gap-3 text-left">
+          <FlipHorizontal2 className={`w-5 h-5 shrink-0 ${flipEnabled ? 'text-acid' : 'text-white/30'}`} />
+          <div>
+            <p className={`text-sm font-black uppercase tracking-widest ${flipEnabled ? 'text-acid' : 'text-white/50'}`}>
+              Voltear · espejo
+            </p>
+            <p className="text-[11px] text-white/40 leading-snug">
+              Lo más efectivo contra la detección de Vinted. Ojo: logos y texto quedan al revés.
+            </p>
+          </div>
+        </div>
+        <span className={`shrink-0 px-3 py-1 rounded-lg text-xs font-black uppercase tracking-wider ${
+          flipEnabled ? 'bg-acid text-black' : 'bg-white/5 text-white/50'
+        }`}>
+          {flipEnabled ? 'ON' : 'OFF'}
+        </span>
+      </button>
+
+      {/* Modo NUCLEAR: CLIP adversarial verifier */}
+      <div className={`rounded-2xl border-2 p-4 transition-all ${
+        nuclearMode ? 'border-fuchsia-700 bg-fuchsia-950/40' : 'border-white/[0.08] bg-white/[0.02]'
+      }`}>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-3">
+            <Zap className={`w-5 h-5 ${nuclearMode ? 'text-fuchsia-400' : 'text-white/30'}`} />
+            <div>
+              <p className={`text-sm font-black uppercase tracking-widest ${nuclearMode ? 'text-fuchsia-400' : 'text-white/50'}`}>
+                Modo NUCLEAR · CLIP adversarial
+              </p>
+              <p className="text-[11px] text-white/40 leading-snug">
+                Genera hasta {ADV_MAX_TRIES} variantes y se queda con la que más lejos esté del original en el espacio de embeddings CLIP. <span className="text-white/30">Mismo modelo que usa Vinted.</span>
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={handleToggleNuclear}
+            disabled={clipLoading}
+            className={`px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider border-2 transition ${
+              nuclearMode
+                ? 'bg-fuchsia-500 border-fuchsia-400 text-black hover:bg-fuchsia-400'
+                : 'bg-white/5 border-white/10 text-white/50 hover:text-white hover:border-white/30'
+            } disabled:opacity-50`}
+          >
+            {clipLoading ? `Cargando ${Math.round(clipProgress)}%` : nuclearMode ? (clipReady ? 'ON' : 'Cargando…') : 'Activar'}
+          </button>
+        </div>
+        {clipLoading && (
+          <div className="mt-3 h-1.5 rounded-full bg-white/5 overflow-hidden">
+            <div className="h-full bg-fuchsia-500 transition-all" style={{ width: `${clipProgress}%` }} />
+          </div>
+        )}
+        {clipError && (
+          <p className="mt-2 text-[11px] text-red-400">⚠ {clipError}</p>
+        )}
+        {nuclearMode && clipReady && (
+          <p className="mt-2 text-[11px] text-fuchsia-300/80">
+            ✓ CLIP cargado. Cada imagen tardará ~3-6s. Objetivo: cosine ≥ {ADV_TARGET_DIST.toFixed(2)}.
+          </p>
+        )}
+      </div>
+
+      {/* Técnicas */}
+      <div className="bg-[#111] border border-white/[0.08] rounded-2xl p-5 space-y-3">
+        <p className="text-xs font-black uppercase tracking-widest text-white/50">
+          {techniques.length} técnicas aplicadas — nivel {cfg.label}
+        </p>
+        <div className="space-y-2.5">
+          {techniques.map((t, i) => (
+            <div key={i} className="flex gap-3">
+              <span className={`text-sm shrink-0 mt-0.5 ${activeMode === 'extremo' ? 'text-red-400' : 'text-acid'}`}>{t.icon}</span>
+              <p className="text-[12px] text-white/70 leading-snug">
+                <span className="font-bold text-white/90">{t.title}</span>
+                {t.detail ? ` — ${t.detail}` : ''}
+              </p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Drop Zone */}
       <div
         onDragOver={e => { e.preventDefault(); setDragging(true); }}
         onDragLeave={() => setDragging(false)}
@@ -1027,155 +997,11 @@ export default function ImageUniquifier() {
             <Upload className={`w-7 h-7 ${dragging ? 'text-acid' : 'text-white/40'}`} />
           </div>
           <div>
-            <p className="text-white font-semibold">Arrastra las fotos del producto aquí · o haz click</p>
-            <p className="text-white/40 text-sm mt-1">Cada foto se procesa con la configuración cíclica de abajo</p>
+            <p className="text-white font-semibold">Arrastra las fotos del producto aquí</p>
+            <p className="text-white/40 text-sm mt-1">Cada foto procesada es 100% única · Colores sin cambios</p>
           </div>
         </div>
       </div>
-
-      {/* Configuración de repost — tabla cíclica */}
-      <div className="bg-[#0f0f0f] border border-white/[0.08] rounded-2xl overflow-hidden">
-        <div
-          className={`p-5 flex items-center justify-between cursor-pointer select-none ${configsOpen ? 'pb-3 border-b border-white/5' : 'pb-5'}`}
-          onClick={() => setConfigsOpen(v => !v)}
-        >
-          <div>
-            <p className="text-xs font-black uppercase tracking-widest text-white/50">Configuración de modificaciones</p>
-            <p className="text-[11px] text-white/40 mt-1">Define varios sets — cada foto subida usa uno en orden cíclico</p>
-          </div>
-          {configsOpen
-            ? <ChevronUp className="w-4 h-4 text-white/30 shrink-0" />
-            : <ChevronDown className="w-4 h-4 text-white/30 shrink-0" />}
-        </div>
-
-        {configsOpen && (<>
-        {/* Header */}
-        <div className="hidden md:grid grid-cols-[40px_1fr_140px_140px_180px] gap-3 px-5 py-3 text-[10px] uppercase tracking-widest text-white/40 font-bold border-b border-white/5">
-          <div>#</div>
-          <div>Modificaciones</div>
-          <div>Editar título</div>
-          <div>Editar descripción</div>
-          <div>Acciones</div>
-        </div>
-
-        {/* Filas */}
-        <div className="divide-y divide-white/5">
-          {configs.map((c, idx) => {
-            const expanded = expandedRid === c.rid;
-            return (
-              <div key={c.rid}>
-                <div className="grid grid-cols-1 md:grid-cols-[40px_1fr_140px_140px_180px] gap-3 px-5 py-4 items-center">
-                  <div className="text-white/40 font-mono text-sm">{idx + 1}</div>
-
-                  <div className="text-[12px] text-white/80 leading-snug">
-                    {summarizeConfig(c)}
-                  </div>
-
-                  <select
-                    value={c.editTitle}
-                    onChange={e => updateConfig(c.rid, { editTitle: e.target.value as 'auto' | 'manual' })}
-                    className="bg-black border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 focus:border-acid focus:outline-none"
-                  >
-                    <option value="auto">✦ Auto</option>
-                    <option value="manual">✎ Manual</option>
-                  </select>
-
-                  <select
-                    value={c.editDescription}
-                    onChange={e => updateConfig(c.rid, { editDescription: e.target.value as 'auto' | 'manual' })}
-                    className="bg-black border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 focus:border-acid focus:outline-none"
-                  >
-                    <option value="auto">✦ Auto</option>
-                    <option value="manual">✎ Manual</option>
-                  </select>
-
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => setExpandedRid(expanded ? null : c.rid)}
-                      className="flex items-center gap-1.5 bg-acid-soft border border-acid/40 text-acid hover:bg-acid hover:text-black font-bold px-3 py-1.5 rounded-lg text-xs transition"
-                    >
-                      {expanded ? <ChevronUp className="w-3.5 h-3.5" /> : <Pencil className="w-3.5 h-3.5" />}
-                      Abrir editor
-                    </button>
-                    <button
-                      onClick={() => removeConfig(c.rid)}
-                      disabled={configs.length <= 1}
-                      className="flex items-center gap-1.5 bg-pink-500/20 border border-pink-400/30 text-pink-300 hover:bg-pink-500/40 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed font-bold px-3 py-1.5 rounded-lg text-xs transition"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      Eliminar
-                    </button>
-                  </div>
-                </div>
-
-                {/* Editor expandido inline */}
-                {expanded && (
-                  <div className="px-5 pb-5 pt-1 bg-black/30">
-                    <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                      <NumField label="Sesgar X" step={0.1} value={c.skewX ?? 0} onChange={v => updateConfig(c.rid, { skewX: v })} />
-                      <NumField label="Sesgar Y" step={0.1} value={c.skewY ?? 0} onChange={v => updateConfig(c.rid, { skewY: v })} />
-                      <NumField label="Rotar máx (°)" step={0.5} min={0} value={c.rotateDegMax} onChange={v => updateConfig(c.rid, { rotateDegMax: v })} />
-                      <NumField label="Marco vertical (%)" step={0.1} min={0} max={50} value={c.frameVPct ?? 0} onChange={v => updateConfig(c.rid, { frameVPct: v })} />
-                      <NumField label="Marco horizontal (%)" step={0.1} min={0} max={50} value={c.frameHPct ?? 0} onChange={v => updateConfig(c.rid, { frameHPct: v })} />
-                      <NumField label="Ruido por bloque" step={1} min={0} max={6} value={c.blockNoiseMax} onChange={v => updateConfig(c.rid, { blockNoiseMax: v })} />
-                      <NumField label="Brillo máx" step={1} min={0} max={20} value={c.brightMax} onChange={v => updateConfig(c.rid, { brightMax: v })} />
-                      <NumField label="JPEG calidad mín" step={0.01} min={0.5} max={1} value={c.qualityMin} onChange={v => updateConfig(c.rid, { qualityMin: v })} />
-                      <NumField label="JPEG calidad máx" step={0.01} min={0.5} max={1} value={c.qualityMax} onChange={v => updateConfig(c.rid, { qualityMax: v })} />
-                      <NumField label="Flip horizontal (0-1)" step={0.1} min={0} max={1} value={c.flipChance} onChange={v => updateConfig(c.rid, { flipChance: v })} />
-                      <label className="flex items-center gap-2 text-xs text-white/70 col-span-2 md:col-span-1">
-                        <input
-                          type="checkbox"
-                          checked={c.randomExif}
-                          onChange={e => updateConfig(c.rid, { randomExif: e.target.checked })}
-                          className="accent-acid"
-                        />
-                        EXIF aleatorio
-                      </label>
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Footer tabla */}
-        <div className="px-5 py-4 border-t border-white/5">
-          <button
-            onClick={addConfig}
-            className="flex items-center gap-2 bg-white/5 hover:bg-white/10 border border-white/10 text-white/70 hover:text-white font-bold px-4 py-2 rounded-xl text-xs transition"
-          >
-            <Plus className="w-4 h-4" />
-            Agregar configuración
-          </button>
-          <p className="text-[11px] text-white/40 mt-3">
-            Cada foto que subas usa una configuración. Al llegar a la última, vuelve a la primera.
-          </p>
-          <p className="text-[11px] text-acid mt-1">
-            Rotación activa: orden 1, 2, 3… y vuelve a 1.
-          </p>
-        </div>
-        </>)}
-      </div>
-
-      {configsOpen && (
-      <div className="flex gap-2 flex-wrap">
-        <button
-          onClick={randomizeConfigs}
-          className="flex items-center gap-2 bg-acid hover:bg-acid/90 text-black font-bold px-5 py-2.5 rounded-xl text-sm transition"
-        >
-          <Shuffle className="w-4 h-4" />
-          Aleatorio
-        </button>
-        <button
-          onClick={resetConfigs}
-          className="flex items-center gap-2 bg-pink-500/20 hover:bg-pink-500/40 border border-pink-400/30 text-pink-200 hover:text-white font-bold px-5 py-2.5 rounded-xl text-sm transition"
-        >
-          <RotateCcw className="w-4 h-4" />
-          Resetear formulario
-        </button>
-      </div>
-      )}
 
       {/* Barra acciones */}
       {images.length > 0 && (
@@ -1210,14 +1036,14 @@ export default function ImageUniquifier() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         <AnimatePresence>
           {images.map(img => {
-            const mc = MODES.find(m => m.id === img.mode) ?? MODES[1];
+            const mc = MODES.find(m => m.id === img.mode)!;
             return (
               <motion.div key={img.id}
                 initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9 }}
                 className="bg-[#141414] border border-white/5 rounded-2xl overflow-hidden">
                 <div className="relative aspect-square bg-black/40 flex items-center justify-center overflow-hidden">
                   {img.processedUrl
-                    ? <img src={img.processedUrl} alt={img.originalName} className="w-full h-full object-contain bg-black/60" />
+                    ? <img src={img.processedUrl} alt={img.originalName} className="w-full h-full object-cover" />
                     : img.status === 'processing'
                     ? <div className="flex flex-col items-center gap-3"><RefreshCcw className="w-8 h-8 animate-spin text-acid" /><span className="text-xs text-white/30">Procesando…</span></div>
                     : img.status === 'error'
@@ -1243,10 +1069,12 @@ export default function ImageUniquifier() {
                       <div className="flex justify-between text-[10px] text-acid"><span>Procesada</span><span className="font-mono">{formatSize(img.processedSize)}</span></div>
                       <div className="text-[10px] text-white/20 font-mono mt-1">{img.dimChange}</div>
                       <div className="text-[10px] text-white/20 font-mono">Bloques ±{img.noiseLevel} · Sin EXIF</div>
-                      {img.originalHashShort && img.hashShort && (
-                        <div className="mt-2 pt-2 border-t border-white/5 space-y-0.5">
-                          <div className="flex justify-between text-[10px] text-white/30 font-mono"><span>Hash original</span><span>{img.originalHashShort}</span></div>
-                          <div className="flex justify-between text-[10px] text-acid font-mono"><span>Hash nuevo ✓</span><span>{img.hashShort}</span></div>
+                      {typeof img.cosineDist === 'number' && (
+                        <div className={`flex justify-between text-[10px] font-mono mt-1 ${
+                          img.cosineDist >= ADV_TARGET_DIST ? 'text-fuchsia-400' : 'text-amber-400/80'
+                        }`}>
+                          <span>CLIP cosine {img.cosineDist >= ADV_TARGET_DIST ? '✓' : '⚠'}</span>
+                          <span>{img.cosineDist.toFixed(3)}{img.advAttempts ? ` · ${img.advAttempts} try` : ''}</span>
                         </div>
                       )}
                     </div>

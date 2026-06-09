@@ -553,6 +553,22 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
                       </td>
 
                       <td className="px-4 py-3">
+                        <button
+                          onClick={async () => {
+                            const newFeatures = hasAcademia ? ['photos'] : ['photos', 'academia'];
+                            await client.patch(`/api/admin/licenses/${l.id}/features`, { features: newFeatures });
+                            loadTab('licenses');
+                          }}
+                          className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-all ${
+                            hasAcademia
+                              ? 'bg-amber-500/10 border-amber-500/30 text-amber-400 hover:bg-amber-500/20'
+                              : 'bg-zinc-800 border-zinc-700 text-zinc-500 hover:border-zinc-500 hover:text-zinc-300'
+                          }`}
+                        >
+                          {hasAcademia ? '🎓 Academia' : '👻 Solo Fantasma'}
+                        </button>
+                      </td>
+                      <td className="px-4 py-3">
                         <span className={`text-xs font-medium ${l.is_active ? 'text-acid' : 'text-red-400'}`}>
                           {l.is_active ? 'Sí' : 'No'}
                         </span>

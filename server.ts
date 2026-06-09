@@ -750,6 +750,18 @@ async function startServer() {
     res.json(result.rows[0]);
   });
 
+  app.patch("/api/admin/licenses/:id/features", requireAdmin as any, async (req, res) => {
+    const { features } = req.body;
+    if (!Array.isArray(features)) return res.status(400).json({ error: "features debe ser un array" });
+    const clean: string[] = Array.from(new Set(['photos', ...features.map(String)]));
+    const result = await pool.query(
+      "UPDATE licenses SET features = $1 WHERE id = $2 RETURNING *",
+      [clean, req.params.id]
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: "Licencia no encontrada" });
+    res.json(result.rows[0]);
+  });
+
   app.get("/api/admin/sessions", requireAdmin as any, async (_req, res) => {
     const result = await pool.query(`
       SELECT s.*, u.username, u.email
