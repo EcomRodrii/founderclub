@@ -4471,6 +4471,107 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
     }
   });
 
+  // ── Fleet FASE 4: gestión de workers y cola desde el panel ──────────────────
+
+  // GET /api/fleet/jobs  (requireAuth) — lista jobs de la licencia (más recientes primero)
+  app.get("/api/fleet/jobs", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const lic = await getRosterLicense(req.user!.id);
+      if (!lic && !req.user!.is_admin) return res.json({ data: [] });
+      const limit = Math.min(parseInt(String(req.query.limit || "20"), 10) || 20, 100);
+      const { rows } = await pool.query(
+        `SELECT id, type, status, target_vinted_id, attempts, max_attempts,
+                error, created_at, updated_at
+         FROM fleet_jobs WHERE license_id = $1
+         ORDER BY created_at DESC LIMIT $2`,
+        [lic!.id, limit]
+      );
+      res.json({ data: rows });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST /api/fleet/worker/:id/pause  (requireAuth) — pausar un worker
+  app.post("/api/fleet/worker/:id/pause", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const lic = await getRosterLicense(req.user!.id);
+      if (!lic && !req.user!.is_admin) return res.status(403).json({ error: "licencia_requerida" });
+      const { rowCount } = await pool.query(
+        "UPDATE fleet_workers SET status='paused' WHERE id=$1 AND license_id=$2",
+        [req.params.id, lic!.id]
+      );
+      res.json({ ok: (rowCount ?? 0) > 0 });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST /api/fleet/worker/:id/resume  (requireAuth) — reanudar un worker pausado
+  app.post("/api/fleet/worker/:id/resume", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const lic = await getRosterLicense(req.user!.id);
+      if (!lic && !req.user!.is_admin) return res.status(403).json({ error: "licencia_requerida" });
+      const { rowCount } = await pool.query(
+        "UPDATE fleet_workers SET status='online', last_seen_at=NOW() WHERE id=$1 AND license_id=$2",
+        [req.params.id, lic!.id]
+      );
+      res.json({ ok: (rowCount ?? 0) > 0 });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // DELETE /api/fleet/worker/:id  (requireAuth) — eliminar un worker
+  // Si el worker sigue vivo se re-registra en el siguiente ciclo con un token nuevo.
+  app.delete("/api/fleet/worker/:id", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const lic = await getRosterLicense(req.user!.id);
+      if (!lic && !req.user!.is_admin) return res.status(403).json({ error: "licencia_requerida" });
+      const { rowCount } = await pool.query(
+        "DELETE FROM fleet_workers WHERE id=$1 AND license_id=$2",
+        [req.params.id, lic!.id]
+      );
+      res.json({ ok: (rowCount ?? 0) > 0 });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST /api/fleet/jobs/:id/cancel  (requireAuth) — cancelar un job en cola o fallido
+  app.post("/api/fleet/jobs/:id/cancel", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const lic = await getRosterLicense(req.user!.id);
+      if (!lic && !req.user!.is_admin) return res.status(403).json({ error: "licencia_requerida" });
+      const { rowCount } = await pool.query(
+        `UPDATE fleet_jobs SET status='canceled', updated_at=NOW()
+         WHERE id=$1 AND license_id=$2 AND status IN ('queued','failed')`,
+        [req.params.id, lic!.id]
+      );
+      res.json({ ok: (rowCount ?? 0) > 0 });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST /api/fleet/jobs/:id/retry  (requireAuth) — reintentar un job failed o cancelado
+  app.post("/api/fleet/jobs/:id/retry", requireAuth as any, async (req: AuthRequest, res: Response) => {
+    try {
+      const lic = await getRosterLicense(req.user!.id);
+      if (!lic && !req.user!.is_admin) return res.status(403).json({ error: "licencia_requerida" });
+      const { rowCount } = await pool.query(
+        `UPDATE fleet_jobs
+         SET status='queued', attempts=0, error=NULL,
+             run_after=NOW(), worker_id=NULL, lease_until=NULL, updated_at=NOW()
+         WHERE id=$1 AND license_id=$2 AND status IN ('failed','canceled')`,
+        [req.params.id, lic!.id]
+      );
+      res.json({ ok: (rowCount ?? 0) > 0 });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // ── Extension: server-side inventory fetch (Blackstock-style proxy) ─────────
   // The server fetches items from Vinted using the stored session_cookie,
   // so the extension never needs to call Vinted directly.
