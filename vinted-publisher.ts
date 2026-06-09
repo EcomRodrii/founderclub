@@ -303,19 +303,35 @@ export async function publishToVinted(
   try {
     // ── 1. Launch browser ───────────────────────────────────────────────────
     emit("start", "🚀 Iniciando Chrome...");
+    // En Railway (Linux) usamos el Chromium del sistema vía PUPPETEER_EXECUTABLE_PATH.
+    // Fallback: buscar chromium/google-chrome en PATH.
+    // En local (macOS/Windows) Puppeteer usa su Chrome bundled.
+    let executablePath: string | undefined = process.env.PUPPETEER_EXECUTABLE_PATH;
+    if (!executablePath && process.platform === "linux") {
+      const { execSync } = await import("child_process");
+      for (const bin of ["chromium", "chromium-browser", "google-chrome", "google-chrome-stable"]) {
+        try {
+          const p = execSync(`which ${bin} 2>/dev/null`).toString().trim();
+          if (p) { executablePath = p; break; }
+        } catch { /* not found */ }
+      }
+    }
+
     browser = await puppeteer.launch({
       headless: true,
+      ...(executablePath ? { executablePath } : {}),
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
         "--disable-gpu",
-        "--disable-background-networking",
-        "--disable-client-side-phishing-detection",
-        "--no-first-run",
+        "--single-process",
         "--no-zygote",
         "--disable-extensions",
         "--disable-default-apps",
+        "--disable-background-networking",
+        "--disable-client-side-phishing-detection",
+        "--no-first-run",
       ],
     });
 

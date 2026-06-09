@@ -1,0 +1,31 @@
+# Railway Nixpacks config — instala Chromium del sistema para Puppeteer
+[phases.setup]
+nixPkgs = [
+  "chromium",
+  "nss",
+  "nspr",
+  "cups",
+  "dbus",
+  "at-spi2-atk",
+  "at-spi2-core",
+  "cairo",
+  "pango",
+  "glib",
+  "xorg.libX11",
+  "xorg.libXcomposite",
+  "xorg.libXdamage",
+  "xorg.libXext",
+  "xorg.libXfixes",
+  "xorg.libXrandr",
+  "xorg.libxcb",
+  "mesa",
+  "expat",
+  "alsa-lib",
+  "libdrm",
+  "libxshmfence",
+  "wayland"
+]
+
+[variables]
+# Saltar descarga del Chrome bundled de Puppeteer (usamos el del sistema)
+PUPPETEER_SKIP_DOWNLOAD = "true"
