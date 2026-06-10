@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   Upload, Download, RefreshCcw, Trash2, Shuffle,
   ImageIcon, ZapOff, Images, CheckCircle2, X,
-  Sparkles, Palette,
+  Sparkles, Palette, Crown, MessageCircle,
 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -100,9 +100,37 @@ async function saveAll(
   }
 }
 
+// ─── Locked screen ────────────────────────────────────────────────────────────
+
+function LockedPro() {
+  return (
+    <div className="flex flex-col items-center justify-center min-h-[65vh] gap-6 text-center px-4">
+      <div className="w-16 h-16 rounded-2xl bg-yellow-500/10 border border-yellow-500/20 flex items-center justify-center">
+        <Crown className="w-7 h-7 text-yellow-400" />
+      </div>
+      <div>
+        <h2 className="text-xl font-bold text-[#f2f2ef]">Función exclusiva Pro</h2>
+        <p className="text-[#888880] mt-2 max-w-xs leading-relaxed">
+          La herramienta de <span className="text-yellow-400 font-semibold">Alfombras</span> solo está disponible para miembros <span className="text-yellow-400 font-semibold">Pro</span>.
+        </p>
+        <p className="text-[#888880] mt-1 text-sm">8,99€/mes · escríbeme para activarla</p>
+      </div>
+      <a
+        href="https://wa.me/message/XXXXXXXXX"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-2 bg-[#25D366] hover:bg-[#1eb857] text-white font-bold px-6 py-3 rounded-xl transition shadow-[0_12px_32px_-8px_rgba(37,211,102,0.35)]"
+      >
+        <MessageCircle className="w-4 h-4" />
+        Escribir al WhatsApp
+      </a>
+    </div>
+  );
+}
+
 // ─── Componente ───────────────────────────────────────────────────────────────
 
-export default function CarpetEditor({ token }: { token: string }) {
+export default function CarpetEditor({ token, isPro = false, isAdmin = false }: { token: string; isPro?: boolean; isAdmin?: boolean }) {
   const [jobs, setJobs]               = useState<CarpetJob[]>([]);
   const [carpetColor, setCarpetColor] = useState(CARPET_PRESETS[0].value);
   const [customColor, setCustomColor] = useState('');
@@ -247,6 +275,9 @@ export default function CarpetEditor({ token }: { token: string }) {
 
   const saveLabel    = IS_MOBILE ? 'Guardar' : 'Descargar';
   const saveAllLabel = IS_MOBILE ? 'Guardar en galería' : 'Descargar todas';
+
+  // Gate: usuarios sin Pro ni admin ven pantalla bloqueada
+  if (!isAdmin && !isPro) return <LockedPro />;
 
   return (
     <div className="space-y-6 pb-24 lg:pb-6">

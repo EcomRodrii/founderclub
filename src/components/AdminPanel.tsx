@@ -6,7 +6,7 @@ import {
   ToggleLeft, ToggleRight, Fingerprint, Globe, Clock,
   FileText, Save, Package, ImagePlus, Hash,
   Search, Ban, Unlock, KeyRound, BarChart3,
-  Database, Cpu, Zap, AlertTriangle, TrendingUp
+  Database, Cpu, Zap, AlertTriangle, TrendingUp, Crown
 } from 'lucide-react';
 
 interface AdminPanelProps {
@@ -104,6 +104,9 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
   // Block loading
   const [blockLoading, setBlockLoading] = useState<Record<number, boolean>>({});
 
+  // Rank loading
+  const [rankLoading, setRankLoading] = useState<Record<number, boolean>>({});
+
   // Password modal
   const [pwdModal, setPwdModal] = useState<{ userId: number; username: string } | null>(null);
   const [pwdValue, setPwdValue] = useState('');
@@ -193,6 +196,13 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
     setBlockLoading(prev => ({ ...prev, [userId]: true }));
     await client.patch(`/api/admin/users/${userId}/block`, { block });
     setBlockLoading(prev => ({ ...prev, [userId]: false }));
+    loadTab('users');
+  };
+
+  const setUserRank = async (userId: number, rank: 'normal' | 'pro') => {
+    setRankLoading(prev => ({ ...prev, [userId]: true }));
+    await client.patch(`/api/admin/users/${userId}/rank`, { rank });
+    setRankLoading(prev => ({ ...prev, [userId]: false }));
     loadTab('users');
   };
 
@@ -412,6 +422,7 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
                         <td className="px-4 py-3 font-medium">
                           {u.username}
                           {u.is_admin && <span className="ml-1 text-[10px] text-violet-400 border border-violet-500/30 rounded px-1">admin</span>}
+                          {u.rank === 'pro' && <span className="ml-1 text-[10px] text-yellow-400 border border-yellow-500/30 rounded px-1 inline-flex items-center gap-0.5"><Crown className="w-2.5 h-2.5" />Pro</span>}
                           {u.is_blocked && <span className="ml-1 text-[10px] text-red-400 border border-red-500/30 rounded px-1">bloqueado</span>}
                         </td>
                         <td className="px-4 py-3 text-zinc-400 text-xs">{u.email}</td>
@@ -450,6 +461,14 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
                               onClick={() => { setPwdModal({ userId: u.id, username: u.username }); setPwdValue(''); }}
                               className="text-zinc-500 hover:text-yellow-400 transition" title="Cambiar contraseña">
                               <KeyRound className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => setUserRank(u.id, u.rank === 'pro' ? 'normal' : 'pro')}
+                              disabled={rankLoading[u.id]}
+                              className={`transition ${u.rank === 'pro' ? 'text-yellow-400 hover:text-yellow-300' : 'text-zinc-500 hover:text-yellow-400'}`}
+                              title={u.rank === 'pro' ? 'Quitar Pro → Normal' : 'Dar rango Pro'}
+                            >
+                              <Crown className="w-4 h-4" />
                             </button>
                             <button
                               onClick={async () => { if (confirm(`¿Cerrar sesión de ${u.username}?`)) { await client.post(`/api/admin/users/${u.id}/force-logout`, {}); loadTab('users'); } }}

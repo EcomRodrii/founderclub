@@ -172,7 +172,10 @@ export default function App() {
     setAuthLoading(true);
     fetch('/api/auth/me', { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.json())
-      .then(data => { setLicense(data.license); })
+      .then(data => {
+        if (data.user) setAuthUser(data.user); // actualiza rank y otros campos frescos del servidor
+        setLicense(data.license);
+      })
       .finally(() => setAuthLoading(false));
   };
 
@@ -255,7 +258,7 @@ function Dashboard({
       case 'publish':    return <VintedAutoPublish token={token} />;
       case 'tongue':     return <TongueEditor />;
       case 'photos':     return <ImageUniquifier />;
-      case 'alfombras':  return <CarpetEditor token={token} />;
+      case 'alfombras':  return <CarpetEditor token={token} isPro={user?.rank === 'pro'} isAdmin={!!user?.is_admin} />;
       case 'settings':   return (
         <SettingsPage token={token} user={user} license={license} onLogout={onLogout} />
       );

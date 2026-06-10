@@ -63,7 +63,7 @@ const CONTROL_INVITE_CODE = process.env.CONTROL_INVITE_CODE || "lamine2024contro
 // ─── Auth Middleware ──────────────────────────────────────────────────────────
 
 interface AuthRequest extends Request {
-  user?: { id: number; username: string; email: string; is_admin: boolean };
+  user?: { id: number; username: string; email: string; is_admin: boolean; rank?: string };
 }
 
 async function requireAuth(req: AuthRequest, res: Response, next: NextFunction) {
@@ -74,7 +74,7 @@ async function requireAuth(req: AuthRequest, res: Response, next: NextFunction) 
 
     // ── Standard user JWT ──
     if (decoded.id) {
-      const result = await pool.query("SELECT id, username, email, is_admin, is_blocked, session_token FROM users WHERE id = $1", [decoded.id]);
+      const result = await pool.query("SELECT id, username, email, is_admin, is_blocked, rank, session_token FROM users WHERE id = $1", [decoded.id]);
       if (!result.rows[0]) return res.status(401).json({ error: "Usuario no encontrado" });
       if (result.rows[0].is_blocked) return res.status(403).json({ error: "Cuenta bloqueada. Contacta al administrador.", blocked: true });
 
@@ -263,6 +263,7 @@ async function startServer() {
   // ── Bloqueo de usuarios ───────────────────────────────────────────────────────
   await pool.query(`
     ALTER TABLE users ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN DEFAULT FALSE;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS rank VARCHAR(10) DEFAULT 'normal';
   `).catch(() => {});
 
   // ── Límite diario de generaciones ────────────────────────────────────────────
@@ -424,7 +425,7 @@ async function startServer() {
       const token = await mintSessionToken(user.id);
       res.json({
         ok: true, token,
-        user: { id: user.id, email: user.email, role: user.is_admin ? "admin" : "user" },
+        user: { id: user.id, email: user.email, role: user.is_admin ? "admin" : "user", is_admin: user.is_admin, rank: 'normal' },
         license: { status: "inactive" },
       });
     } catch (err: any) {
@@ -502,7 +503,7 @@ async function startServer() {
         const lic = licRes.rows[0];
         return res.json({
           ok: true, token,
-          user: { id: userRow.id, email: userRow.email, username: userRow.username, role: userRow.is_admin ? "admin" : "user" },
+          user: { id: userRow.id, email: userRow.email, username: userRow.username, role: userRow.is_admin ? "admin" : "user", is_admin: userRow.is_admin, rank: userRow.rank || 'normal' },
           license: { status: lic ? "active" : "inactive", type: lic?.type || null },
         });
       }
@@ -520,7 +521,7 @@ async function startServer() {
       const licenseStatus = (lic || userRow.is_admin) ? "active" : "inactive";
       res.json({
         ok: true, token,
-        user: { id: userRow.id, email: userRow.email, username: userRow.username, role: userRow.is_admin ? "admin" : "user" },
+        user: { id: userRow.id, email: userRow.email, username: userRow.username, role: userRow.is_admin ? "admin" : "user", is_admin: userRow.is_admin, rank: userRow.rank || 'normal' },
         license: { status: licenseStatus, type: lic?.type || (userRow.is_admin ? "admin" : null) },
       });
     } catch (err: any) {
@@ -567,7 +568,7 @@ async function startServer() {
     logActivity(user.id, "login", ip);
     res.json({
       token,
-      user: { id: user.id, username: user.username, email: user.email, is_admin: user.is_admin },
+      user: { id: user.id, username: user.username, email: user.email, is_admin: user.is_admin, rank: user.rank || 'normal' },
     });
   });
 
@@ -589,7 +590,7 @@ async function startServer() {
       allowed: true,
       status:  'active',
       role:    user.is_admin ? 'admin' : 'user',
-      user:    { id: user.id, username: user.username, email: user.email, is_admin: user.is_admin },
+      user:    { id: user.id, username: user.username, email: user.email, is_admin: user.is_admin, rank: user.rank || 'normal' },
       license: lic ? { type: lic.type, expires_at: lic.expires_at } : { type: 'admin', expires_at: null },
     });
   });
@@ -718,6 +719,19 @@ async function startServer() {
     );
     if (!result.rows[0]) return res.status(404).json({ error: "Usuario no encontrado" });
     res.json({ ok: true, username: result.rows[0].username });
+  });
+
+  // ── Cambiar rango de usuario (admin) ──────────────────────────────────────────
+  app.patch("/api/admin/users/:id/rank", requireAdmin as any, async (req, res) => {
+    const { rank } = req.body; // 'normal' | 'pro'
+    if (!['normal', 'pro'].includes(rank))
+      return res.status(400).json({ error: "Rango inválido. Usa 'normal' o 'pro'" });
+    const result = await pool.query(
+      "UPDATE users SET rank=$1 WHERE id=$2 RETURNING id, username, rank",
+      [rank, req.params.id]
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: "Usuario no encontrado" });
+    res.json(result.rows[0]);
   });
 
   // ── Usage diario del usuario autenticado ──────────────────────────────────────
@@ -3405,6 +3419,14 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
   // Recibe foto(s) de producto + referencia de alfombra opcional + color deseado.
   // Devuelve la imagen editada con la alfombra cambiada, producto intacto.
   app.post("/api/carpet/generate", geminiLimiter, requireLicense as any, checkDailyLimit as any, async (req: AuthRequest, res) => {
+    // ── Gate: solo admins y usuarios Pro ───────────────────────────────────────
+    if (!req.user?.is_admin && req.user?.rank !== 'pro') {
+      return res.status(403).json({
+        error: "Esta función es exclusiva para usuarios Pro.\n\nEscríbeme al WhatsApp para activarla — 8,99€/mes.",
+        pro_required: true,
+      });
+    }
+
     const { imageBase64, carpetColor, referenceBase64 } = req.body;
     if (!imageBase64) return res.status(400).json({ error: "Falta la imagen del producto" });
 
