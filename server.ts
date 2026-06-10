@@ -2089,7 +2089,7 @@ async function startServer() {
 
 IMPORTANTE: queremos el TOTAL del lote y el TOTAL de unidades, NO el precio unitario. Si la factura tiene varios productos diferentes, suma TODO. Si no encuentras un campo pon null. NO inventes datos. Si la factura no parece de compra de productos físicos, devuelve { "error": "No es factura de compra de producto" }.`;
 
-    const MODELS = ["gemini-2.5-flash", "gemini-1.5-pro", "gemini-1.5-flash"];
+    const MODELS = ["gemini-2.5-flash", "gemini-2.5-pro"];
     let lastError = "";
     try {
       for (const model of MODELS) {
