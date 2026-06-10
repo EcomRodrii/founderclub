@@ -155,16 +155,7 @@ const DAILY_FREE_LIMIT = 10;
 async function checkDailyLimit(req: AuthRequest, res: Response, next: NextFunction) {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: "No autenticado" });
-  if (req.user?.is_admin) return next(); // admins sin límite
-
-  // Licencia activa monthly/lifetime → sin límite
-  const lic = await pool.query(
-    `SELECT type FROM licenses
-     WHERE user_id=$1 AND is_active=TRUE AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1`,
-    [userId]
-  ).catch(() => ({ rows: [] as any[] }));
-  const licType = lic.rows[0]?.type;
-  if (licType === "monthly" || licType === "lifetime") return next();
+  if (req.user?.is_admin) return next(); // solo admins sin límite
 
   // Leer contador actual del día
   const cur = await pool.query(
@@ -732,15 +723,11 @@ async function startServer() {
   // ── Usage diario del usuario autenticado ──────────────────────────────────────
   app.get("/api/usage/today", requireAuth as any, async (req: AuthRequest, res) => {
     const userId = req.user!.id;
-    const [usageRes, licRes] = await Promise.all([
-      pool.query("SELECT count FROM daily_usage WHERE user_id=$1 AND usage_date=CURRENT_DATE", [userId]),
-      pool.query(
-        "SELECT type FROM licenses WHERE user_id=$1 AND is_active=TRUE AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1",
-        [userId]
-      ),
-    ]);
-    const licType = licRes.rows[0]?.type;
-    const unlimited = req.user?.is_admin || licType === "monthly" || licType === "lifetime";
+    const usageRes = await pool.query(
+      "SELECT count FROM daily_usage WHERE user_id=$1 AND usage_date=CURRENT_DATE",
+      [userId]
+    );
+    const unlimited = req.user?.is_admin === true;
     res.json({
       used:      Number(usageRes.rows[0]?.count || 0),
       limit:     unlimited ? null : DAILY_FREE_LIMIT,
