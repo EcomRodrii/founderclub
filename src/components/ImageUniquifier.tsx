@@ -3,229 +3,88 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   Upload, Download, Image as ImageIcon,
   CheckCircle2, RefreshCcw, Trash2, Shuffle,
-  ZapOff, Images, Zap, FlipHorizontal2
+  ZapOff, Images
 } from 'lucide-react';
 
-// ─── Cómo detecta Vinted duplicados ──────────────────────────────────────────
+// ─── Config única ────────────────────────────────────────────────────────────
 //
-// PASO 1 — pHash (perceptual hash):
-//   Reduce la imagen a 32×32 gris, aplica DCT, hashea coeficientes.
-//   Hamming distance < 10 bits = "duplicado".
-//   Se rompe con: crop+resize (cambia toda la estructura espacial).
-//
-// PASO 2 — CNN embedding (modelo de IA tipo ResNet/EfficientNet fashion):
-//   Extrae vector de 512-2048 dimensiones. Cosine similarity > 0.85 = duplicado.
-//   Lo que hace el modelo: divide la imagen en PARCHES (patches) y extrae
-//   características locales de cada parche (textura, forma, color local).
-//   Se rompe con: ruido por bloques independientes — cada parche de la CNN
-//   ve estadísticas diferentes aunque el ojo humano no note nada.
-//
-// PASO 3 — Color histogram:
-//   Compara distribución global de colores. MUY rápido, poco eficaz.
-//   → NO hace falta rotar hue (eso cambia colores visiblemente).
-//   Se rompe con: variación de brillo por bloques (cambia histograma local).
-//
-// SOLUCIÓN invisible:
-//   1. Crop+resize pequeño (1-5%)  → derrota pHash completamente.
-//   2. Ruido por bloques NxN independiente (±3-5 por bloque) → derrota CNN.
-//   3. Ondulación sinusoidal por filas (±1-2px) → cambia layout espacial.
-//   4. Variación JPEG quality → artefactos de compresión únicos.
-//   ★ SIN rotación de color → la foto queda visualmente idéntica.
+// Técnicas aplicadas (todas sub-visuales):
+//  🎯 Flip horizontal 50%    — embedding CNN completamente distinto
+//  🎯 EXIF aleatorio realista — iPhone/Samsung/Pixel + fecha + ISO + focal
+//  ✓  Crop simétrico 3-8%    — porcentaje TOTAL repartido en 4 bordes iguales
+//  ✓  Aspect ratio ±2%       — variación mínima de proporciones
+//  ✓  Perspective warp ±5px  — esquinas levemente desplazadas hacia dentro
+//  ✓  Ruido por bloques 16×16— estadísticas por parche distintas, invisible
+//  ✓  Ondulación sinusoidal ±1px — layout espacial único
+//  ✓  Micro-rotación ±0.3°   — sub-milimétrica
+//  ✓  Brillo + gradiente ±3  — sub-visual, sin cambio de color
+//  ✓  JPEG variable 87-93%   — artefactos de compresión únicos
 
-type Mode = 'suave' | 'normal' | 'fuerte' | 'extremo';
+const CFG = {
+  // Crop simétrico: % TOTAL del ancho/alto, dividido en 4 bordes iguales.
+  // 3% total → 1.5% por borde → en 800px = 12px por lado. Apenas visible.
+  // 8% total → 4% por borde  → en 800px = 32px por lado. Sigue presentable.
+  cropPctMin: 3.0,
+  cropPctMax: 8.0,
 
-interface ModeConfig {
-  id: Mode; label: string; desc: string;
-  // Trim de bordes (px)
-  trimMin: number; trimMax: number;
-  // Crop+resize (% de cada lado) → rompe pHash
-  cropPctMin: number; cropPctMax: number;
-  // Ruido global por canal (muy pequeño, base)
-  pixelNoiseMax: number;
-  // Ruido por bloque NxN independiente → rompe CNN patches
-  blockNoiseMax: number;
-  blockSize: number;
-  // Ondulación sinusoidal por filas (px) → cambia layout espacial
-  lineWarpMax: number;
-  // Brillo global leve (invisible)
-  brightMax: number;
-  // Gradiente muy sutil corner-to-corner (invisible)
-  gradientMax: number;
-  // Micro-rotación geométrica
-  rotateDegMax: number;
-  // Calidad JPEG
-  qualityMin: number; qualityMax: number;
-  // Probabilidad 0..1 de flip horizontal (espejo) → rompe embedding CNN entero
-  flipChance: number;
-  // Variación máxima de aspect ratio (0.04 = ±4% en cada eje)
-  aspectStretchMax: number;
-  // Desplazamiento máximo de cada esquina (px) para perspective warp → rompe SIFT
-  perspectiveMax: number;
-  // Shift de color del fondo detectado (±/canal RGB) → elimina keypoints estables
-  bgShiftMax: number;
-  // Distancia RGB para considerar un pixel "fondo" (similar a las esquinas)
-  bgTolerance: number;
-  // Amplitud de overlay de ruido baja-frecuencia → añade keypoints fake
-  textureAmp: number;
-  // Off-center crop: si > 0, recorta una ventana de (min..max) fracción del original
-  // y la posiciona aleatoriamente (no centrada). Cambia qué patches dominan el ViT.
-  offCenterKeepMin: number;
-  offCenterKeepMax: number;
-  // Tone curve S-shape amplitude (0..30). Curva no-lineal por canal RGB.
-  toneCurveAmp: number;
-  // Probabilidad 0..1 de superponer un distractor (mano/percha/sticker).
-  // Añade un concepto semántico nuevo al embedding CLIP.
-  distractorChance: number;
-  // Si true, inyecta EXIF aleatorio realista (cámara, fecha, ISO, focal…).
-  // Hace que la foto parezca tomada con móvil en vez de JPEG limpio.
-  randomExif: boolean;
-}
+  // Ruido por bloques 16×16 ±2 (invisible al ojo humano)
+  blockNoiseMax: 2,
+  blockSize: 16,
 
-const MODES: ModeConfig[] = [
-  {
-    id: 'suave', label: 'SUAVE',
-    desc: 'Foto visualmente idéntica. Cambia solo el hash binario.',
-    trimMin: 1, trimMax: 2,
-    cropPctMin: 0.3, cropPctMax: 1.0,
-    pixelNoiseMax: 1,
-    blockNoiseMax: 1, blockSize: 24,
-    lineWarpMax: 0,
-    brightMax: 0,
-    gradientMax: 0,
-    rotateDegMax: 0,
-    qualityMin: 0.94, qualityMax: 0.97,
-    flipChance: 0,
-    aspectStretchMax: 0,
-    perspectiveMax: 0,
-    bgShiftMax: 0,
-    bgTolerance: 0,
-    textureAmp: 0,
-    offCenterKeepMin: 0,
-    offCenterKeepMax: 0,
-    toneCurveAmp: 0,
-    distractorChance: 0,
-    randomExif: false,
-  },
-  {
-    id: 'normal', label: 'NORMAL',
-    desc: 'Equilibrio perfecto. Recomendado para uso diario.',
-    trimMin: 1, trimMax: 3,
-    cropPctMin: 1.0, cropPctMax: 3.0,
-    pixelNoiseMax: 1,
-    blockNoiseMax: 2, blockSize: 18,
-    lineWarpMax: 0,
-    brightMax: 3,
-    gradientMax: 0,
-    rotateDegMax: 0,
-    qualityMin: 0.90, qualityMax: 0.94,
-    flipChance: 0,
-    aspectStretchMax: 0,
-    perspectiveMax: 0,
-    bgShiftMax: 0,
-    bgTolerance: 0,
-    textureAmp: 0,
-    offCenterKeepMin: 0,
-    offCenterKeepMax: 0,
-    toneCurveAmp: 0,
-    distractorChance: 0,
-    randomExif: false,
-  },
-  {
-    id: 'fuerte', label: 'FUERTE',
-    desc: 'Invisible al ojo. Rompe pHash + embedding CNN.',
-    trimMin: 2, trimMax: 4,
-    cropPctMin: 2.0, cropPctMax: 5.0,
-    pixelNoiseMax: 2,
-    blockNoiseMax: 3, blockSize: 14,
-    lineWarpMax: 1,
-    brightMax: 4,
-    gradientMax: 4,
-    rotateDegMax: 0.5,
-    qualityMin: 0.86, qualityMax: 0.92,
-    flipChance: 0,
-    aspectStretchMax: 0.015,
-    perspectiveMax: 3,
-    bgShiftMax: 0,
-    bgTolerance: 0,
-    textureAmp: 0,
-    offCenterKeepMin: 0,
-    offCenterKeepMax: 0,
-    toneCurveAmp: 0,
-    distractorChance: 0,
-    randomExif: false,
-  },
-  {
-    id: 'extremo', label: 'EXTREMO',
-    desc: 'Flip horizontal + EXIF aleatorio + crop sutil. Presentable y discreto.',
-    trimMin: 2, trimMax: 4,
-    cropPctMin: 3, cropPctMax: 8,
-    pixelNoiseMax: 2,
-    blockNoiseMax: 2, blockSize: 16,
-    lineWarpMax: 1,
-    brightMax: 3,
-    gradientMax: 3,
-    rotateDegMax: 0.3,
-    qualityMin: 0.87, qualityMax: 0.93,
-    flipChance: 0.5,
-    aspectStretchMax: 0.02,
-    perspectiveMax: 5,
-    bgShiftMax: 0,        // Off — cambiaba el fondo de color
-    bgTolerance: 0,
-    textureAmp: 0,        // Off — añadía granulado visible
-    offCenterKeepMin: 0,  // Off — encuadre off-center quedaba raro
-    offCenterKeepMax: 0,
-    toneCurveAmp: 0,      // Off — alteraba color del producto
-    distractorChance: 0,  // Off — emoji muy visible
-    randomExif: true,     // On — EXIF aleatorio realista
-  },
-];
+  // Sinusoidal ±1px (desplazamiento sub-píxel en pantalla normal)
+  lineWarpMax: 1,
 
-const TECHNIQUES: Record<Mode, { icon: string; title: string; detail: string }[]> = {
-  suave: [
-    { icon: '✓', title: 'Crop + resize mínimo', detail: 'Recorta 0.5-1.5% de bordes y reescala. pHash completamente diferente.' },
-    { icon: '✓', title: 'Ruido por bloques', detail: 'Bloques 16×16 con offset independiente ±2. Parches CNN diferentes.' },
-    { icon: '✓', title: 'Ruido global sub-visual', detail: '±1px por canal. MD5/SHA únicos. El ojo no lo ve.' },
-    { icon: '✓', title: 'JPEG variable', detail: 'Calidad 93-96%. Artefactos de compresión únicos.' },
-    { icon: '✓', title: 'Sin EXIF', detail: 'GPS, fecha, cámara, software. Todo eliminado.' },
-  ],
-  normal: [
-    { icon: '✓', title: 'Crop + resize', detail: 'Recorta 1-3% y reescala. Destruye pHash. Invisible a ojo.' },
-    { icon: '✓', title: 'Ruido por bloques 16×16', detail: 'Cada patch de la CNN ve estadísticas distintas. ±3 por bloque.' },
-    { icon: '✓', title: 'Ondulación por filas ±1px', detail: 'Desplaza cada fila ±1px sinusoidal. Layout espacial único.' },
-    { icon: '✓', title: 'Brillo micro-variación', detail: '±4 uniforme. Barely visible.' },
-    { icon: '✓', title: 'JPEG variable', detail: 'Calidad 88-93%. Hash binario único.' },
-    { icon: '✓', title: 'Sin EXIF', detail: 'Todos los metadatos eliminados.' },
-  ],
-  fuerte: [
-    { icon: '✓', title: 'Crop + resize 2-5%', detail: 'Recorte asimétrico y reescalado. pHash hamming distance máxima.' },
-    { icon: '✓', title: 'Ruido por bloques 12×12', detail: 'Bloques más pequeños = más parches afectados. Embedding CNN falla.' },
-    { icon: '✓', title: 'Ondulación sinusoidal por filas', detail: 'Cada fila desplazada ±1px. Frecuencia y fase aleatorias.' },
-    { icon: '✓', title: 'Micro-rotación ±0.4°', detail: 'Invisible. Cambia coordenadas de cada píxel.' },
-    { icon: '✓', title: 'Gradiente ultra-sutil', detail: '±6 corner-to-corner. Indetectable visualmente.' },
-    { icon: '✓', title: 'Ruido global ±3px', detail: 'Por canal RGB. MD5/SHA únicos.' },
-    { icon: '✓', title: 'JPEG variable 83-90%', detail: 'Artefactos de cuantización únicos por imagen.' },
-    { icon: '✓', title: 'Sin EXIF', detail: 'Todos los metadatos eliminados.' },
-  ],
-  extremo: [
-    { icon: '🎯', title: 'Flip horizontal 50% prob', detail: 'Espejo aleatorio. Cambia el embedding sin alterar la imagen del producto.' },
-    { icon: '🎯', title: 'EXIF aleatorio realista', detail: 'iPhone/Samsung/Pixel reales + fecha + ISO + focal. La foto parece tomada con móvil.' },
-    { icon: '✓', title: 'Crop sutil 3-8%', detail: 'Recorte simétrico moderado + reescalado. Encuadre presentable.' },
-    { icon: '✓', title: 'Aspect ratio ±2%', detail: 'Variación mínima de proporciones, imperceptible.' },
-    { icon: '✓', title: 'Perspective warp ±5px', detail: 'Esquinas levemente desplazadas. Geometría única por imagen.' },
-    { icon: '✓', title: 'Ruido por bloques 16×16', detail: 'Cada parche del ViT ve estadísticas distintas, invisible al ojo.' },
-    { icon: '✓', title: 'Ondulación sinusoidal ±1px', detail: 'Layout espacial único por imagen.' },
-    { icon: '✓', title: 'Micro-rotación ±0.3°', detail: 'Submilimétrica, invisible.' },
-    { icon: '✓', title: 'Brillo + gradiente ±3', detail: 'Sub-visual.' },
-    { icon: '✓', title: 'JPEG variable 87-93%', detail: 'Calidad alta, artefactos únicos.' },
-  ],
+  // Micro-rotación ±0.3°
+  rotateDegMax: 0.3,
+
+  // Brillo ±3 y gradiente ±3 (sub-visual, sin tinte de color)
+  brightMax: 3,
+  gradientMax: 3,
+
+  // JPEG 87-93%
+  qualityMin: 0.87,
+  qualityMax: 0.93,
+
+  // Flip horizontal 50% (cambia el embedding CNN por completo)
+  flipChance: 0.5,
+
+  // Aspect ratio ±2%
+  aspectStretchMax: 0.02,
+
+  // Perspective warp ±5px hacia dentro (NO crea bordes negros)
+  perspectiveMax: 5,
+
+  // EXIF aleatorio (metadata pura, cero cambio visual)
+  randomExif: true,
+
+  // Deshabilitado: ruido per-pixel (visible), bgShift (cambia colores), texturas, distractores
+  trimMin: 0, trimMax: 0,
+  pixelNoiseMax: 0,
+  bgShiftMax: 0, bgTolerance: 0,
+  textureAmp: 0,
+  offCenterKeepMin: 0, offCenterKeepMax: 0,
+  toneCurveAmp: 0,
+  distractorChance: 0,
 };
+
+const TECHNIQUES = [
+  { icon: '🎯', title: 'Flip horizontal 50%', detail: 'Espejo aleatorio. Embedding CNN completamente distinto.' },
+  { icon: '🎯', title: 'EXIF aleatorio realista', detail: 'iPhone/Samsung/Pixel + fecha + ISO + focal. Parece tomada con móvil.' },
+  { icon: '✓',  title: 'Crop simétrico 3-8%', detail: 'Recorte en los 4 bordes por igual. Encuadre preservado.' },
+  { icon: '✓',  title: 'Aspect ratio ±2%', detail: 'Variación mínima de proporciones, imperceptible.' },
+  { icon: '✓',  title: 'Perspective warp ±5px', detail: 'Esquinas desplazadas hacia dentro. Geometría única.' },
+  { icon: '✓',  title: 'Ruido por bloques 16×16', detail: 'Cada parche del ViT ve estadísticas distintas, invisible al ojo.' },
+  { icon: '✓',  title: 'Ondulación sinusoidal ±1px', detail: 'Layout espacial único por imagen.' },
+  { icon: '✓',  title: 'Micro-rotación ±0.3°', detail: 'Sub-milimétrica, invisible.' },
+  { icon: '✓',  title: 'Brillo + gradiente ±3', detail: 'Sub-visual. Sin cambio de color.' },
+  { icon: '✓',  title: 'JPEG variable 87-93%', detail: 'Artefactos de compresión únicos.' },
+];
 
 // ─── Motor principal ──────────────────────────────────────────────────────────
 
 async function uniquifyImage(
-  file: File,
-  cfg: ModeConfig
-): Promise<{ dataUrl: string; noiseLevel: number; dimChange: string; size: number }> {
+  file: File
+): Promise<{ dataUrl: string; dimChange: string; size: number }> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -237,59 +96,42 @@ async function uniquifyImage(
 
         const IW = img.width, IH = img.height;
 
-        // ── 1. Crop (derrota pHash, y opcionalmente CLIP via re-encuadre) ─
+        // ── 1. Crop SIMÉTRICO (derrota pHash) ────────────────────────────
+        // totalPct = % total del ancho/alto a recortar, repartido en 4 bordes iguales.
+        // Ej: totalPct=0.06 → cx = 3% del ancho por cada lado → producto centrado.
         let srcX = 0, srcY = 0, srcW = IW, srcH = IH;
-        if (cfg.offCenterKeepMin > 0 && cfg.offCenterKeepMax > 0) {
-          // Off-center: ventana de tamaño (keepMin..keepMax) colocada en pos aleatoria.
-          // Cambia qué patches dominan el ViT de CLIP → embedding diferente.
-          const rW = rnd(cfg.offCenterKeepMin, cfg.offCenterKeepMax);
-          const rH = rnd(cfg.offCenterKeepMin, cfg.offCenterKeepMax);
-          srcW = Math.max(1, Math.floor(IW * rW));
-          srcH = Math.max(1, Math.floor(IH * rH));
-          srcX = rndI(0, IW - srcW);
-          srcY = rndI(0, IH - srcH);
-        } else if (cfg.cropPctMax > 0) {
-          // Crop simétrico clásico: recorta X% de bordes y reescala.
-          const pct  = rnd(cfg.cropPctMin, cfg.cropPctMax) / 100;
-          const maxX = Math.floor(IW * pct);
-          const maxY = Math.floor(IH * pct);
-          srcX = rndI(0, maxX);
-          srcY = rndI(0, maxY);
-          srcW = IW - srcX - rndI(0, maxX - srcX < 0 ? 0 : maxX - srcX);
-          srcH = IH - srcY - rndI(0, maxY - srcY < 0 ? 0 : maxY - srcY);
-          srcW = Math.max(srcW, Math.floor(IW * 0.85));
-          srcH = Math.max(srcH, Math.floor(IH * 0.85));
+        {
+          const totalPct = rnd(CFG.cropPctMin, CFG.cropPctMax) / 100;
+          const cx = Math.floor(IW * totalPct / 2);
+          const cy = Math.floor(IH * totalPct / 2);
+          srcX = cx; srcY = cy;
+          srcW = Math.max(IW - cx * 2, 1);
+          srcH = Math.max(IH - cy * 2, 1);
         }
 
-        // ── 2. Dimensiones finales (trim adicional + aspect stretch) ──────
-        const trimW = rndI(cfg.trimMin, cfg.trimMax);
-        const trimH = rndI(cfg.trimMin, cfg.trimMax);
-        let W = Math.max(srcW - trimW, 1);
-        let H = Math.max(srcH - trimH, 1);
-
-        // Aspect ratio: estira ancho y alto independientes (cambia proporciones).
-        if (cfg.aspectStretchMax > 0) {
-          const wS = 1 + rnd(-cfg.aspectStretchMax, cfg.aspectStretchMax);
-          const hS = 1 + rnd(-cfg.aspectStretchMax, cfg.aspectStretchMax);
+        // ── 2. Dimensiones finales con aspect stretch ─────────────────────
+        let W = srcW, H = srcH;
+        if (CFG.aspectStretchMax > 0) {
+          const wS = 1 + rnd(-CFG.aspectStretchMax, CFG.aspectStretchMax);
+          const hS = 1 + rnd(-CFG.aspectStretchMax, CFG.aspectStretchMax);
           W = Math.max(1, Math.round(W * wS));
           H = Math.max(1, Math.round(H * hS));
         }
 
-        // Flip horizontal aleatorio: la bala de plata contra embeddings CNN.
-        const flipH = Math.random() < (cfg.flipChance || 0);
+        // ── 3. Flip + micro-rotación ──────────────────────────────────────
+        const flipH = Math.random() < CFG.flipChance;
 
         const canvas = document.createElement('canvas');
         canvas.width = W; canvas.height = H;
         const ctx = canvas.getContext('2d')!;
 
-        // ── 3. Flip + micro-rotación (opcional) ───────────────────────────
         ctx.save();
         if (flipH) {
           ctx.translate(W, 0);
           ctx.scale(-1, 1);
         }
-        if (cfg.rotateDegMax > 0) {
-          const angle = rnd(-cfg.rotateDegMax, cfg.rotateDegMax) * Math.PI / 180;
+        if (CFG.rotateDegMax > 0) {
+          const angle = rnd(-CFG.rotateDegMax, CFG.rotateDegMax) * Math.PI / 180;
           const cos = Math.cos(angle), sin = Math.sin(angle);
           const scale = 1 / (Math.abs(cos) + Math.abs(sin));
           ctx.translate(W / 2, H / 2);
@@ -300,15 +142,9 @@ async function uniquifyImage(
         ctx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, W, H);
         ctx.restore();
 
-        // ── 3b. Perspective warp (derrota SIFT/ORB) ───────────────────────
-        // Bilinear quad warp: cada esquina se desplaza independientemente.
-        // SIFT/ORB son invariantes a rotación y escala, pero NO a perspectiva.
-        // Cambia las coordenadas geométricas de cada keypoint → no matchea.
-        if (cfg.perspectiveMax > 0) {
-          const pAmp = cfg.perspectiveMax;
-          // Esquinas desplazadas SOLO hacia dentro: la zona muestreada queda
-          // siempre DENTRO de la imagen, así no se clampean los bordes y NO
-          // aparece el "marco" distorsionado. Mantiene la unicidad geométrica.
+        // ── 4. Perspective warp (esquinas hacia DENTRO, sin bordes negros) ─
+        {
+          const pAmp = CFG.perspectiveMax;
           const dTLx = rnd(0, pAmp),  dTLy = rnd(0, pAmp);
           const dTRx = rnd(-pAmp, 0), dTRy = rnd(0, pAmp);
           const dBLx = rnd(0, pAmp),  dBLy = rnd(-pAmp, 0);
@@ -322,286 +158,109 @@ async function uniquifyImage(
             const inv1v = 1 - v;
             for (let x = 0; x < W; x++) {
               const u = wm1 > 0 ? x / wm1 : 0;
-              const w00 = (1 - u) * inv1v;
-              const w10 = u * inv1v;
-              const w01 = (1 - u) * v;
-              const w11 = u * v;
-              const sx = x + w00 * dTLx + w10 * dTRx + w01 * dBLx + w11 * dBRx;
-              const sy = y + w00 * dTLy + w10 * dTRy + w01 * dBLy + w11 * dBRy;
-
+              const w00 = (1 - u) * inv1v, w10 = u * inv1v;
+              const w01 = (1 - u) * v,     w11 = u * v;
+              const sx = x + w00*dTLx + w10*dTRx + w01*dBLx + w11*dBRx;
+              const sy = y + w00*dTLy + w10*dTRy + w01*dBLy + w11*dBRy;
               const fxi = Math.floor(sx), fyi = Math.floor(sy);
-              const x0 = fxi < 0 ? 0 : (fxi > wm1 ? wm1 : fxi);
-              const y0 = fyi < 0 ? 0 : (fyi > hm1 ? hm1 : fyi);
-              const x1 = x0 < wm1 ? x0 + 1 : wm1;
-              const y1 = y0 < hm1 ? y0 + 1 : hm1;
-              const fx = sx - fxi < 0 ? 0 : (sx - fxi > 1 ? 1 : sx - fxi);
-              const fy = sy - fyi < 0 ? 0 : (sy - fyi > 1 ? 1 : sy - fyi);
+              const x0 = Math.max(0, Math.min(fxi, wm1));
+              const y0 = Math.max(0, Math.min(fyi, hm1));
+              const x1 = Math.min(x0 + 1, wm1);
+              const y1 = Math.min(y0 + 1, hm1);
+              const fx = Math.max(0, Math.min(sx - fxi, 1));
+              const fy = Math.max(0, Math.min(sy - fyi, 1));
               const ifx = 1 - fx, ify = 1 - fy;
-
-              const i00 = (y0 * W + x0) * 4;
-              const i10 = (y0 * W + x1) * 4;
-              const i01 = (y1 * W + x0) * 4;
-              const i11 = (y1 * W + x1) * 4;
-              const di = (y * W + x) * 4;
-
-              dd[di]     = (sd[i00]   * ifx + sd[i10]   * fx) * ify + (sd[i01]   * ifx + sd[i11]   * fx) * fy;
-              dd[di + 1] = (sd[i00+1] * ifx + sd[i10+1] * fx) * ify + (sd[i01+1] * ifx + sd[i11+1] * fx) * fy;
-              dd[di + 2] = (sd[i00+2] * ifx + sd[i10+2] * fx) * ify + (sd[i01+2] * ifx + sd[i11+2] * fx) * fy;
-              dd[di + 3] = 255;
+              const i00 = (y0*W+x0)*4, i10 = (y0*W+x1)*4;
+              const i01 = (y1*W+x0)*4, i11 = (y1*W+x1)*4;
+              const di  = (y*W+x)*4;
+              dd[di]   = (sd[i00]  *ifx + sd[i10]  *fx)*ify + (sd[i01]  *ifx + sd[i11]  *fx)*fy;
+              dd[di+1] = (sd[i00+1]*ifx + sd[i10+1]*fx)*ify + (sd[i01+1]*ifx + sd[i11+1]*fx)*fy;
+              dd[di+2] = (sd[i00+2]*ifx + sd[i10+2]*fx)*ify + (sd[i01+2]*ifx + sd[i11+2]*fx)*fy;
+              dd[di+3] = 255;
             }
           }
           ctx.putImageData(dstP, 0, 0);
         }
 
-        // ── 4. Ondulación sinusoidal por filas (derrota layout espacial) ──
-        // Desplaza cada fila horizontalmente una cantidad sinusoidal.
-        // Frecuencia y fase aleatorias → cada imagen tiene un "fingerprint" único.
-        // El ojo humano no lo detecta con ±1-2px.
-        if (cfg.lineWarpMax > 0) {
-          const warpAmp   = cfg.lineWarpMax;
-          const warpFreq  = rnd(0.8, 2.5);     // ciclos a lo largo del alto
+        // ── 5. Ondulación sinusoidal por filas ±1px ───────────────────────
+        {
+          const warpFreq  = rnd(0.8, 2.5);
           const warpPhase = rnd(0, Math.PI * 2);
           const src2 = ctx.getImageData(0, 0, W, H);
           const dst2 = ctx.createImageData(W, H);
-
           for (let y = 0; y < H; y++) {
-            const offset = Math.round(warpAmp * Math.sin(y / H * warpFreq * 2 * Math.PI + warpPhase));
+            const offset = Math.round(CFG.lineWarpMax * Math.sin(y / H * warpFreq * 2 * Math.PI + warpPhase));
             for (let x = 0; x < W; x++) {
-              const srcXw = Math.min(W - 1, Math.max(0, x - offset));
-              const si = (y * W + srcXw) * 4;
-              const di = (y * W + x) * 4;
-              dst2.data[di]     = src2.data[si];
-              dst2.data[di + 1] = src2.data[si + 1];
-              dst2.data[di + 2] = src2.data[si + 2];
-              dst2.data[di + 3] = src2.data[si + 3];
+              const srcXw = Math.min(W-1, Math.max(0, x - offset));
+              const si = (y*W + srcXw)*4, di = (y*W + x)*4;
+              dst2.data[di]   = src2.data[si];
+              dst2.data[di+1] = src2.data[si+1];
+              dst2.data[di+2] = src2.data[si+2];
+              dst2.data[di+3] = src2.data[si+3];
             }
           }
           ctx.putImageData(dst2, 0, 0);
         }
 
-        // ── 5. Manipulación pixel a pixel ─────────────────────────────────
+        // ── 6. Ruido por bloques 16×16 + brillo + gradiente ──────────────
         const imageData = ctx.getImageData(0, 0, W, H);
         const data = imageData.data;
 
-        // Parámetros globales (aleatorios por imagen)
-        const pixelNoise = cfg.pixelNoiseMax > 0 ? rndI(0, cfg.pixelNoiseMax) : 0;
-        const bright     = cfg.brightMax > 0     ? rnd(-cfg.brightMax, cfg.brightMax) : 0;
-        const gradAmt    = cfg.gradientMax > 0   ? rnd(-cfg.gradientMax, cfg.gradientMax) : 0;
+        const bright  = rnd(-CFG.brightMax, CFG.brightMax);
+        const gradAmt = rnd(-CFG.gradientMax, CFG.gradientMax);
 
-        // Detección de fondo: muestrea las 4 esquinas. Si tienen colores parecidos,
-        // ese es el fondo dominante. Píxeles dentro de bgTolerance se considerarán fondo.
-        let bgR = 0, bgG = 0, bgB = 0;
-        let bgActive = false;
-        if (cfg.bgShiftMax > 0 && cfg.bgTolerance > 0) {
-          const corners = [
-            (0 * W + 0) * 4,
-            (0 * W + (W - 1)) * 4,
-            ((H - 1) * W + 0) * 4,
-            ((H - 1) * W + (W - 1)) * 4,
-          ];
-          for (const ci of corners) { bgR += data[ci]; bgG += data[ci + 1]; bgB += data[ci + 2]; }
-          bgR /= 4; bgG /= 4; bgB /= 4;
-          // Solo activa si las 4 esquinas son similares (fondo uniforme detectado).
-          let maxDist = 0;
-          for (const ci of corners) {
-            const dr = data[ci] - bgR, dg = data[ci + 1] - bgG, db = data[ci + 2] - bgB;
-            const d = Math.sqrt(dr * dr + dg * dg + db * db);
-            if (d > maxDist) maxDist = d;
-          }
-          bgActive = maxDist < cfg.bgTolerance * 0.6;
-        }
-        const bgDR = bgActive ? rndI(-cfg.bgShiftMax, cfg.bgShiftMax) : 0;
-        const bgDG = bgActive ? rndI(-cfg.bgShiftMax, cfg.bgShiftMax) : 0;
-        const bgDB = bgActive ? rndI(-cfg.bgShiftMax, cfg.bgShiftMax) : 0;
-        const bgTol = cfg.bgTolerance;
-
-        // Pre-genera textura baja-frecuencia (añade keypoints fake).
-        const texSize = 32;
-        const tex = cfg.textureAmp > 0 ? new Float32Array(texSize * texSize) : null;
-        if (tex) for (let k = 0; k < tex.length; k++) tex[k] = (Math.random() - 0.5) * 2;
-        const texAmp = cfg.textureAmp;
-
-        // ── 5a. Ruido por bloques NxN independiente (multi-escala) ───────
-        // La CNN procesa parches a varias escalas (distintos stride/receptive field).
-        // Aplicamos dos pasadas con tamaños de bloque diferentes:
-        //   Pasada 1: bloques grandes (cfg.blockSize) con offset completo
-        //   Pasada 2: bloques el doble de grandes, offset a la mitad
-        // → cubre más receptive fields del modelo sin aumentar el ruido visible.
-        const applyBlockNoise = (bSize: number, bNoise: number) => {
-          if (bNoise <= 0) return;
+        // Ruido por bloques (invisible al ojo, derrota patches CNN)
+        {
+          const bSize = CFG.blockSize;
           const bCols = Math.ceil(W / bSize);
           const bRows = Math.ceil(H / bSize);
           const blockOffsets = new Int16Array(bRows * bCols);
           for (let k = 0; k < blockOffsets.length; k++) {
-            blockOffsets[k] = rndI(-bNoise, bNoise);
+            blockOffsets[k] = rndI(-CFG.blockNoiseMax, CFG.blockNoiseMax);
           }
           for (let y = 0; y < H; y++) {
             const by = Math.floor(y / bSize);
             for (let x = 0; x < W; x++) {
               const bOff = blockOffsets[by * bCols + Math.floor(x / bSize)];
               if (bOff === 0) continue;
-              const i = (y * W + x) * 4;
+              const i = (y*W+x)*4;
               data[i]   = clamp(data[i]   + bOff);
               data[i+1] = clamp(data[i+1] + bOff);
               data[i+2] = clamp(data[i+2] + bOff);
             }
           }
-        };
-
-        // Pasada 1: escala fina
-        applyBlockNoise(cfg.blockSize, cfg.blockNoiseMax);
-        // Pasada 2: escala gruesa (bloques 2× más grandes, offset 1 solo)
-        if (cfg.blockNoiseMax >= 2) {
-          applyBlockNoise(cfg.blockSize * 2, 1);
         }
 
-        // ── 5b. BG shift + textura + ruido global + brillo + gradiente ────
-        const tsm1 = texSize - 1;
+        // Brillo global + gradiente diagonal (sin tinte de color)
         for (let y = 0; y < H; y++) {
-          // Pre-calcula coords de textura para esta fila
-          const ty = tex ? (y / H) * tsm1 : 0;
-          const ty0 = tex ? Math.floor(ty) : 0;
-          const ty1 = tex ? Math.min(tsm1, ty0 + 1) : 0;
-          const tfy = tex ? ty - ty0 : 0;
-
           for (let x = 0; x < W; x++) {
-            const i = (y * W + x) * 4;
-            let r = data[i], g = data[i+1], b = data[i+2];
-
-            // BG shift: si este pixel es similar al fondo, shifta su color.
-            if (bgActive) {
-              const dr = r - bgR, dg = g - bgG, db = b - bgB;
-              const dist = Math.sqrt(dr * dr + dg * dg + db * db);
-              if (dist < bgTol) {
-                // Falloff suave: shift completo en el centro del fondo, cero en el borde.
-                const w = 1 - dist / bgTol;
-                r = clamp(r + bgDR * w);
-                g = clamp(g + bgDG * w);
-                b = clamp(b + bgDB * w);
-              }
+            const i = (y*W+x)*4;
+            let delta = bright;
+            if (gradAmt !== 0) delta += gradAmt * ((x/W + y/H) / 2 - 0.5);
+            if (delta !== 0) {
+              data[i]   = clamp(data[i]   + delta);
+              data[i+1] = clamp(data[i+1] + delta);
+              data[i+2] = clamp(data[i+2] + delta);
             }
-
-            // Textura baja-frecuencia (bilinear sampling de tex pequeño → keypoints fake)
-            if (tex) {
-              const tx = (x / W) * tsm1;
-              const tx0 = Math.floor(tx);
-              const tx1 = Math.min(tsm1, tx0 + 1);
-              const tfx = tx - tx0;
-              const v00 = tex[ty0 * texSize + tx0], v10 = tex[ty0 * texSize + tx1];
-              const v01 = tex[ty1 * texSize + tx0], v11 = tex[ty1 * texSize + tx1];
-              const top = v00 * (1 - tfx) + v10 * tfx;
-              const bot = v01 * (1 - tfx) + v11 * tfx;
-              const tv = (top * (1 - tfy) + bot * tfy) * texAmp;
-              r = clamp(r + tv); g = clamp(g + tv); b = clamp(b + tv);
-            }
-
-            // Gradiente diagonal ultra-sutil
-            if (gradAmt !== 0) {
-              const t  = (x / W + y / H) / 2;  // 0..1
-              const gv = gradAmt * (t - 0.5);   // centrado en 0
-              r = clamp(r + gv); g = clamp(g + gv); b = clamp(b + gv);
-            }
-
-            // Brillo global
-            if (bright !== 0) {
-              r = clamp(r + bright); g = clamp(g + bright); b = clamp(b + bright);
-            }
-
-            // Ruido per-pixel sub-visual
-            if (pixelNoise > 0) {
-              r = clamp(r + rndI(-pixelNoise, pixelNoise));
-              g = clamp(g + rndI(-pixelNoise, pixelNoise));
-              b = clamp(b + rndI(-pixelNoise, pixelNoise));
-            }
-
-            data[i] = r; data[i+1] = g; data[i+2] = b;
-          }
-        }
-
-        // ── 5c. Tone curves S-shape no-lineales por canal ─────────────────
-        // LUT por canal con curva: delta = sign * amp/255 * sin(π * (2x - 1)).
-        // Resultado: oscurece sombras y aclara highlights (o al revés). Toca el
-        // primer conv del patch embedder de CLIP que es sensible a estadísticas
-        // de bajo nivel del color. Más efectivo que un tint plano.
-        if (cfg.toneCurveAmp > 0) {
-          const makeLUT = (amp: number, sign: number) => {
-            const lut = new Uint8ClampedArray(256);
-            for (let i = 0; i < 256; i++) {
-              const x = i / 255;
-              const delta = sign * (amp / 255) * Math.sin(Math.PI * (2 * x - 1));
-              lut[i] = Math.round((x + delta) * 255);
-            }
-            return lut;
-          };
-          const ampR = rnd(cfg.toneCurveAmp * 0.5, cfg.toneCurveAmp);
-          const ampG = rnd(cfg.toneCurveAmp * 0.5, cfg.toneCurveAmp);
-          const ampB = rnd(cfg.toneCurveAmp * 0.5, cfg.toneCurveAmp);
-          const sR = Math.random() > 0.5 ? 1 : -1;
-          const sG = Math.random() > 0.5 ? 1 : -1;
-          const sB = Math.random() > 0.5 ? 1 : -1;
-          const lutR = makeLUT(ampR, sR);
-          const lutG = makeLUT(ampG, sG);
-          const lutB = makeLUT(ampB, sB);
-          for (let i = 0; i < data.length; i += 4) {
-            data[i]     = lutR[data[i]];
-            data[i + 1] = lutG[data[i + 1]];
-            data[i + 2] = lutB[data[i + 2]];
           }
         }
 
         ctx.putImageData(imageData, 0, 0);
 
-        // ── 5d. Distractor semántico (overlay visible) ────────────────────
-        // Añade un objeto reconocible (emoji) en una esquina. CLIP es muy
-        // sensible al contenido semántico — un concepto nuevo desplaza el
-        // embedding ~0.05-0.10 cosine, que es justo lo que necesitamos.
-        if (cfg.distractorChance > 0 && Math.random() < cfg.distractorChance) {
-          const DISTRACTORS = ['🛍️', '🏷️', '✨', '⭐', '🎁', '👋', '❤️', '🌟', '📦', '🎀'];
-          const emoji = DISTRACTORS[Math.floor(Math.random() * DISTRACTORS.length)];
-          const dSize = Math.floor(Math.min(W, H) * (0.13 + Math.random() * 0.06));
-          const margin = dSize * 0.5;
-          const cornerIdx = Math.floor(Math.random() * 4);
-          const cxs = [margin + dSize/2, W - margin - dSize/2];
-          const cys = [margin + dSize/2, H - margin - dSize/2];
-          const cx = cxs[cornerIdx % 2];
-          const cy = cys[Math.floor(cornerIdx / 2)];
-          ctx.save();
-          ctx.globalAlpha = 0.78 + Math.random() * 0.18;
-          ctx.font = `${dSize}px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji","Twemoji Mozilla",sans-serif`;
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          // Pequeña rotación aleatoria para que parezca natural.
-          ctx.translate(cx, cy);
-          ctx.rotate((Math.random() - 0.5) * 0.4);
-          ctx.fillText(emoji, 0, 0);
-          ctx.restore();
-        }
-
-        // ── 6. JPEG con calidad variable ──────────────────────────────────
-        // Cuantización diferente → artefactos de compresión únicos.
-        const quality = rnd(cfg.qualityMin, cfg.qualityMax);
+        // ── 7. JPEG variable 87-93% ───────────────────────────────────────
+        const quality = rnd(CFG.qualityMin, CFG.qualityMax);
         let dataUrl = canvas.toDataURL('image/jpeg', quality);
 
-        // ── 7. EXIF aleatorio realista (si está activo) ──────────────────
-        // Inyecta metadata creíble (cámara, fecha, ISO, focal…) para que la
-        // foto parezca tomada con móvil. La librería se carga lazy via CDN.
-        if (cfg.randomExif) {
-          try {
-            const { injectRandomExif } = await import('../lib/randomExif');
-            dataUrl = await injectRandomExif(dataUrl);
-          } catch (e) {
-            console.warn('[uniquify] EXIF injection skipped:', e);
-          }
+        // ── 8. EXIF aleatorio realista (metadata pura, cero visual) ───────
+        try {
+          const { injectRandomExif } = await import('../lib/randomExif');
+          dataUrl = await injectRandomExif(dataUrl);
+        } catch (e) {
+          console.warn('[uniquify] EXIF skipped:', e);
         }
 
         const size = Math.round((dataUrl.split(',')[1].length * 3) / 4);
-
-        resolve({
-          dataUrl,
-          noiseLevel: Math.max(pixelNoise, cfg.blockNoiseMax),
-          dimChange: `${IW}×${IH} → ${W}×${H}`,
-          size,
-        });
+        resolve({ dataUrl, dimChange: `${IW}×${IH} → ${W}×${H}`, size });
       };
       img.onerror = reject;
       img.src = e.target!.result as string;
@@ -611,44 +270,12 @@ async function uniquifyImage(
   });
 }
 
-// ─── Wrapper adversarial con CLIP (modo NUCLEAR) ───────────────────────────
-// Genera hasta MAX_TRIES variantes y se queda con la que más lejos esté del
-// embedding original. Si alcanza TARGET_DIST antes, sale temprano.
-// El embedding original se calcula UNA sola vez por imagen (cache externo).
-
-const ADV_MAX_TRIES = 5;
-const ADV_TARGET_DIST = 0.14;
-
-async function uniquifyImageAdversarial(
-  file: File,
-  cfg: ModeConfig,
-  origEmbed: Float32Array,
-  onAttempt?: (i: number, dist: number) => void
-): Promise<{ dataUrl: string; noiseLevel: number; dimChange: string; size: number; cosineDist: number }> {
-  const { embedDataUrl, cosineDistance } = await import('../lib/clipAdversarial');
-  let best: { result: Awaited<ReturnType<typeof uniquifyImage>>; dist: number } | null = null;
-  for (let i = 0; i < ADV_MAX_TRIES; i++) {
-    const result = await uniquifyImage(file, cfg);
-    let dist = 0;
-    try {
-      const emb = await embedDataUrl(result.dataUrl);
-      dist = cosineDistance(origEmbed, emb);
-    } catch (e) {
-      console.warn('[adversarial] embedding falló, intento sin score', e);
-    }
-    onAttempt?.(i + 1, dist);
-    if (!best || dist > best.dist) best = { result, dist };
-    if (dist >= ADV_TARGET_DIST) break;
-  }
-  return { ...best!.result, cosineDist: best!.dist };
-}
-
-// ─── Helpers UI ───────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function formatSize(b: number) {
   if (b < 1024) return `${b} B`;
-  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
-  return `${(b / (1024 * 1024)).toFixed(2)} MB`;
+  if (b < 1024*1024) return `${(b/1024).toFixed(1)} KB`;
+  return `${(b/(1024*1024)).toFixed(2)} MB`;
 }
 
 function dl(dataUrl: string, name: string) {
@@ -656,8 +283,7 @@ function dl(dataUrl: string, name: string) {
 }
 
 async function dataUrlToFile(dataUrl: string, name: string): Promise<File> {
-  const res  = await fetch(dataUrl);
-  const blob = await res.blob();
+  const blob = await fetch(dataUrl).then(r => r.blob());
   return new File([blob], name, { type: 'image/jpeg' });
 }
 
@@ -668,9 +294,7 @@ function canShareFiles(): boolean {
       typeof navigator.canShare === 'function' &&
       navigator.canShare({ files: [new File([''], 'test.jpg', { type: 'image/jpeg' })] })
     );
-  } catch {
-    return false;
-  }
+  } catch { return false; }
 }
 
 const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
@@ -696,7 +320,7 @@ async function saveAll(
         onProgress?.(files.length);
         return;
       }
-    } catch { /* continuar con fallback */ }
+    } catch { /* fallback */ }
     for (let i = 0; i < items.length; i++) {
       try {
         const file = await dataUrlToFile(items[i].dataUrl, items[i].filename);
@@ -706,10 +330,7 @@ async function saveAll(
     }
   } else {
     items.forEach((item, idx) => {
-      setTimeout(() => {
-        dl(item.dataUrl, item.filename);
-        onProgress?.(idx + 1);
-      }, idx * 120);
+      setTimeout(() => { dl(item.dataUrl, item.filename); onProgress?.(idx + 1); }, idx * 120);
     });
   }
 }
@@ -717,130 +338,76 @@ async function saveAll(
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface ProcessedImage {
-  id: string; originalName: string; originalUrl: string;
-  processedUrl: string | null; originalSize: number; processedSize: number;
-  status: 'processing' | 'done' | 'error'; noiseLevel: number; dimChange: string; mode: Mode;
-  cosineDist?: number; advAttempts?: number;
+  id: string;
+  originalName: string;
+  originalUrl: string;
+  processedUrl: string | null;
+  originalSize: number;
+  processedSize: number;
+  status: 'processing' | 'done' | 'error';
+  dimChange: string;
 }
 
 // ─── Componente ───────────────────────────────────────────────────────────────
 
 export default function ImageUniquifier() {
-  const [activeMode, setActiveMode] = useState<Mode>('normal');
-  const [images, setImages]         = useState<ProcessedImage[]>([]);
-  const [dragging, setDragging]     = useState(false);
-  const [savingAll, setSavingAll]   = useState(false);
+  const [images, setImages]     = useState<ProcessedImage[]>([]);
+  const [dragging, setDragging] = useState(false);
+  const [savingAll, setSavingAll] = useState(false);
   const [savedCount, setSavedCount] = useState(0);
-  const [nuclearMode, setNuclearMode]   = useState(false);
-  const [clipLoading, setClipLoading]   = useState(false);
-  const [clipReady, setClipReady]       = useState(false);
-  const [clipError, setClipError]       = useState<string | null>(null);
-  const [clipProgress, setClipProgress] = useState(0);
-  const [flipEnabled, setFlipEnabled]   = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const cfg        = MODES.find(m => m.id === activeMode)!;
-  const techniques = TECHNIQUES[activeMode];
-
-  const ensureCLIP = useCallback(async () => {
-    if (clipReady) return true;
-    setClipError(null);
-    setClipLoading(true);
-    setClipProgress(0);
-    try {
-      const { loadCLIP } = await import('../lib/clipAdversarial');
-      await loadCLIP((pct) => setClipProgress(pct));
-      setClipReady(true);
-      setClipLoading(false);
-      return true;
-    } catch (e: any) {
-      setClipError(e?.message || 'No se pudo cargar CLIP');
-      setClipLoading(false);
-      setNuclearMode(false);
-      return false;
-    }
-  }, [clipReady]);
-
-  const handleToggleNuclear = useCallback(async () => {
-    if (nuclearMode) { setNuclearMode(false); return; }
-    setNuclearMode(true);
-    if (!clipReady) await ensureCLIP();
-  }, [nuclearMode, clipReady, ensureCLIP]);
-
-  const processFiles = useCallback(async (files: FileList | File[], mode: Mode) => {
-    const baseMc = MODES.find(m => m.id === mode)!;
-    // El toggle de espejo fuerza el flip en cualquier modo (lo más efectivo
-    // contra la detección). Si está OFF, se respeta el flipChance del modo.
-    const mc = { ...baseMc, flipChance: flipEnabled ? 1 : baseMc.flipChance };
+  const processFiles = useCallback(async (files: FileList | File[]) => {
     const arr = Array.from(files).filter(f => f.type.startsWith('image/'));
     if (!arr.length) return;
-    const useNuclear = nuclearMode && clipReady;
+
     const entries: ProcessedImage[] = arr.map(f => ({
       id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      originalName: f.name, originalUrl: URL.createObjectURL(f),
-      processedUrl: null, originalSize: f.size, processedSize: 0,
-      status: 'processing', noiseLevel: 0, dimChange: '', mode,
+      originalName: f.name,
+      originalUrl: URL.createObjectURL(f),
+      processedUrl: null,
+      originalSize: f.size,
+      processedSize: 0,
+      status: 'processing',
+      dimChange: '',
     }));
     setImages(prev => [...entries, ...prev]);
-
-    // Pre-import CLIP helpers si vamos a usarlos
-    const clipHelpers = useNuclear ? await import('../lib/clipAdversarial') : null;
 
     for (let i = 0; i < arr.length; i++) {
       const entry = entries[i];
       try {
-        if (useNuclear && clipHelpers) {
-          // Original embedding (una vez)
-          const origDataUrl = await new Promise<string>((resolve, reject) => {
-            const r = new FileReader();
-            r.onload = () => resolve(r.result as string);
-            r.onerror = reject;
-            r.readAsDataURL(arr[i]);
-          });
-          const origEmb = await clipHelpers.embedDataUrl(origDataUrl);
-          let attempts = 0;
-          const res = await uniquifyImageAdversarial(arr[i], mc, origEmb, (n) => { attempts = n; });
-          setImages(prev => prev.map(img =>
-            img.id === entry.id
-              ? { ...img, processedUrl: res.dataUrl, processedSize: res.size, status: 'done', noiseLevel: res.noiseLevel, dimChange: res.dimChange, cosineDist: res.cosineDist, advAttempts: attempts }
-              : img
-          ));
-        } else {
-          const res = await uniquifyImage(arr[i], mc);
-          setImages(prev => prev.map(img =>
-            img.id === entry.id
-              ? { ...img, processedUrl: res.dataUrl, processedSize: res.size, status: 'done', noiseLevel: res.noiseLevel, dimChange: res.dimChange }
-              : img
-          ));
-        }
+        const res = await uniquifyImage(arr[i]);
+        setImages(prev => prev.map(img =>
+          img.id === entry.id
+            ? { ...img, processedUrl: res.dataUrl, processedSize: res.size, status: 'done', dimChange: res.dimChange }
+            : img
+        ));
       } catch (e) {
         console.error('[uniquify] error', e);
         setImages(prev => prev.map(img => img.id === entry.id ? { ...img, status: 'error' } : img));
       }
     }
-  }, [nuclearMode, clipReady, flipEnabled]);
+  }, []);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault(); setDragging(false); processFiles(e.dataTransfer.files, activeMode);
-  }, [processFiles, activeMode]);
+    e.preventDefault(); setDragging(false); processFiles(e.dataTransfer.files);
+  }, [processFiles]);
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) processFiles(e.target.files, activeMode);
+    if (e.target.files) processFiles(e.target.files);
     e.target.value = '';
   };
 
   const reprocess = async (id: string) => {
     const entry = images.find(img => img.id === id); if (!entry) return;
-    const baseMc = MODES.find(m => m.id === entry.mode)!;
-    const mc = { ...baseMc, flipChance: flipEnabled ? 1 : baseMc.flipChance };
     setImages(prev => prev.map(img => img.id === id ? { ...img, status: 'processing', processedUrl: null } : img));
     try {
       const blob = await fetch(entry.originalUrl).then(r => r.blob());
       const file = new File([blob], entry.originalName, { type: 'image/jpeg' });
-      const res  = await uniquifyImage(file, mc);
+      const res  = await uniquifyImage(file);
       setImages(prev => prev.map(img =>
         img.id === id
-          ? { ...img, processedUrl: res.dataUrl, processedSize: res.size, status: 'done', noiseLevel: res.noiseLevel, dimChange: res.dimChange }
+          ? { ...img, processedUrl: res.dataUrl, processedSize: res.size, status: 'done', dimChange: res.dimChange }
           : img
       ));
     } catch {
@@ -874,107 +441,18 @@ export default function ImageUniquifier() {
   return (
     <div className="space-y-6">
 
-      {/* Modos 2×2 */}
-      <div className="grid grid-cols-2 gap-3">
-        {MODES.map(m => {
-          const active    = activeMode === m.id;
-          const isExtremo = m.id === 'extremo';
-          return (
-            <button key={m.id} onClick={() => setActiveMode(m.id)}
-              className={`p-5 rounded-2xl border-2 text-left transition-all ${
-                active && isExtremo ? 'border-red-700 bg-red-950/60'
-                : active            ? 'border-white/30 bg-white/10'
-                : 'border-white/[0.08] bg-white/[0.03] hover:border-white/15'
-              }`}>
-              <p className={`text-sm font-black uppercase tracking-widest mb-1 ${
-                active && isExtremo ? 'text-red-400' : active ? 'text-white' : 'text-white/40'
-              }`}>{m.label}</p>
-              <p className={`text-[11px] leading-snug ${active ? 'text-white/60' : 'text-white/25'}`}>{m.desc}</p>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Toggle: voltear horizontal (espejo) */}
-      <button
-        onClick={() => setFlipEnabled(v => !v)}
-        className={`w-full flex items-center justify-between gap-3 rounded-2xl border-2 p-4 transition-all ${
-          flipEnabled ? 'border-acid bg-acid-soft' : 'border-white/[0.08] bg-white/[0.02] hover:border-white/15'
-        }`}
-      >
-        <div className="flex items-center gap-3 text-left">
-          <FlipHorizontal2 className={`w-5 h-5 shrink-0 ${flipEnabled ? 'text-acid' : 'text-white/30'}`} />
-          <div>
-            <p className={`text-sm font-black uppercase tracking-widest ${flipEnabled ? 'text-acid' : 'text-white/50'}`}>
-              Voltear · espejo
-            </p>
-            <p className="text-[11px] text-white/40 leading-snug">
-              Lo más efectivo contra la detección de Vinted. Ojo: logos y texto quedan al revés.
-            </p>
-          </div>
-        </div>
-        <span className={`shrink-0 px-3 py-1 rounded-lg text-xs font-black uppercase tracking-wider ${
-          flipEnabled ? 'bg-acid text-black' : 'bg-white/5 text-white/50'
-        }`}>
-          {flipEnabled ? 'ON' : 'OFF'}
-        </span>
-      </button>
-
-      {/* Modo NUCLEAR: CLIP adversarial verifier */}
-      <div className={`rounded-2xl border-2 p-4 transition-all ${
-        nuclearMode ? 'border-fuchsia-700 bg-fuchsia-950/40' : 'border-white/[0.08] bg-white/[0.02]'
-      }`}>
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div className="flex items-center gap-3">
-            <Zap className={`w-5 h-5 ${nuclearMode ? 'text-fuchsia-400' : 'text-white/30'}`} />
-            <div>
-              <p className={`text-sm font-black uppercase tracking-widest ${nuclearMode ? 'text-fuchsia-400' : 'text-white/50'}`}>
-                Modo NUCLEAR · CLIP adversarial
-              </p>
-              <p className="text-[11px] text-white/40 leading-snug">
-                Genera hasta {ADV_MAX_TRIES} variantes y se queda con la que más lejos esté del original en el espacio de embeddings CLIP. <span className="text-white/30">Mismo modelo que usa Vinted.</span>
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={handleToggleNuclear}
-            disabled={clipLoading}
-            className={`px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider border-2 transition ${
-              nuclearMode
-                ? 'bg-fuchsia-500 border-fuchsia-400 text-black hover:bg-fuchsia-400'
-                : 'bg-white/5 border-white/10 text-white/50 hover:text-white hover:border-white/30'
-            } disabled:opacity-50`}
-          >
-            {clipLoading ? `Cargando ${Math.round(clipProgress)}%` : nuclearMode ? (clipReady ? 'ON' : 'Cargando…') : 'Activar'}
-          </button>
-        </div>
-        {clipLoading && (
-          <div className="mt-3 h-1.5 rounded-full bg-white/5 overflow-hidden">
-            <div className="h-full bg-fuchsia-500 transition-all" style={{ width: `${clipProgress}%` }} />
-          </div>
-        )}
-        {clipError && (
-          <p className="mt-2 text-[11px] text-red-400">⚠ {clipError}</p>
-        )}
-        {nuclearMode && clipReady && (
-          <p className="mt-2 text-[11px] text-fuchsia-300/80">
-            ✓ CLIP cargado. Cada imagen tardará ~3-6s. Objetivo: cosine ≥ {ADV_TARGET_DIST.toFixed(2)}.
-          </p>
-        )}
-      </div>
-
-      {/* Técnicas */}
+      {/* Técnicas aplicadas */}
       <div className="bg-[#111] border border-white/[0.08] rounded-2xl p-5 space-y-3">
         <p className="text-xs font-black uppercase tracking-widest text-white/50">
-          {techniques.length} técnicas aplicadas — nivel {cfg.label}
+          {TECHNIQUES.length} técnicas — imagen visualmente idéntica al original
         </p>
-        <div className="space-y-2.5">
-          {techniques.map((t, i) => (
+        <div className="space-y-2">
+          {TECHNIQUES.map((t, i) => (
             <div key={i} className="flex gap-3">
-              <span className={`text-sm shrink-0 mt-0.5 ${activeMode === 'extremo' ? 'text-red-400' : 'text-acid'}`}>{t.icon}</span>
+              <span className="text-sm shrink-0 mt-0.5 text-acid">{t.icon}</span>
               <p className="text-[12px] text-white/70 leading-snug">
                 <span className="font-bold text-white/90">{t.title}</span>
-                {t.detail ? ` — ${t.detail}` : ''}
+                {' — '}{t.detail}
               </p>
             </div>
           ))}
@@ -993,7 +471,9 @@ export default function ImageUniquifier() {
       >
         <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" onChange={handleFileInput} />
         <div className="flex flex-col items-center gap-3">
-          <div className={`w-16 h-16 rounded-2xl flex items-center justify-center border transition-all ${dragging ? 'bg-acid-soft border-acid' : 'bg-white/5 border-white/10'}`}>
+          <div className={`w-16 h-16 rounded-2xl flex items-center justify-center border transition-all ${
+            dragging ? 'bg-acid-soft border-acid' : 'bg-white/5 border-white/10'
+          }`}>
             <Upload className={`w-7 h-7 ${dragging ? 'text-acid' : 'text-white/40'}`} />
           </div>
           <div>
@@ -1035,74 +515,63 @@ export default function ImageUniquifier() {
       {/* Grid imágenes */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         <AnimatePresence>
-          {images.map(img => {
-            const mc = MODES.find(m => m.id === img.mode)!;
-            return (
-              <motion.div key={img.id}
-                initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9 }}
-                className="bg-[#141414] border border-white/5 rounded-2xl overflow-hidden">
-                <div className="relative aspect-square bg-black/40 flex items-center justify-center overflow-hidden">
-                  {img.processedUrl
-                    ? <img src={img.processedUrl} alt={img.originalName} className="w-full h-full object-cover" />
-                    : img.status === 'processing'
-                    ? <div className="flex flex-col items-center gap-3"><RefreshCcw className="w-8 h-8 animate-spin text-acid" /><span className="text-xs text-white/30">Procesando…</span></div>
-                    : img.status === 'error'
-                    ? <div className="flex flex-col items-center gap-2 text-red-400/60"><ZapOff className="w-8 h-8" /><span className="text-xs">Error</span></div>
-                    : <ImageIcon className="w-12 h-12 text-white/10" />
-                  }
-                  {img.status === 'done' && (
-                    <div className="absolute top-2 right-2 bg-acid rounded-full p-1">
-                      <CheckCircle2 className="w-3.5 h-3.5 text-black" />
+          {images.map(img => (
+            <motion.div key={img.id}
+              initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9 }}
+              className="bg-[#141414] border border-white/5 rounded-2xl overflow-hidden">
+              <div className="relative aspect-square bg-black/40 flex items-center justify-center overflow-hidden">
+                {img.processedUrl
+                  ? <img src={img.processedUrl} alt={img.originalName} className="w-full h-full object-cover" />
+                  : img.status === 'processing'
+                  ? <div className="flex flex-col items-center gap-3">
+                      <RefreshCcw className="w-8 h-8 animate-spin text-acid" />
+                      <span className="text-xs text-white/30">Procesando…</span>
                     </div>
-                  )}
-                  <div className={`absolute top-2 left-2 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${
-                    img.mode === 'extremo' ? 'bg-red-950 text-red-400 border border-red-800' : 'bg-white/10 text-white/60 border border-white/10'
-                  }`}>
-                    {mc.label}
+                  : img.status === 'error'
+                  ? <div className="flex flex-col items-center gap-2 text-red-400/60">
+                      <ZapOff className="w-8 h-8" />
+                      <span className="text-xs">Error</span>
+                    </div>
+                  : <ImageIcon className="w-12 h-12 text-white/10" />
+                }
+                {img.status === 'done' && (
+                  <div className="absolute top-2 right-2 bg-acid rounded-full p-1">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-black" />
                   </div>
-                </div>
-                <div className="p-4 space-y-3">
-                  <p className="text-xs text-white/70 truncate font-medium">{img.originalName}</p>
-                  {img.status === 'done' && (
-                    <div className="space-y-1">
-                      <div className="flex justify-between text-[10px] text-white/30"><span>Original</span><span className="font-mono">{formatSize(img.originalSize)}</span></div>
-                      <div className="flex justify-between text-[10px] text-acid"><span>Procesada</span><span className="font-mono">{formatSize(img.processedSize)}</span></div>
-                      <div className="text-[10px] text-white/20 font-mono mt-1">{img.dimChange}</div>
-                      <div className="text-[10px] text-white/20 font-mono">Bloques ±{img.noiseLevel} · Sin EXIF</div>
-                      {typeof img.cosineDist === 'number' && (
-                        <div className={`flex justify-between text-[10px] font-mono mt-1 ${
-                          img.cosineDist >= ADV_TARGET_DIST ? 'text-fuchsia-400' : 'text-amber-400/80'
-                        }`}>
-                          <span>CLIP cosine {img.cosineDist >= ADV_TARGET_DIST ? '✓' : '⚠'}</span>
-                          <span>{img.cosineDist.toFixed(3)}{img.advAttempts ? ` · ${img.advAttempts} try` : ''}</span>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  <div className="flex gap-2">
-                    {img.status === 'done' && img.processedUrl && (
-                      <button
-                        onClick={() => handleSaveOne(img.processedUrl!, img.originalName)}
-                        className="flex-1 flex items-center justify-center gap-1.5 bg-acid hover:bg-acid text-black font-bold py-2 rounded-xl text-xs transition"
-                      >
-                        <Download className="w-3.5 h-3.5" />{saveLabel}
-                      </button>
-                    )}
-                    {(img.status === 'done' || img.status === 'error') && (
-                      <button onClick={() => reprocess(img.id)} title="Regenerar versión diferente"
-                        className="p-2 bg-white/5 hover:bg-white/10 text-white/40 hover:text-acid rounded-xl border border-white/5 transition">
-                        <Shuffle className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                    <button onClick={() => remove(img.id)}
-                      className="p-2 bg-white/5 hover:bg-red-500/10 text-white/20 hover:text-red-400 rounded-xl border border-white/5 transition">
-                      <Trash2 className="w-3.5 h-3.5" />
+                )}
+              </div>
+              <div className="p-4 space-y-3">
+                <p className="text-xs text-white/70 truncate font-medium">{img.originalName}</p>
+                {img.status === 'done' && (
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-[10px] text-white/30"><span>Original</span><span className="font-mono">{formatSize(img.originalSize)}</span></div>
+                    <div className="flex justify-between text-[10px] text-acid"><span>Procesada</span><span className="font-mono">{formatSize(img.processedSize)}</span></div>
+                    <div className="text-[10px] text-white/20 font-mono mt-1">{img.dimChange}</div>
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  {img.status === 'done' && img.processedUrl && (
+                    <button
+                      onClick={() => handleSaveOne(img.processedUrl!, img.originalName)}
+                      className="flex-1 flex items-center justify-center gap-1.5 bg-acid hover:bg-acid text-black font-bold py-2 rounded-xl text-xs transition"
+                    >
+                      <Download className="w-3.5 h-3.5" />{saveLabel}
                     </button>
-                  </div>
+                  )}
+                  {(img.status === 'done' || img.status === 'error') && (
+                    <button onClick={() => reprocess(img.id)} title="Regenerar versión diferente"
+                      className="p-2 bg-white/5 hover:bg-white/10 text-white/40 hover:text-acid rounded-xl border border-white/5 transition">
+                      <Shuffle className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                  <button onClick={() => remove(img.id)}
+                    className="p-2 bg-white/5 hover:bg-red-500/10 text-white/20 hover:text-red-400 rounded-xl border border-white/5 transition">
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
                 </div>
-              </motion.div>
-            );
-          })}
+              </div>
+            </motion.div>
+          ))}
         </AnimatePresence>
       </div>
 
