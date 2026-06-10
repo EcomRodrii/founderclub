@@ -2185,11 +2185,11 @@ ASICS / ONITSUKA TIGER: La etiqueta tiene:
 Prioridad máxima: "rawText" debe ser transcripción literal completa.
 Para el resto, aplica la estructura de la marca. Si no ves un dato pon "". Solo el JSON.`;
 
-    // Modelos con soporte multimodal (imagen+texto) — actualizados junio 2026
+    // Modelos con soporte multimodal — junio 2026
+    // gemini-1.5-x y gemini-2.0-x: retirados completamente (404 en v1 y v1beta)
     const OCR_MODELS = [
-      "gemini-2.5-flash",  // primary — multimodal estable junio 2026
-      "gemini-1.5-pro",    // fallback — más capaz en imágenes difíciles/borrosas
-      "gemini-1.5-flash",  // último recurso — más rápido
+      "gemini-2.5-flash",  // primary — multimodal estable v1beta
+      "gemini-2.5-pro",    // fallback — más capaz, mismo endpoint v1beta
     ];
 
     async function geminiCall(model: string, body: object, timeoutMs = 30000): Promise<any> {
@@ -2251,16 +2251,25 @@ Para el resto, aplica la estructura de la marca. Si no ves un dato pon "". Solo 
             safetySettings: SAFETY_OFF,
           }, 45000); // 45s — imágenes grandes pueden tardar más
 
-          // Detectar bloqueo por filtros de seguridad
-          if (!data.candidates?.[0] && data.promptFeedback?.blockReason) {
-            const err = `safety_block:${data.promptFeedback.blockReason}`;
+          // Sin candidatos — bloqueo o error silencioso
+          if (!data.candidates?.length) {
+            const blockReason = data.promptFeedback?.blockReason;
+            const err = blockReason ? `safety_block:${blockReason}` : `no_candidates(feedback:${JSON.stringify(data.promptFeedback||{})})`;
             modelErrors.push(`${model}→${err}`);
-            console.warn(`[OCR] ${model} SAFETY BLOCK:`, data.promptFeedback.blockReason);
+            console.warn(`[OCR] ${model} no candidates:`, err);
             continue;
           }
 
-          const finishReason = data.candidates?.[0]?.finishReason || "";
-          const raw = data.candidates?.[0]?.content?.parts?.find((p: any) => p.text)?.text || "";
+          const finishReason = data.candidates[0]?.finishReason || "";
+          // Sin content (RECITATION, MAX_TOKENS, etc.)
+          if (!data.candidates[0]?.content) {
+            const err = `no_content(finish=${finishReason})`;
+            modelErrors.push(`${model}→${err}`);
+            console.warn(`[OCR] ${model} no content:`, finishReason);
+            continue;
+          }
+
+          const raw = data.candidates[0]?.content?.parts?.find((p: any) => p.text)?.text || "";
           console.log(`[OCR] ${model} finishReason=${finishReason} raw(150ch):`, raw.slice(0, 150));
 
           // Intentar parsear directo; extractJson como fallback para markdown
@@ -2294,12 +2303,11 @@ Para el resto, aplica la estructura de la marca. Si no ves un dato pon "". Solo 
       if (!ocrResult) {
         const allErrors = modelErrors.join(" | ");
         console.error(`[OCR] Todos los modelos fallaron:`, allErrors);
-        const lastErr = modelErrors[modelErrors.length - 1] || "";
         const userMsg = allErrors.includes("429") || allErrors.includes("quota")
           ? "Límite de API alcanzado. Espera 1 minuto e inténtalo de nuevo."
           : allErrors.includes("safety_block:")
             ? "La imagen fue bloqueada por los filtros de seguridad. Prueba con una foto más clara o diferente."
-            : `No se pudo leer la etiqueta. Error: ${lastErr}. Asegúrate de que la foto sea nítida e inténtalo de nuevo.`;
+            : `No se pudo leer la etiqueta. Errores: ${allErrors}. Asegúrate de que la foto sea nítida e inténtalo de nuevo.`;
         return res.status(500).json({ error: userMsg });
       }
 
