@@ -99,6 +99,9 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
   // Token editing per license (licenseId → draft value string)
   const [editingTokens, setEditingTokens] = useState<Record<number, string>>({});
 
+  // Expiry editing per license (licenseId → draft date string "YYYY-MM-DD" or "")
+  const [editingExpiry, setEditingExpiry] = useState<Record<number, string>>({});
+
   // References
   const [refs, setRefs] = useState<any[]>([]);
   const [newRefBrand, setNewRefBrand] = useState<Brand>('ADIDAS');
@@ -161,6 +164,14 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
     if (raw !== '' && tokens !== null && (isNaN(tokens) || tokens < 0)) return;
     await client.post(`/api/admin/licenses/${licenseId}/tokens`, { tokens });
     setEditingTokens(prev => { const n = { ...prev }; delete n[licenseId]; return n; });
+    loadTab('licenses');
+  };
+
+  const saveLicenseExpiry = async (licenseId: number) => {
+    const raw = editingExpiry[licenseId]; // "YYYY-MM-DD" o "" = lifetime
+    const expires_at = raw || null;
+    await client.patch(`/api/admin/licenses/${licenseId}/expires`, { expires_at });
+    setEditingExpiry(prev => { const n = { ...prev }; delete n[licenseId]; return n; });
     loadTab('licenses');
   };
 
@@ -502,7 +513,36 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
                       </td>
                       <td className="px-4 py-3"><Badge type={l.type} /></td>
                       <td className="px-4 py-3 text-xs text-zinc-400">{l.username || <span className="text-zinc-600">Sin activar</span>}</td>
-                      <td className="px-4 py-3 text-xs text-zinc-400">{formatDate(l.expires_at)}</td>
+                      <td className="px-4 py-3 text-xs">
+                        {l.id in editingExpiry ? (
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="date"
+                              value={editingExpiry[l.id]}
+                              onChange={e => setEditingExpiry(prev => ({ ...prev, [l.id]: e.target.value }))}
+                              className="bg-zinc-800 border border-violet-500 rounded-lg px-2 py-1 text-xs text-white focus:outline-none"
+                              autoFocus
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') saveLicenseExpiry(l.id);
+                                if (e.key === 'Escape') setEditingExpiry(prev => { const n = { ...prev }; delete n[l.id]; return n; });
+                              }}
+                            />
+                            <button onClick={() => saveLicenseExpiry(l.id)} className="text-acid text-xs px-1.5 py-1 rounded hover:text-white transition">✓</button>
+                            <button onClick={() => setEditingExpiry(prev => { const n = { ...prev }; delete n[l.id]; return n; })} className="text-zinc-500 text-xs px-1 py-1 rounded hover:text-white transition">✕</button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => {
+                              const d = l.expires_at ? new Date(l.expires_at).toISOString().slice(0, 10) : '';
+                              setEditingExpiry(prev => ({ ...prev, [l.id]: d }));
+                            }}
+                            className="text-zinc-400 hover:text-white hover:underline transition cursor-pointer"
+                            title="Editar fecha de expiración"
+                          >
+                            {formatDate(l.expires_at)}
+                          </button>
+                        )}
+                      </td>
                       <td className="px-4 py-3 text-xs text-zinc-500 max-w-[90px] truncate" title={l.hwid || ''}>{truncate(l.hwid, 10)}</td>
 
                       {/* Columna de acceso academia */}

@@ -762,6 +762,25 @@ async function startServer() {
     res.json(result.rows[0]);
   });
 
+  // ── Cambiar fecha de expiración ─────────────────────────────────────────────
+
+  app.patch("/api/admin/licenses/:id/expires", requireAdmin as any, async (req, res) => {
+    const { expires_at } = req.body; // ISO string (YYYY-MM-DD) o null/vacío → lifetime
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: "ID inválido" });
+    let expiryDate: Date | null = null;
+    if (expires_at) {
+      expiryDate = new Date(expires_at);
+      if (isNaN(expiryDate.getTime())) return res.status(400).json({ error: "Fecha inválida" });
+    }
+    const result = await pool.query(
+      "UPDATE licenses SET expires_at = $1 WHERE id = $2 RETURNING id, expires_at",
+      [expiryDate, id]
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: "Licencia no encontrada" });
+    res.json(result.rows[0]);
+  });
+
   app.get("/api/admin/sessions", requireAdmin as any, async (_req, res) => {
     const result = await pool.query(`
       SELECT s.*, u.username, u.email
@@ -2167,10 +2186,10 @@ Prioridad máxima: "rawText" debe ser transcripción literal completa.
 Para el resto, aplica la estructura de la marca. Si no ves un dato pon "". Solo el JSON.`;
 
     // Modelos con soporte multimodal (imagen+texto) — actualizados junio 2026
-    // gemini-2.0-flash deprecado mayo 2026; gemini-2.5-flash-preview-05-20 preview caducado
     const OCR_MODELS = [
-      "gemini-2.5-flash",    // primary — multimodal estable junio 2026
-      "gemini-1.5-flash",    // fallback probado
+      "gemini-2.5-flash",       // primary — multimodal estable, fuerza JSON via responseMimeType
+      "gemini-1.5-pro-latest",  // fallback — más capaz en imágenes borrosas/pequeñas
+      "gemini-1.5-flash",       // último recurso — más rápido
     ];
 
     async function geminiCall(model: string, body: object, timeoutMs = 30000): Promise<any> {
@@ -2188,10 +2207,16 @@ Para el resto, aplica la estructura de la marca. Si no ves un dato pon "". Solo 
     }
 
     function extractJson(text: string): any | null {
-      const m = text.match(/```json\s*([\s\S]*?)```/) || text.match(/\{[\s\S]*\}/);
-      const raw = m ? (m[1] || m[0]) : null;
-      if (!raw) return null;
-      try { return JSON.parse(raw); } catch { return null; }
+      // 1: bloque ```json ... ```
+      const m1 = text.match(/```json\s*([\s\S]*?)```/i);
+      if (m1) { try { return JSON.parse(m1[1].trim()); } catch {} }
+      // 2: cualquier bloque ``` ... ```
+      const m2 = text.match(/```\s*([\s\S]*?)```/);
+      if (m2) { try { return JSON.parse(m2[1].trim()); } catch {} }
+      // 3: desde el primer '{' hasta el último '}' del texto
+      const i1 = text.indexOf('{'), i2 = text.lastIndexOf('}');
+      if (i1 >= 0 && i2 > i1) { try { return JSON.parse(text.slice(i1, i2 + 1)); } catch {} }
+      return null;
     }
 
     try {
@@ -2205,14 +2230,17 @@ Para el resto, aplica la estructura de la marca. Si no ves un dato pon "". Solo 
       // ── Paso 1: OCR de imagen ──────────────────────────────────────────────
       for (const model of OCR_MODELS) {
         try {
-          const data = await geminiCall(model, {
+          const ocrBody: any = {
             contents: [{ parts: [
               { inlineData: { mimeType, data: base64Data } },
               { text: ocrPrompt }
             ]}],
-            // Sin responseMimeType: máxima compatibilidad entre modelos.
-            // extractJson parsea tanto JSON puro como bloques ```json ... ```.
-          });
+          };
+          // gemini-2.5-x soporta responseMimeType → devuelve JSON puro sin markdown
+          if (model.startsWith("gemini-2.5")) {
+            ocrBody.generationConfig = { responseMimeType: "application/json" };
+          }
+          const data = await geminiCall(model, ocrBody);
           // Con responseMimeType:json el texto ya es JSON puro, sin markdown
           const raw = data.candidates?.[0]?.content?.parts?.find((p: any) => p.text)?.text || "";
           console.log(`[OCR] ${model} raw (100ch):`, raw.slice(0, 100));
