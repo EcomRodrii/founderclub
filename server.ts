@@ -3401,6 +3401,61 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
     });
   });
 
+  // ── Alfombras: edición de fondo por IA ──────────────────────────────────────
+  // Recibe foto(s) de producto + referencia de alfombra opcional + color deseado.
+  // Devuelve la imagen editada con la alfombra cambiada, producto intacto.
+  app.post("/api/carpet/generate", geminiLimiter, requireLicense as any, checkDailyLimit as any, async (req: AuthRequest, res) => {
+    const { imageBase64, carpetColor, referenceBase64 } = req.body;
+    if (!imageBase64) return res.status(400).json({ error: "Falta la imagen del producto" });
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY no configurada" });
+
+    const tokenCheck = await checkTokens(req, res, 1);
+    if (!tokenCheck.ok) return;
+
+    const colorDesc = (carpetColor || "beige claro").trim();
+
+    const prompt = `Eres un editor profesional de fotografía de producto para e-commerce.
+
+TAREA: Cambia ÚNICAMENTE el fondo de la imagen (la alfombra) al nuevo color/estilo: "${colorDesc}".
+
+REGLAS ABSOLUTAS — no las incumplas bajo ningún concepto:
+1. El producto (zapatilla, ropa u objeto) debe quedar EXACTAMENTE IGUAL: mismos colores, forma, textura, logotipos, costuras, suela y todos los detalles. CERO modificaciones.
+2. Conserva EXACTAMENTE las proporciones y perspectiva original del producto.
+3. Cambia el fondo sustituyendo la alfombra existente por una alfombra de color "${colorDesc}".
+4. La iluminación debe ser uniforme, natural y coherente con el producto. Las sombras bajo el producto deben ser realistas.
+5. Si aparece una mano u otra parte del cuerpo, consérvala exactamente como está, sin alteraciones.
+6. NO añadas objetos, textos, marcas de agua, elementos decorativos ni reflejos extra.
+7. La imagen resultante debe tener exactamente el mismo encuadre y composición que la original.
+8. Calidad fotográfica profesional de catálogo e-commerce.${referenceBase64 ? "\n9. Usa la primera imagen como referencia del estilo, textura y tono de alfombra objetivo." : ""}
+
+Genera la imagen editada.`;
+
+    // Calcular aspect ratio desde la imagen de entrada
+    let aspectRatio: string | null = null;
+    try {
+      const b64data = imageBase64.includes(",") ? imageBase64.split(",")[1] : imageBase64;
+      const dims = jpegDimsFromBase64(b64data);
+      if (dims && dims.w > 0 && dims.h > 0) aspectRatio = pickGeminiAspect(dims.w, dims.h);
+    } catch (_) {}
+
+    const result = await runGeminiImageGeneration(
+      prompt,
+      imageBase64,
+      aspectRatio,
+      Date.now() + 90_000,
+      40_000,
+      apiKey,
+      referenceBase64 || null
+    );
+
+    if (!result) return res.status(503).json({ error: "No se pudo generar la imagen. Inténtalo de nuevo." });
+
+    deductTokens(tokenCheck.licenseId, 1);
+    res.json(result);
+  });
+
   // ── SSE: Ops Terminal stream ─────────────────────────────────────────────────
   // El cliente se conecta con el token JWT en query param porque EventSource
   // no soporta cabeceras personalizadas.

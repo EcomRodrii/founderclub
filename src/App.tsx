@@ -10,12 +10,12 @@ import Sidebar, { MobileTabBar, type Page } from './components/Sidebar';
 // 'photos' = Fantasma — siempre disponible para todos
 // 'academia' = desbloquea todo lo demás
 
-const ALL_PAGES: Page[] = ['dashboard', 'accounts', 'inventory', 'orders', 'profits', 'tongue', 'photos', 'boost', 'settings', 'publish'];
+const ALL_PAGES: Page[] = ['dashboard', 'accounts', 'inventory', 'orders', 'profits', 'tongue', 'photos', 'alfombras', 'settings', 'publish'];
 
 function computeAllowedPages(license: any, isAdmin: boolean): Set<Page> {
   if (isAdmin) return new Set(ALL_PAGES);
   const features: string[] = license?.features || ['photos'];
-  const pages = new Set<Page>(['photos']); // mínimo gratuito
+  const pages = new Set<Page>(['photos', 'alfombras']); // mínimo gratuito
   if (features.includes('all') || features.includes('academia')) {
     ALL_PAGES.forEach(p => pages.add(p));
   }
@@ -52,12 +52,12 @@ import DashboardPage  from './components/pages/DashboardPage';
 import AccountsPage   from './components/pages/AccountsPage';
 import InventoryPage  from './components/pages/InventoryPage';
 import OrdersPage     from './components/pages/OrdersPage';
-import BoostPage      from './components/pages/BoostPage';
 import SettingsPage   from './components/pages/SettingsPage';
 import ProfitControl     from './components/ProfitControl';
 import TongueEditor      from './components/TongueEditor';
 import ImageUniquifier   from './components/ImageUniquifier';
 import VintedAutoPublish from './components/VintedAutoPublish';
+import CarpetEditor      from './components/CarpetEditor';
 
 // ─── License activation ───────────────────────────────────────────────────────
 
@@ -251,11 +251,11 @@ function Dashboard({
       case 'accounts':   return <AccountsPage    token={token} />;
       case 'inventory':  return <InventoryPage   token={token} />;
       case 'orders':     return <OrdersPage      token={token} />;
-      case 'boost':      return <BoostPage       token={token} />;
       case 'profits':    return <ProfitControl   token={token} />;
       case 'publish':    return <VintedAutoPublish token={token} />;
       case 'tongue':     return <TongueEditor />;
       case 'photos':     return <ImageUniquifier />;
+      case 'alfombras':  return <CarpetEditor token={token} />;
       case 'settings':   return (
         <SettingsPage token={token} user={user} license={license} onLogout={onLogout} />
       );

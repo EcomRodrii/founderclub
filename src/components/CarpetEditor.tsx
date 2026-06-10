@@ -1,0 +1,518 @@
+import React, { useState, useRef, useCallback } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
+import {
+  Upload, Download, RefreshCcw, Trash2, Shuffle,
+  ImageIcon, ZapOff, Images, CheckCircle2, X,
+  Sparkles, Palette,
+} from 'lucide-react';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface CarpetJob {
+  id: string;
+  originalName: string;
+  originalUrl: string;
+  resultUrl: string | null;
+  originalSize: number;
+  status: 'pending' | 'processing' | 'done' | 'error';
+  errorMsg?: string;
+}
+
+// ─── Preset colors ────────────────────────────────────────────────────────────
+
+const CARPET_PRESETS = [
+  { label: 'Beige claro',  value: 'beige claro suave, textura de pelo corto uniforme',           color: '#e8d9c0' },
+  { label: 'Blanco',       value: 'blanco puro, pelo corto y denso, estudio fotográfico',         color: '#f5f5f5' },
+  { label: 'Gris claro',   value: 'gris claro neutro, textura de alfombra lisa y uniforme',       color: '#d0d0d0' },
+  { label: 'Gris oscuro',  value: 'gris oscuro antracita, alfombra de pelo corto',                color: '#5a5a5a' },
+  { label: 'Crema',        value: 'crema cálido, alfombra de pelo largo suave',                   color: '#f0e6d3' },
+  { label: 'Negro',        value: 'negro mate profundo, alfombra de pelo fino y uniforme',        color: '#1a1a1a' },
+];
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+function formatSize(b: number) {
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
+  return `${(b / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+async function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function dl(dataUrl: string, name: string) {
+  const a = document.createElement('a'); a.href = dataUrl; a.download = name; a.click();
+}
+
+async function dataUrlToFile(dataUrl: string, name: string): Promise<File> {
+  const blob = await fetch(dataUrl).then(r => r.blob());
+  return new File([blob], name, { type: 'image/jpeg' });
+}
+
+function canShareFiles(): boolean {
+  try {
+    return (
+      typeof navigator.share === 'function' &&
+      typeof navigator.canShare === 'function' &&
+      navigator.canShare({ files: [new File([''], 'test.jpg', { type: 'image/jpeg' })] })
+    );
+  } catch { return false; }
+}
+
+async function saveOne(dataUrl: string, filename: string): Promise<void> {
+  if (canShareFiles()) {
+    const file = await dataUrlToFile(dataUrl, filename);
+    await navigator.share({ files: [file], title: filename });
+  } else { dl(dataUrl, filename); }
+}
+
+async function saveAll(
+  items: { dataUrl: string; filename: string }[],
+  onProgress?: (n: number) => void
+): Promise<void> {
+  if (canShareFiles()) {
+    try {
+      const files = await Promise.all(items.map(i => dataUrlToFile(i.dataUrl, i.filename)));
+      if (navigator.canShare({ files })) {
+        await navigator.share({ files, title: `${files.length} fotos editadas` });
+        onProgress?.(files.length); return;
+      }
+    } catch { /* fallback */ }
+    for (let i = 0; i < items.length; i++) {
+      try {
+        const file = await dataUrlToFile(items[i].dataUrl, items[i].filename);
+        await navigator.share({ files: [file], title: items[i].filename });
+        onProgress?.(i + 1);
+      } catch { /* usuario canceló */ }
+    }
+  } else {
+    items.forEach((item, idx) => {
+      setTimeout(() => { dl(item.dataUrl, item.filename); onProgress?.(idx + 1); }, idx * 120);
+    });
+  }
+}
+
+// ─── Componente ───────────────────────────────────────────────────────────────
+
+export default function CarpetEditor({ token }: { token: string }) {
+  const [jobs, setJobs]               = useState<CarpetJob[]>([]);
+  const [carpetColor, setCarpetColor] = useState(CARPET_PRESETS[0].value);
+  const [customColor, setCustomColor] = useState('');
+  const [useCustom, setUseCustom]     = useState(false);
+  const [refImage, setRefImage]       = useState<string | null>(null);
+  const [refName, setRefName]         = useState<string>('');
+  const [dragging, setDragging]       = useState(false);
+  const [savingAll, setSavingAll]     = useState(false);
+  const [savedCount, setSavedCount]   = useState(0);
+  const [isRunning, setIsRunning]     = useState(false);
+
+  const productInputRef = useRef<HTMLInputElement>(null);
+  const refInputRef     = useRef<HTMLInputElement>(null);
+
+  const effectiveColor = useCustom && customColor.trim()
+    ? customColor.trim()
+    : carpetColor;
+
+  // ── Subir referencia de alfombra ────────────────────────────────────────────
+  const handleRefInput = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const b64 = await fileToBase64(file);
+    setRefImage(b64);
+    setRefName(file.name);
+  };
+
+  // ── Procesar imágenes de producto ────────────────────────────────────────────
+  const processFiles = useCallback(async (files: File[]) => {
+    const imgs = files.filter(f => f.type.startsWith('image/') || f.name.toLowerCase().endsWith('.heic'));
+    if (!imgs.length) return;
+    setIsRunning(true);
+
+    const newJobs: CarpetJob[] = imgs.map(f => ({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      originalName: f.name,
+      originalUrl: URL.createObjectURL(f),
+      resultUrl: null,
+      originalSize: f.size,
+      status: 'pending',
+    }));
+    setJobs(prev => [...newJobs, ...prev]);
+
+    for (const [i, file] of imgs.entries()) {
+      const job = newJobs[i];
+
+      // Mark as processing
+      setJobs(prev => prev.map(j => j.id === job.id ? { ...j, status: 'processing' } : j));
+
+      try {
+        const imageBase64 = await fileToBase64(file);
+
+        const body: any = { imageBase64, carpetColor: effectiveColor };
+        if (refImage) body.referenceBase64 = refImage;
+
+        const res = await fetch('/api/carpet/generate', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(body),
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          const errMsg = data?.error || `Error ${res.status}`;
+          setJobs(prev => prev.map(j =>
+            j.id === job.id ? { ...j, status: 'error', errorMsg: errMsg } : j
+          ));
+          continue;
+        }
+
+        setJobs(prev => prev.map(j =>
+          j.id === job.id
+            ? { ...j, status: 'done', resultUrl: data.image }
+            : j
+        ));
+      } catch (err: any) {
+        setJobs(prev => prev.map(j =>
+          j.id === job.id
+            ? { ...j, status: 'error', errorMsg: err.message || 'Error desconocido' }
+            : j
+        ));
+      }
+    }
+
+    setIsRunning(false);
+  }, [token, effectiveColor, refImage]);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault(); setDragging(false);
+    processFiles(Array.from(e.dataTransfer.files));
+  }, [processFiles]);
+
+  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) processFiles(Array.from(e.target.files));
+    e.target.value = '';
+  };
+
+  const reprocess = async (id: string) => {
+    const job = jobs.find(j => j.id === id); if (!job) return;
+    setJobs(prev => prev.map(j => j.id === id ? { ...j, status: 'processing', resultUrl: null } : j));
+    try {
+      const res = await fetch(job.originalUrl);
+      const blob = await res.blob();
+      const file = new File([blob], job.originalName, { type: blob.type || 'image/jpeg' });
+      const imageBase64 = await fileToBase64(file);
+      const body: any = { imageBase64, carpetColor: effectiveColor };
+      if (refImage) body.referenceBase64 = refImage;
+      const r = await fetch('/api/carpet/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data?.error || `Error ${r.status}`);
+      setJobs(prev => prev.map(j => j.id === id ? { ...j, status: 'done', resultUrl: data.image } : j));
+    } catch (err: any) {
+      setJobs(prev => prev.map(j => j.id === id ? { ...j, status: 'error', errorMsg: err.message } : j));
+    }
+  };
+
+  const remove   = (id: string) => setJobs(prev => prev.filter(j => j.id !== id));
+  const clearAll = () => setJobs([]);
+
+  const doneJobs  = jobs.filter(j => j.status === 'done' && j.resultUrl);
+  const doneCount = doneJobs.length;
+
+  const handleSaveAll = async () => {
+    if (!doneJobs.length) return;
+    setSavingAll(true); setSavedCount(0);
+    const items = doneJobs.map((j, idx) => ({
+      dataUrl: j.resultUrl!,
+      filename: `${j.originalName.replace(/\.[^.]+$/, '')}_alfombra_${idx + 1}.jpg`,
+    }));
+    try { await saveAll(items, n => setSavedCount(n)); }
+    finally { setSavingAll(false); }
+  };
+
+  const saveLabel    = IS_MOBILE ? 'Guardar' : 'Descargar';
+  const saveAllLabel = IS_MOBILE ? 'Guardar en galería' : 'Descargar todas';
+
+  return (
+    <div className="space-y-6 pb-24 lg:pb-6">
+
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
+      <div>
+        <p className="font-display text-[0.75rem] tracking-[0.3em] text-[#d4ff00]">EDICIÓN IA</p>
+        <h1 className="font-display text-[2.4rem] leading-none tracking-[0.02em] text-[#f2f2ef] mt-1">Alfombras</h1>
+        <p className="text-[0.82rem] text-[#888880] mt-2">
+          Cambia el fondo de alfombra de tus fotos de producto. El artículo queda intacto.
+        </p>
+      </div>
+
+      {/* ── Selección de color de alfombra ──────────────────────────────────── */}
+      <div className="bg-[#161616] border border-white/[0.06] rounded-2xl p-5 space-y-4">
+        <div className="flex items-center gap-2">
+          <Palette className="w-4 h-4 text-[#d4ff00]" />
+          <p className="text-[0.85rem] font-semibold text-[#f2f2ef]">Color de alfombra destino</p>
+        </div>
+
+        {/* Presets */}
+        <div className="grid grid-cols-3 gap-2">
+          {CARPET_PRESETS.map(p => {
+            const active = !useCustom && carpetColor === p.value;
+            return (
+              <button
+                key={p.value}
+                onClick={() => { setCarpetColor(p.value); setUseCustom(false); }}
+                className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border text-left transition-all ${
+                  active
+                    ? 'border-[#d4ff00]/60 bg-[#d4ff00]/10'
+                    : 'border-white/[0.08] bg-white/[0.03] hover:border-white/20'
+                }`}
+              >
+                <span
+                  className="w-5 h-5 rounded-full border border-white/20 shrink-0"
+                  style={{ backgroundColor: p.color }}
+                />
+                <span className={`text-[0.75rem] font-medium leading-tight ${active ? 'text-[#d4ff00]' : 'text-[#888880]'}`}>
+                  {p.label}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Custom text */}
+        <div>
+          <button
+            onClick={() => setUseCustom(v => !v)}
+            className={`text-[0.75rem] font-medium transition-colors ${useCustom ? 'text-[#d4ff00]' : 'text-[#888880] hover:text-[#f2f2ef]'}`}
+          >
+            {useCustom ? '✓ ' : '+ '}Personalizado (escribe el color o estilo)
+          </button>
+          {useCustom && (
+            <input
+              type="text"
+              placeholder="Ej: verde musgo suave, pelo largo, studio blanco con degradado..."
+              value={customColor}
+              onChange={e => setCustomColor(e.target.value)}
+              autoFocus
+              className="mt-2 w-full bg-[#111] border border-white/[0.12] rounded-xl px-4 py-2.5 text-sm text-[#f2f2ef] placeholder-[#555550] focus:outline-none focus:border-[#d4ff00]/50"
+            />
+          )}
+        </div>
+      </div>
+
+      {/* ── Referencia de alfombra (opcional) ──────────────────────────────── */}
+      <div className="bg-[#161616] border border-white/[0.06] rounded-2xl p-5 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <ImageIcon className="w-4 h-4 text-[#888880]" />
+            <p className="text-[0.85rem] font-semibold text-[#f2f2ef]">Foto de referencia</p>
+            <span className="text-[0.7rem] text-[#555550] bg-white/[0.05] px-2 py-0.5 rounded-full">Opcional</span>
+          </div>
+          {refImage && (
+            <button
+              onClick={() => { setRefImage(null); setRefName(''); }}
+              className="text-[#555550] hover:text-[#ff8080] transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+
+        {refImage ? (
+          <div className="flex items-center gap-3">
+            <img src={refImage} alt="referencia" className="w-16 h-16 object-cover rounded-xl border border-white/10" />
+            <div>
+              <p className="text-[0.78rem] text-[#f2f2ef] font-medium truncate max-w-[200px]">{refName}</p>
+              <p className="text-[0.7rem] text-[#888880]">La IA usará esta alfombra como referencia de estilo</p>
+            </div>
+          </div>
+        ) : (
+          <button
+            onClick={() => refInputRef.current?.click()}
+            className="w-full flex items-center gap-3 px-4 py-3 border border-dashed border-white/[0.12] rounded-xl text-[0.82rem] text-[#555550] hover:text-[#f2f2ef] hover:border-white/25 transition-all"
+          >
+            <Upload className="w-4 h-4 shrink-0" />
+            Adjunta una foto de la alfombra que quieres usar como modelo
+          </button>
+        )}
+        <input ref={refInputRef} type="file" accept="image/*,.heic,.HEIC" className="hidden" onChange={handleRefInput} />
+      </div>
+
+      {/* ── Drop zone ───────────────────────────────────────────────────────── */}
+      <div
+        onDragOver={e => { e.preventDefault(); setDragging(true); }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={handleDrop}
+        onClick={() => !isRunning && productInputRef.current?.click()}
+        className={`relative border-2 border-dashed rounded-3xl p-10 text-center transition-all ${
+          isRunning ? 'cursor-not-allowed opacity-60' :
+          dragging   ? 'border-[#d4ff00] bg-[#d4ff00]/[0.05] scale-[1.01] cursor-copy' :
+          'border-white/10 hover:border-white/20 hover:bg-white/[0.02] cursor-pointer'
+        }`}
+      >
+        <input
+          ref={productInputRef}
+          type="file"
+          accept="image/*,.heic,.HEIC"
+          multiple
+          className="hidden"
+          onChange={handleFileInput}
+          disabled={isRunning}
+        />
+        <div className="flex flex-col items-center gap-3">
+          <div className={`w-16 h-16 rounded-2xl flex items-center justify-center border transition-all ${
+            dragging ? 'bg-[#d4ff00]/10 border-[#d4ff00]' : 'bg-white/5 border-white/10'
+          }`}>
+            {isRunning
+              ? <RefreshCcw className="w-7 h-7 text-[#d4ff00] animate-spin" />
+              : <Upload className={`w-7 h-7 ${dragging ? 'text-[#d4ff00]' : 'text-white/40'}`} />
+            }
+          </div>
+          <div>
+            <p className="text-[#f2f2ef] font-semibold">
+              {isRunning ? 'Procesando fotos…' : 'Arrastra las fotos del producto aquí'}
+            </p>
+            <p className="text-white/40 text-sm mt-1">
+              {isRunning
+                ? 'Cada imagen tarda ~15-30 segundos'
+                : `Alfombra destino: ${useCustom && customColor.trim() ? customColor.trim() : CARPET_PRESETS.find(p => p.value === carpetColor)?.label || carpetColor}`
+              }
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Barra de acciones ───────────────────────────────────────────────── */}
+      {jobs.length > 0 && (
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <p className="text-sm text-white/50">
+            <span className="text-white font-bold">{doneCount}</span>/{jobs.length} listas
+            {savingAll && savedCount > 0 && (
+              <span className="ml-2 text-[#d4ff00] font-bold">· Guardadas {savedCount}</span>
+            )}
+          </p>
+          <div className="flex gap-2">
+            {doneCount > 0 && (
+              <button
+                onClick={handleSaveAll}
+                disabled={savingAll}
+                className="flex items-center gap-2 bg-[#d4ff00] hover:bg-[#c8f000] disabled:opacity-60 text-black font-bold px-4 py-2 rounded-xl text-sm transition"
+              >
+                {savingAll
+                  ? <><RefreshCcw className="w-4 h-4 animate-spin" />{savedCount}/{doneCount}</>
+                  : <><Images className="w-4 h-4" />{saveAllLabel} ({doneCount})</>
+                }
+              </button>
+            )}
+            <button onClick={clearAll} className="flex items-center gap-2 bg-white/5 hover:bg-red-500/10 text-white/40 hover:text-red-400 border border-white/10 px-4 py-2 rounded-xl text-sm transition">
+              <Trash2 className="w-4 h-4" />Limpiar
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Grid de resultados ──────────────────────────────────────────────── */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <AnimatePresence>
+          {jobs.map(job => (
+            <motion.div key={job.id}
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              className="bg-[#141414] border border-white/5 rounded-2xl overflow-hidden"
+            >
+              {/* Imagen */}
+              <div className="relative aspect-square bg-black/40 flex items-center justify-center overflow-hidden">
+                {job.resultUrl ? (
+                  <img src={job.resultUrl} alt={job.originalName} className="w-full h-full object-cover" />
+                ) : job.status === 'processing' ? (
+                  <div className="flex flex-col items-center gap-3">
+                    <Sparkles className="w-8 h-8 text-[#d4ff00] animate-pulse" />
+                    <span className="text-xs text-white/40">Editando con IA…</span>
+                  </div>
+                ) : job.status === 'pending' ? (
+                  <div className="flex flex-col items-center gap-3">
+                    <RefreshCcw className="w-8 h-8 text-white/20 animate-spin" />
+                    <span className="text-xs text-white/30">En cola…</span>
+                  </div>
+                ) : job.status === 'error' ? (
+                  <div className="flex flex-col items-center gap-2 text-red-400/60 px-4 text-center">
+                    <ZapOff className="w-8 h-8" />
+                    <span className="text-xs leading-snug">{job.errorMsg || 'Error'}</span>
+                  </div>
+                ) : (
+                  <ImageIcon className="w-12 h-12 text-white/10" />
+                )}
+                {job.status === 'done' && (
+                  <div className="absolute top-2 right-2 bg-[#d4ff00] rounded-full p-1">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-black" />
+                  </div>
+                )}
+                {/* Original preview top-left */}
+                <div className="absolute bottom-2 left-2">
+                  <img src={job.originalUrl} alt="original" className="w-10 h-10 object-cover rounded-lg border border-white/20 opacity-70" />
+                </div>
+              </div>
+
+              {/* Info + acciones */}
+              <div className="p-4 space-y-3">
+                <p className="text-xs text-white/70 truncate font-medium">{job.originalName}</p>
+                {job.status === 'done' && (
+                  <div className="flex justify-between text-[10px] text-[#d4ff00]">
+                    <span>Editada</span>
+                    <span className="font-mono">{formatSize(job.originalSize)}</span>
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  {job.status === 'done' && job.resultUrl && (
+                    <button
+                      onClick={() => saveOne(job.resultUrl!, job.originalName.replace(/\.[^.]+$/, '_alfombra.jpg'))}
+                      className="flex-1 flex items-center justify-center gap-1.5 bg-[#d4ff00] hover:bg-[#c8f000] text-black font-bold py-2 rounded-xl text-xs transition"
+                    >
+                      <Download className="w-3.5 h-3.5" />{saveLabel}
+                    </button>
+                  )}
+                  {(job.status === 'done' || job.status === 'error') && (
+                    <button
+                      onClick={() => reprocess(job.id)}
+                      title="Regenerar"
+                      className="p-2 bg-white/5 hover:bg-white/10 text-white/40 hover:text-[#d4ff00] rounded-xl border border-white/5 transition"
+                    >
+                      <Shuffle className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                  <button
+                    onClick={() => remove(job.id)}
+                    className="p-2 bg-white/5 hover:bg-red-500/10 text-white/20 hover:text-red-400 rounded-xl border border-white/5 transition"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          ))}
+        </AnimatePresence>
+      </div>
+
+      {jobs.length === 0 && (
+        <p className="text-center py-6 text-white/20 text-sm">
+          Sube las fotos del producto para cambiar la alfombra
+        </p>
+      )}
+    </div>
+  );
+}

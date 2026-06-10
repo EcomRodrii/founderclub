@@ -1,14 +1,14 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
-  LayoutDashboard, Users, Package, ShoppingBag, Zap, Settings,
+  LayoutDashboard, Users, Package, ShoppingBag, Settings,
   LogOut, ShieldCheck, Scissors, Ghost, TrendingUp,
-  MoreHorizontal, X, Lock, Send,
+  MoreHorizontal, X, Lock, Send, Layers,
 } from 'lucide-react';
 
 export type Page =
   | 'dashboard' | 'accounts' | 'inventory' | 'orders'
-  | 'profits' | 'tongue' | 'photos' | 'boost' | 'settings' | 'publish';
+  | 'profits' | 'tongue' | 'photos' | 'alfombras' | 'settings' | 'publish';
 
 interface SidebarProps {
   currentPage: Page;
@@ -30,9 +30,9 @@ const NAV_TOOLS: { id: Page; label: string; icon: React.ReactNode }[] = [
   { id: 'publish', label: 'Autopublicar',  icon: <Send       className="w-[18px] h-[18px]" /> },
   { id: 'profits', label: 'Beneficios',    icon: <TrendingUp className="w-[18px] h-[18px]" /> },
   { id: 'tongue',  label: 'Lengüeta',      icon: <Scissors   className="w-[18px] h-[18px]" /> },
-  { id: 'photos',  label: 'Fantasma',      icon: <Ghost      className="w-[18px] h-[18px]" /> },
-  { id: 'boost',   label: 'Boost',         icon: <Zap        className="w-[18px] h-[18px]" /> },
-  { id: 'settings',label: 'Configuración', icon: <Settings   className="w-[18px] h-[18px]" /> },
+  { id: 'photos',    label: 'Fantasma',    icon: <Ghost   className="w-[18px] h-[18px]" /> },
+  { id: 'alfombras', label: 'Alfombras',   icon: <Layers  className="w-[18px] h-[18px]" /> },
+  { id: 'settings',  label: 'Config',      icon: <Settings className="w-[18px] h-[18px]" /> },
 ];
 
 function NavBtn({
@@ -136,11 +136,11 @@ const MOBILE_MAIN: { id: Page; label: string; icon: React.ReactNode }[] = [
 ];
 
 const MOBILE_MORE: { id: Page; label: string; icon: React.ReactNode }[] = [
-  { id: 'tongue',   label: 'Lengüeta', icon: <Scissors className="w-5 h-5" /> },
-  { id: 'photos',   label: 'Fantasma', icon: <Ghost    className="w-5 h-5" /> },
-  { id: 'accounts', label: 'Cuentas',  icon: <Users    className="w-5 h-5" /> },
-  { id: 'boost',    label: 'Boost',    icon: <Zap      className="w-5 h-5" /> },
-  { id: 'settings', label: 'Config',   icon: <Settings className="w-5 h-5" /> },
+  { id: 'tongue',    label: 'Lengüeta',  icon: <Scissors className="w-5 h-5" /> },
+  { id: 'photos',    label: 'Fantasma',  icon: <Ghost    className="w-5 h-5" /> },
+  { id: 'alfombras', label: 'Alfombras', icon: <Layers   className="w-5 h-5" /> },
+  { id: 'accounts',  label: 'Cuentas',   icon: <Users    className="w-5 h-5" /> },
+  { id: 'settings',  label: 'Config',    icon: <Settings className="w-5 h-5" /> },
 ];
 
 export function MobileTabBar({
