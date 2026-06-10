@@ -6,7 +6,7 @@ import {
   ToggleLeft, ToggleRight, Fingerprint, Globe, Clock,
   FileText, Save, Package, ImagePlus, Hash,
   Search, Ban, Unlock, KeyRound, BarChart3,
-  Database, Cpu, Zap, AlertTriangle, TrendingUp, Crown
+  Database, Cpu, Zap, AlertTriangle, TrendingUp, Crown, X
 } from 'lucide-react';
 
 interface AdminPanelProps {
@@ -66,6 +66,260 @@ function truncate(s: string | null, len = 18) {
   return s.length > len ? s.slice(0, len) + '…' : s;
 }
 
+// ─── Helpers de fecha ─────────────────────────────────────────────────────────
+
+function timeAgo(d: string | null): string {
+  if (!d) return '—';
+  const s = Math.floor((Date.now() - new Date(d).getTime()) / 1000);
+  if (s < 60) return 'ahora mismo';
+  if (s < 3600) return `hace ${Math.floor(s/60)}m`;
+  if (s < 86400) return `hace ${Math.floor(s/3600)}h`;
+  if (s < 86400*7) return `hace ${Math.floor(s/86400)}d`;
+  return formatDate(d);
+}
+function isOnline(d: string | null): boolean {
+  if (!d) return false;
+  return (Date.now() - new Date(d).getTime()) < 10 * 60 * 1000;
+}
+
+// ─── ActionRow ────────────────────────────────────────────────────────────────
+
+function ActionRow({ label, value, valueColor, btnLabel, btnColor, loading, onClick }: {
+  label: string; value: string; valueColor: string;
+  btnLabel: string; btnColor: string; loading: boolean; onClick: () => void;
+}) {
+  return (
+    <div className="bg-zinc-900 rounded-xl px-3 py-2.5 flex items-center justify-between gap-3">
+      <div className="flex items-center gap-2 min-w-0">
+        <span className="text-xs text-zinc-500 shrink-0">{label}</span>
+        <span className={`text-xs font-semibold ${valueColor} truncate`}>{value}</span>
+      </div>
+      <button
+        onClick={onClick}
+        disabled={loading}
+        className={`text-[11px] font-medium px-2.5 py-1 rounded-lg transition shrink-0 ${btnColor} disabled:opacity-40`}
+      >
+        {loading ? '…' : btnLabel}
+      </button>
+    </div>
+  );
+}
+
+// ─── UserDrawer ───────────────────────────────────────────────────────────────
+
+function UserDrawer({ user, token, onClose, onRefresh }: {
+  user: any; token: string; onClose: () => void; onRefresh: () => void;
+}) {
+  const client = api(token);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [pwdMode, setPwdMode] = useState(false);
+  const [pwd, setPwd] = useState('');
+  const [pwdDone, setPwdDone] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const act = async (key: string, fn: () => Promise<any>) => {
+    setBusy(key);
+    try { await fn(); onRefresh(); }
+    catch (e) { console.error(e); }
+    finally { setBusy(null); }
+  };
+
+  const resetPwd = async () => {
+    if (pwd.length < 6) return;
+    setBusy('pwd');
+    try {
+      await client.post(`/api/admin/users/${user.id}/reset-password`, { password: pwd });
+      setPwdDone(true);
+      setTimeout(() => { setPwdMode(false); setPwd(''); setPwdDone(false); }, 2000);
+    } finally { setBusy(null); }
+  };
+
+  const online = isOnline(user.last_seen_at);
+  const initials = (user.username || 'U').slice(0, 2).toUpperCase();
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+
+      {/* Panel */}
+      <div className="fixed right-0 top-0 bottom-0 z-50 w-full max-w-sm bg-zinc-950 border-l border-zinc-800 flex flex-col shadow-2xl overflow-y-auto">
+
+        {/* Header */}
+        <div className="flex items-start justify-between p-5 border-b border-zinc-800 shrink-0">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className={`relative w-12 h-12 rounded-full flex items-center justify-center text-sm font-bold text-white bg-zinc-800 border-2 shrink-0 ${online ? 'border-green-400' : 'border-zinc-700'}`}>
+              {initials}
+              {online && <span className="absolute bottom-0 right-0 w-3 h-3 rounded-full bg-green-400 border-2 border-zinc-950" />}
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="font-semibold text-white truncate">{user.username}</span>
+                {user.is_admin && <span className="text-[10px] bg-violet-500/15 text-violet-400 border border-violet-500/30 rounded px-1.5 py-0.5 shrink-0">admin</span>}
+                {user.rank === 'pro' && <span className="text-[10px] bg-yellow-500/15 text-yellow-400 border border-yellow-500/30 rounded px-1.5 py-0.5 inline-flex items-center gap-0.5 shrink-0"><Crown className="w-2.5 h-2.5" /> Pro</span>}
+                {user.is_blocked && <span className="text-[10px] bg-red-500/15 text-red-400 border border-red-500/30 rounded px-1.5 py-0.5 shrink-0">bloqueado</span>}
+              </div>
+              <p className="text-xs text-zinc-500 mt-0.5 truncate">{user.email}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-zinc-500 hover:text-white transition shrink-0 ml-2 p-1">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Stats */}
+        <div className="grid grid-cols-3 gap-2 p-4 border-b border-zinc-800 shrink-0">
+          {[
+            { label: 'Último login', value: timeAgo(user.last_login_at) },
+            { label: 'Visto',        value: timeAgo(user.last_seen_at) },
+            { label: 'Uso hoy',      value: `${user.daily_usage_today ?? 0}/10` },
+          ].map(s => (
+            <div key={s.label} className="bg-zinc-900 rounded-xl px-2 py-2.5 text-center">
+              <p className="text-[10px] text-zinc-600 mb-0.5">{s.label}</p>
+              <p className="text-xs font-semibold text-white leading-tight">{s.value}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* IP */}
+        <div className="px-4 py-2.5 border-b border-zinc-800 shrink-0 flex items-center justify-between">
+          <div className="flex items-center gap-1.5">
+            <Globe className="w-3.5 h-3.5 text-zinc-600" />
+            <span className="text-xs font-mono text-zinc-400">{user.last_ip || '(sin IP)'}</span>
+          </div>
+          {user.last_ip && (
+            <button
+              onClick={() => act('clearip', () => client.patch(`/api/admin/users/${user.id}/clear-ip`))}
+              disabled={busy === 'clearip'}
+              className="text-[11px] text-zinc-600 hover:text-red-400 transition"
+            >
+              {busy === 'clearip' ? '…' : 'borrar'}
+            </button>
+          )}
+        </div>
+
+        {/* Acciones */}
+        <div className="flex-1 p-4 space-y-2">
+
+          <ActionRow
+            label="Rango" value={user.rank === 'pro' ? 'Pro' : 'Normal'}
+            valueColor={user.rank === 'pro' ? 'text-yellow-400' : 'text-zinc-400'}
+            btnLabel={user.rank === 'pro' ? '→ Normal' : '→ Pro'}
+            btnColor={user.rank === 'pro'
+              ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
+              : 'bg-yellow-500/15 hover:bg-yellow-500/25 text-yellow-400 border border-yellow-500/30'}
+            loading={busy === 'rank'}
+            onClick={() => act('rank', () => client.patch(`/api/admin/users/${user.id}/rank`, { rank: user.rank === 'pro' ? 'normal' : 'pro' }))}
+          />
+
+          <ActionRow
+            label="Estado" value={user.is_blocked ? 'Bloqueado' : 'Activo'}
+            valueColor={user.is_blocked ? 'text-red-400' : 'text-green-400'}
+            btnLabel={user.is_blocked ? '→ Desbloquear' : '→ Bloquear'}
+            btnColor={user.is_blocked
+              ? 'bg-green-500/15 hover:bg-green-500/25 text-green-400 border border-green-500/30'
+              : 'bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20'}
+            loading={busy === 'block'}
+            onClick={() => act('block', () => client.patch(`/api/admin/users/${user.id}/block`, { block: !user.is_blocked }))}
+          />
+
+          <ActionRow
+            label="Admin" value={user.is_admin ? 'Sí' : 'No'}
+            valueColor={user.is_admin ? 'text-violet-400' : 'text-zinc-400'}
+            btnLabel={user.is_admin ? '→ Quitar' : '→ Dar admin'}
+            btnColor={user.is_admin
+              ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
+              : 'bg-violet-500/10 hover:bg-violet-500/20 text-violet-400 border border-violet-500/20'}
+            loading={busy === 'admin'}
+            onClick={() => act('admin', () => client.patch(`/api/admin/users/${user.id}/toggle-admin`))}
+          />
+
+          {/* Contraseña */}
+          <div className="bg-zinc-900 rounded-xl p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-zinc-500">Contraseña</span>
+                <KeyRound className="w-3.5 h-3.5 text-zinc-600" />
+              </div>
+              <button
+                onClick={() => { setPwdMode(m => !m); setPwd(''); setPwdDone(false); }}
+                className="text-[11px] text-zinc-500 hover:text-yellow-400 transition"
+              >
+                {pwdMode ? 'cancelar' : 'cambiar'}
+              </button>
+            </div>
+            {pwdMode && (
+              pwdDone ? (
+                <div className="flex items-center gap-1.5 text-xs text-green-400"><Check className="w-3.5 h-3.5" /> Contraseña actualizada</div>
+              ) : (
+                <div className="flex gap-2">
+                  <input
+                    type="password"
+                    placeholder="Nueva contraseña (mín. 6)"
+                    value={pwd}
+                    onChange={e => setPwd(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') resetPwd(); }}
+                    autoFocus
+                    className="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-white placeholder-zinc-600 focus:outline-none focus:border-yellow-500 min-w-0"
+                  />
+                  <button
+                    onClick={resetPwd}
+                    disabled={busy === 'pwd' || pwd.length < 6}
+                    className="px-3 py-1.5 bg-yellow-500 hover:bg-yellow-400 disabled:opacity-40 text-black text-xs font-semibold rounded-lg transition shrink-0"
+                  >
+                    {busy === 'pwd' ? '…' : 'OK'}
+                  </button>
+                </div>
+              )
+            )}
+          </div>
+
+          {/* Cerrar sesión */}
+          <button
+            onClick={() => act('logout', () => client.post(`/api/admin/users/${user.id}/force-logout`, {}))}
+            disabled={busy === 'logout'}
+            className="w-full flex items-center gap-2 px-3 py-2.5 bg-zinc-900 hover:bg-zinc-800 rounded-xl text-xs text-zinc-400 hover:text-white transition"
+          >
+            <LogOut className="w-3.5 h-3.5 shrink-0" />
+            {busy === 'logout' ? 'Cerrando sesión…' : 'Cerrar sesión activa'}
+          </button>
+
+          {/* Eliminar cuenta */}
+          <div className="pt-2 border-t border-zinc-800/60 mt-2">
+            {!confirmDelete ? (
+              <button
+                onClick={() => setConfirmDelete(true)}
+                className="w-full flex items-center gap-2 px-3 py-2.5 bg-red-500/5 hover:bg-red-500/10 border border-red-500/15 hover:border-red-500/30 rounded-xl text-xs text-red-500 hover:text-red-400 transition"
+              >
+                <Trash2 className="w-3.5 h-3.5 shrink-0" />
+                Eliminar cuenta
+              </button>
+            ) : (
+              <div className="bg-red-500/10 border border-red-500/25 rounded-xl p-3 space-y-2">
+                <p className="text-xs text-red-400 font-medium">¿Eliminar a <strong>{user.username}</strong>? No se puede deshacer.</p>
+                <div className="flex gap-2">
+                  <button onClick={() => setConfirmDelete(false)} className="flex-1 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-xs rounded-lg transition">
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={() => act('delete', async () => { await client.delete(`/api/admin/users/${user.id}`); onClose(); })}
+                    disabled={busy === 'delete'}
+                    className="flex-1 py-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition"
+                  >
+                    {busy === 'delete' ? 'Eliminando…' : 'Sí, eliminar'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ─── AdminPanel ───────────────────────────────────────────────────────────────
+
 export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps) {
   const [tab, setTab] = useState<Tab>('stats');
   const [stats, setStats] = useState<any>(null);
@@ -101,17 +355,8 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
   // Search
   const [userSearch, setUserSearch] = useState('');
 
-  // Block loading
-  const [blockLoading, setBlockLoading] = useState<Record<number, boolean>>({});
-
-  // Rank loading
-  const [rankLoading, setRankLoading] = useState<Record<number, boolean>>({});
-
-  // Password modal
-  const [pwdModal, setPwdModal] = useState<{ userId: number; username: string } | null>(null);
-  const [pwdValue, setPwdValue] = useState('');
-  const [pwdLoading, setPwdLoading] = useState(false);
-  const [pwdDone, setPwdDone] = useState(false);
+  // Selected user (opens drawer)
+  const [selectedUser, setSelectedUser] = useState<any | null>(null);
 
   // Monitor data
   const [monitor, setMonitor] = useState<any>(null);
@@ -192,28 +437,17 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
     loadTab('licenses');
   };
 
-  const blockUser = async (userId: number, block: boolean) => {
-    setBlockLoading(prev => ({ ...prev, [userId]: true }));
-    await client.patch(`/api/admin/users/${userId}/block`, { block });
-    setBlockLoading(prev => ({ ...prev, [userId]: false }));
-    loadTab('users');
-  };
-
-  const setUserRank = async (userId: number, rank: 'normal' | 'pro') => {
-    setRankLoading(prev => ({ ...prev, [userId]: true }));
-    await client.patch(`/api/admin/users/${userId}/rank`, { rank });
-    setRankLoading(prev => ({ ...prev, [userId]: false }));
-    loadTab('users');
-  };
-
-  const resetPassword = async () => {
-    if (!pwdModal || !pwdValue) return;
-    setPwdLoading(true);
-    await client.post(`/api/admin/users/${pwdModal.userId}/reset-password`, { password: pwdValue });
-    setPwdLoading(false);
-    setPwdDone(true);
-    setTimeout(() => { setPwdModal(null); setPwdValue(''); setPwdDone(false); }, 1500);
-  };
+  const refreshUsers = useCallback(async () => {
+    const q = userSearch;
+    const url = q ? `/api/admin/users?search=${encodeURIComponent(q)}` : '/api/admin/users';
+    const fresh = await client.get(url);
+    setUsers(fresh);
+    // Sync drawer con datos frescos
+    setSelectedUser((prev: any) => {
+      if (!prev) return null;
+      return fresh.find((u: any) => u.id === prev.id) ?? null;
+    });
+  }, [token, userSearch]);
 
   const saveLicenseExpiry = async (licenseId: number) => {
     const raw = editingExpiry[licenseId]; // "YYYY-MM-DD" o "" = lifetime
@@ -290,20 +524,6 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
     { id: 'references', label: 'Referencias', icon: <ImagePlus className="w-4 h-4" /> },
   ];
 
-  // helpers
-  function timeAgo(d: string | null): string {
-    if (!d) return '—';
-    const s = Math.floor((Date.now() - new Date(d).getTime()) / 1000);
-    if (s < 60) return 'ahora mismo';
-    if (s < 3600) return `hace ${Math.floor(s/60)}m`;
-    if (s < 86400) return `hace ${Math.floor(s/3600)}h`;
-    if (s < 86400*7) return `hace ${Math.floor(s/86400)}d`;
-    return formatDate(d);
-  }
-  function isOnline(d: string | null): boolean {
-    if (!d) return false;
-    return (Date.now() - new Date(d).getTime()) < 10 * 60 * 1000; // < 10 min
-  }
   function actionLabel(a: string): { label: string; color: string } {
     if (a === 'login') return { label: '🔑 Login', color: 'text-blue-400' };
     if (a.startsWith('lengueta:scan'))     return { label: `📷 Escaneo ${a.split(':')[2] || ''}`, color: 'text-acid' };
@@ -402,11 +622,11 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
                 <span><strong>{users.filter(u => isOnline(u.last_seen_at)).length}</strong> usuario(s) activos ahora mismo (últimos 10 min)</span>
               </div>
             )}
-            <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-x-auto">
-              <table className="w-full text-sm min-w-[1000px]">
+            <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden">
+              <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-zinc-800">
-                    {['', 'Usuario', 'Email', 'Último login', 'Visto', 'IP', 'Licencia', 'Tipo', 'Expira', 'Hoy', 'Acciones'].map(h => (
+                    {['', 'Usuario', 'Email', 'Visto', 'Hoy', 'Licencia'].map(h => (
                       <th key={h} className="text-left text-xs text-zinc-500 font-medium px-4 py-3">{h}</th>
                     ))}
                   </tr>
@@ -414,68 +634,37 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
                 <tbody>
                   {users.map(u => {
                     const online = isOnline(u.last_seen_at);
+                    const sel = selectedUser?.id === u.id;
                     return (
-                      <tr key={u.id} className={`border-b border-zinc-800/60 hover:bg-zinc-800/30 transition ${u.is_blocked ? 'opacity-50' : ''} ${online ? 'bg-green-500/5' : ''}`}>
+                      <tr
+                        key={u.id}
+                        onClick={() => setSelectedUser(u)}
+                        className={`border-b border-zinc-800/60 cursor-pointer transition
+                          ${u.is_blocked ? 'opacity-40' : ''}
+                          ${sel ? 'bg-zinc-800/70' : online ? 'bg-green-500/5 hover:bg-green-500/10' : 'hover:bg-zinc-800/40'}`}
+                      >
                         <td className="px-3 py-3">
-                          <span className={`w-2 h-2 rounded-full inline-block ${online ? 'bg-green-400 animate-pulse' : 'bg-zinc-700'}`} title={online ? 'Online ahora' : 'Offline'} />
+                          <span className={`w-2 h-2 rounded-full inline-block ${online ? 'bg-green-400 animate-pulse' : 'bg-zinc-700'}`} />
                         </td>
-                        <td className="px-4 py-3 font-medium">
-                          {u.username}
-                          {u.is_admin && <span className="ml-1 text-[10px] text-violet-400 border border-violet-500/30 rounded px-1">admin</span>}
-                          {u.rank === 'pro' && <span className="ml-1 text-[10px] text-yellow-400 border border-yellow-500/30 rounded px-1 inline-flex items-center gap-0.5"><Crown className="w-2.5 h-2.5" />Pro</span>}
-                          {u.is_blocked && <span className="ml-1 text-[10px] text-red-400 border border-red-500/30 rounded px-1">bloqueado</span>}
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-medium text-white">{u.username}</span>
+                            {u.is_admin && <span className="text-[10px] text-violet-400 border border-violet-500/30 rounded px-1">admin</span>}
+                            {u.rank === 'pro' && <span className="text-[10px] text-yellow-400 border border-yellow-500/30 rounded px-1 inline-flex items-center gap-0.5"><Crown className="w-2.5 h-2.5" /> Pro</span>}
+                            {u.is_blocked && <span className="text-[10px] text-red-400 border border-red-500/30 rounded px-1">bloqueado</span>}
+                          </div>
                         </td>
-                        <td className="px-4 py-3 text-zinc-400 text-xs">{u.email}</td>
-                        <td className="px-4 py-3 text-xs text-zinc-300">{timeAgo(u.last_login_at)}</td>
+                        <td className="px-4 py-3 text-xs text-zinc-500 truncate max-w-[180px]">{u.email}</td>
                         <td className="px-4 py-3 text-xs">
                           <span className={online ? 'text-green-400 font-medium' : 'text-zinc-400'}>{timeAgo(u.last_seen_at)}</span>
                         </td>
-                        <td className="px-4 py-3 text-xs text-zinc-500 font-mono">{u.last_ip || '—'}</td>
-                        <td className="px-4 py-3">
-                          {u.license_key
-                            ? <span className="font-mono text-xs text-zinc-300 flex items-center">{truncate(u.license_key, 12)}<CopyButton text={u.license_key} /></span>
-                            : <span className="text-zinc-600 text-xs">Sin licencia</span>}
-                        </td>
-                        <td className="px-4 py-3">{u.license_type ? <Badge type={u.license_type} /> : '—'}</td>
-                        <td className="px-4 py-3 text-xs text-zinc-400">{formatDate(u.expires_at)}</td>
                         <td className="px-4 py-3 text-xs">
-                          <span className={`font-mono font-semibold ${Number(u.daily_usage_today) >= 10 ? 'text-red-400' : Number(u.daily_usage_today) > 0 ? 'text-acid' : 'text-zinc-600'}`}>
+                          <span className={`font-mono font-semibold ${Number(u.daily_usage_today) >= 10 ? 'text-red-400' : Number(u.daily_usage_today) > 0 ? 'text-[#d4ff00]' : 'text-zinc-600'}`}>
                             {u.daily_usage_today ?? 0}/10
                           </span>
                         </td>
                         <td className="px-4 py-3">
-                          <div className="flex items-center gap-1.5">
-                            <button onClick={async () => { await client.patch(`/api/admin/users/${u.id}/toggle-admin`); loadTab('users'); }}
-                              className="text-zinc-500 hover:text-violet-400 transition" title={u.is_admin ? 'Quitar admin' : 'Hacer admin'}>
-                              {u.is_admin ? <ShieldOff className="w-4 h-4" /> : <Shield className="w-4 h-4" />}
-                            </button>
-                            <button
-                              onClick={() => blockUser(u.id, !u.is_blocked)}
-                              disabled={blockLoading[u.id]}
-                              className={`transition ${u.is_blocked ? 'text-green-400 hover:text-green-300' : 'text-zinc-500 hover:text-red-400'}`}
-                              title={u.is_blocked ? 'Desbloquear' : 'Bloquear'}
-                            >
-                              {u.is_blocked ? <Unlock className="w-4 h-4" /> : <Ban className="w-4 h-4" />}
-                            </button>
-                            <button
-                              onClick={() => { setPwdModal({ userId: u.id, username: u.username }); setPwdValue(''); }}
-                              className="text-zinc-500 hover:text-yellow-400 transition" title="Cambiar contraseña">
-                              <KeyRound className="w-4 h-4" />
-                            </button>
-                            <button
-                              onClick={() => setUserRank(u.id, u.rank === 'pro' ? 'normal' : 'pro')}
-                              disabled={rankLoading[u.id]}
-                              className={`transition ${u.rank === 'pro' ? 'text-yellow-400 hover:text-yellow-300' : 'text-zinc-500 hover:text-yellow-400'}`}
-                              title={u.rank === 'pro' ? 'Quitar Pro → Normal' : 'Dar rango Pro'}
-                            >
-                              <Crown className="w-4 h-4" />
-                            </button>
-                            <button
-                              onClick={async () => { if (confirm(`¿Cerrar sesión de ${u.username}?`)) { await client.post(`/api/admin/users/${u.id}/force-logout`, {}); loadTab('users'); } }}
-                              className="text-zinc-500 hover:text-red-400 transition" title="Forzar cierre de sesión">
-                              <LogOut className="w-4 h-4" />
-                            </button>
-                          </div>
+                          {u.license_type ? <Badge type={u.license_type} /> : <span className="text-zinc-600 text-xs">—</span>}
                         </td>
                       </tr>
                     );
@@ -483,7 +672,7 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
                 </tbody>
               </table>
               {users.length === 0 && !loading && (
-                <p className="text-center text-zinc-600 py-8 text-sm">Sin usuarios todavía</p>
+                <p className="text-center text-zinc-600 py-8 text-sm">Sin usuarios — haz una búsqueda</p>
               )}
             </div>
           </div>
@@ -1074,51 +1263,14 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
         )}
       </div>
 
-      {/* Password reset modal */}
-      {pwdModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={e => { if (e.target === e.currentTarget) setPwdModal(null); }}>
-          <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
-            className="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 w-full max-w-sm mx-4 shadow-2xl"
-          >
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-9 h-9 rounded-xl bg-yellow-500/10 border border-yellow-500/20 flex items-center justify-center">
-                <KeyRound className="w-4 h-4 text-yellow-400" />
-              </div>
-              <div>
-                <h3 className="font-semibold text-white">Cambiar contraseña</h3>
-                <p className="text-xs text-zinc-400">{pwdModal.username}</p>
-              </div>
-            </div>
-
-            {pwdDone ? (
-              <div className="flex items-center gap-2 text-green-400 bg-green-500/10 border border-green-500/20 rounded-xl px-4 py-3 text-sm">
-                <Check className="w-4 h-4" /> Contraseña actualizada correctamente
-              </div>
-            ) : (
-              <>
-                <input
-                  type="password"
-                  placeholder="Nueva contraseña (mín. 6 caracteres)"
-                  value={pwdValue}
-                  onChange={e => setPwdValue(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter') resetPassword(); if (e.key === 'Escape') setPwdModal(null); }}
-                  autoFocus
-                  className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-yellow-500 mb-4"
-                />
-                <div className="flex gap-2">
-                  <button onClick={() => setPwdModal(null)}
-                    className="flex-1 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 rounded-xl text-sm transition">
-                    Cancelar
-                  </button>
-                  <button onClick={resetPassword} disabled={pwdLoading || pwdValue.length < 6}
-                    className="flex-1 py-2 bg-yellow-500 hover:bg-yellow-400 disabled:opacity-50 text-black font-semibold rounded-xl text-sm transition flex items-center justify-center gap-2">
-                    {pwdLoading ? <><RefreshCcw className="w-4 h-4 animate-spin" /> Guardando…</> : <><Check className="w-4 h-4" /> Guardar</>}
-                  </button>
-                </div>
-              </>
-            )}
-          </motion.div>
-        </div>
+      {/* User drawer */}
+      {selectedUser && (
+        <UserDrawer
+          user={selectedUser}
+          token={token}
+          onClose={() => setSelectedUser(null)}
+          onRefresh={refreshUsers}
+        />
       )}
     </div>
   );

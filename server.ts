@@ -696,6 +696,28 @@ async function startServer() {
     res.json({ ok: true });
   });
 
+  // ── Borrar IP de usuario ───────────────────────────────────────────────────────
+  app.patch("/api/admin/users/:id/clear-ip", requireAdmin as any, async (req, res) => {
+    const result = await pool.query(
+      "UPDATE users SET last_ip = NULL WHERE id = $1 RETURNING id, username",
+      [req.params.id]
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: "Usuario no encontrado" });
+    res.json({ ok: true });
+  });
+
+  // ── Eliminar usuario (admin) ──────────────────────────────────────────────────
+  app.delete("/api/admin/users/:id", requireAdmin as any, async (req, res) => {
+    const uid = req.params.id;
+    // Borrar datos relacionados primero para evitar FK violations
+    await pool.query("DELETE FROM licenses WHERE user_id = $1", [uid]);
+    await pool.query("DELETE FROM daily_usage WHERE user_id = $1", [uid]);
+    await pool.query("DELETE FROM activity_log WHERE user_id = $1", [uid]);
+    const result = await pool.query("DELETE FROM users WHERE id = $1 RETURNING username", [uid]);
+    if (!result.rows[0]) return res.status(404).json({ error: "Usuario no encontrado" });
+    res.json({ ok: true, deleted: result.rows[0].username });
+  });
+
   // ── Bloquear / desbloquear usuario ────────────────────────────────────────────
   app.patch("/api/admin/users/:id/block", requireAdmin as any, async (req, res) => {
     const { block } = req.body; // true = bloquear, false = desbloquear
