@@ -200,6 +200,7 @@ export default function TongueEditor() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [dailyLimitReached, setDailyLimitReached] = useState(false);
   const [detections, setDetections] = useState<DetectionResult | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [customPromptAdidas, setCustomPromptAdidas] = useState<string>(`PROMPT ADIDAS - REGLAS DE ORO:
@@ -322,13 +323,18 @@ export default function TongueEditor() {
   const runOCR = async (base64Image: string) => {
     setLoading(true);
     setError(null);
+    setDailyLimitReached(false);
     setDetections(null);
     setStatus('Leyendo lengüeta...');
     try {
       const res = await authFetch('/api/tongue/analyze', { imageBase64: base64Image, brand: activeBrand });
       const data = await res.json();
       if (!res.ok) {
-        // Error claro según código HTTP
+        if (res.status === 429 && data.daily_limit_reached) {
+          setDailyLimitReached(true);
+          setError(data.error || 'Límite diario alcanzado.');
+          return;
+        }
         if (res.status === 429) throw new Error('Demasiadas peticiones. Espera un momento e inténtalo de nuevo.');
         if (res.status === 503) throw new Error('Servicio no disponible. Inténtalo en unos segundos.');
         throw new Error(data.error || `Error del servidor (${res.status})`);
@@ -445,6 +451,7 @@ export default function TongueEditor() {
     if (!detections) return;
     setLoading(true);
     setError(null);
+    setDailyLimitReached(false);
     setStatus('Generando lengüeta...');
     try {
       const res = await authFetch('/api/tongue/generate', {
@@ -455,6 +462,11 @@ export default function TongueEditor() {
       });
       const data = await res.json();
       if (!res.ok) {
+        if (res.status === 429 && data.daily_limit_reached) {
+          setDailyLimitReached(true);
+          setError(data.error || 'Límite diario alcanzado.');
+          return;
+        }
         if (res.status === 429) throw new Error('Demasiadas peticiones. Espera unos segundos.');
         if (res.status === 402) throw new Error(data.error || 'Sin tokens de generación. Contacta al administrador.');
         if (res.status === 422) throw new Error(data.error || 'Gemini no generó imagen. Inténtalo de nuevo.');
@@ -486,6 +498,7 @@ export default function TongueEditor() {
     setLoadingBox(true);
     setBoxImage(null);
     setError(null);
+    setDailyLimitReached(false);
     try {
       const res = await authFetch('/api/box/generate', {
         imageBase64: boxOriginalImage,
@@ -495,6 +508,11 @@ export default function TongueEditor() {
       });
       const data = await res.json();
       if (!res.ok) {
+        if (res.status === 429 && data.daily_limit_reached) {
+          setDailyLimitReached(true);
+          setError(data.error || 'Límite diario alcanzado.');
+          return;
+        }
         if (res.status === 429) throw new Error('Demasiadas peticiones. Espera unos segundos.');
         if (res.status === 402) throw new Error(data.error || 'Sin tokens de generación. Contacta al administrador.');
         throw new Error(data.error || `Error (${res.status}). Inténtalo de nuevo.`);
@@ -757,7 +775,15 @@ export default function TongueEditor() {
           )}
         </div>
 
-        {error && (
+        {error && dailyLimitReached && (
+          <div className="flex items-start gap-3 py-3 px-4 bg-yellow-500/10 border border-yellow-500/30 rounded-2xl">
+            <span className="text-lg shrink-0 mt-0.5">⏳</span>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-yellow-300 leading-relaxed whitespace-pre-line">{error}</p>
+            </div>
+          </div>
+        )}
+        {error && !dailyLimitReached && (
           <div className="flex items-start gap-3 py-3 px-4 bg-red-500/10 border border-red-500/20 rounded-2xl">
             <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
             <div className="flex-1 min-w-0">

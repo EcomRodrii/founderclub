@@ -10,6 +10,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
 import helmet from "helmet";
+import compression from "compression";
 import rateLimit from "express-rate-limit";
 import { pool, initDB } from "./db.js";
 
@@ -73,8 +74,9 @@ async function requireAuth(req: AuthRequest, res: Response, next: NextFunction) 
 
     // ── Standard user JWT ──
     if (decoded.id) {
-      const result = await pool.query("SELECT id, username, email, is_admin, session_token FROM users WHERE id = $1", [decoded.id]);
+      const result = await pool.query("SELECT id, username, email, is_admin, is_blocked, session_token FROM users WHERE id = $1", [decoded.id]);
       if (!result.rows[0]) return res.status(401).json({ error: "Usuario no encontrado" });
+      if (result.rows[0].is_blocked) return res.status(403).json({ error: "Cuenta bloqueada. Contacta al administrador.", blocked: true });
 
       // Anti credential-sharing: el sid del token debe coincidir con el session_token de la BD.
       const storedSid = result.rows[0].session_token;
@@ -144,6 +146,50 @@ function requireWorkerSecret(req: Request, res: Response, next: NextFunction) {
   const expected = process.env.BAZOOKA_WORKER_SECRET;
   if (!expected) return res.status(503).json({ ok: false, error: 'worker_secret_not_configured' });
   if (provided !== expected) return res.status(401).json({ ok: false, error: 'invalid_worker_secret' });
+  next();
+}
+
+// ── Límite diario de generaciones ────────────────────────────────────────────
+const DAILY_FREE_LIMIT = 10;
+
+async function checkDailyLimit(req: AuthRequest, res: Response, next: NextFunction) {
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ error: "No autenticado" });
+  if (req.user?.is_admin) return next(); // admins sin límite
+
+  // Licencia activa monthly/lifetime → sin límite
+  const lic = await pool.query(
+    `SELECT type FROM licenses
+     WHERE user_id=$1 AND is_active=TRUE AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1`,
+    [userId]
+  ).catch(() => ({ rows: [] as any[] }));
+  const licType = lic.rows[0]?.type;
+  if (licType === "monthly" || licType === "lifetime") return next();
+
+  // Leer contador actual del día
+  const cur = await pool.query(
+    "SELECT count FROM daily_usage WHERE user_id=$1 AND usage_date=CURRENT_DATE",
+    [userId]
+  ).catch(() => ({ rows: [] as any[] }));
+  const currentCount = Number(cur.rows[0]?.count || 0);
+
+  if (currentCount >= DAILY_FREE_LIMIT) {
+    return res.status(429).json({
+      error: `Has alcanzado tu límite diario de ${DAILY_FREE_LIMIT} generaciones.\n\nSi necesitas más generaciones, contáctame por privado.\n\nPlan ilimitado: 8,99€/mes.`,
+      daily_limit_reached: true,
+      limit: DAILY_FREE_LIMIT,
+      used: currentCount,
+    });
+  }
+
+  // Incrementar de forma atómica
+  await pool.query(
+    `INSERT INTO daily_usage (user_id, usage_date, count)
+     VALUES ($1, CURRENT_DATE, 1)
+     ON CONFLICT (user_id, usage_date) DO UPDATE SET count = daily_usage.count + 1`,
+    [userId]
+  ).catch(() => {});
+
   next();
 }
 
@@ -223,6 +269,23 @@ async function startServer() {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS last_ip        VARCHAR(60);
   `).catch(() => {});
 
+  // ── Bloqueo de usuarios ───────────────────────────────────────────────────────
+  await pool.query(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN DEFAULT FALSE;
+  `).catch(() => {});
+
+  // ── Límite diario de generaciones ────────────────────────────────────────────
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS daily_usage (
+      id         SERIAL PRIMARY KEY,
+      user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      usage_date DATE    NOT NULL DEFAULT CURRENT_DATE,
+      count      INTEGER NOT NULL DEFAULT 0,
+      UNIQUE(user_id, usage_date)
+    );
+    CREATE INDEX IF NOT EXISTS idx_daily_usage_user_date ON daily_usage(user_id, usage_date DESC);
+  `).catch(() => {});
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS activity_log (
       id         SERIAL PRIMARY KEY,
@@ -291,8 +354,9 @@ async function startServer() {
 
   const app = express();
 
-  // ── Seguridad ─────────────────────────────────────────────────────────────
-  app.use(helmet({ contentSecurityPolicy: false })); // cabeceras HTTP de seguridad
+  // ── Seguridad + Compresión ────────────────────────────────────────────────
+  app.use(helmet({ contentSecurityPolicy: false }));
+  app.use(compression()); // GZIP/Brotli automático
   app.set("trust proxy", 1); // necesario para rate limit detrás de Railway
 
   // ── CORS — permite chrome-extension://, localhost y el propio dominio ──────
@@ -613,16 +677,24 @@ async function startServer() {
     });
   });
 
-  app.get("/api/admin/users", requireAdmin as any, async (_req, res) => {
+  app.get("/api/admin/users", requireAdmin as any, async (req, res) => {
+    const search = (req.query.search as string || "").trim();
+    const whereClause = search
+      ? `WHERE (u.username ILIKE $1 OR u.email ILIKE $1)`
+      : "";
+    const params = search ? [`%${search}%`] : [];
     const result = await pool.query(`
-      SELECT u.id, u.username, u.email, u.is_admin, u.created_at,
+      SELECT u.id, u.username, u.email, u.is_admin, u.is_blocked, u.created_at,
         u.last_login_at, u.last_seen_at, u.last_ip,
         l.key AS license_key, l.type AS license_type, l.expires_at, l.is_active AS license_active,
-        l.hwid, l.ip
+        l.hwid, l.ip,
+        COALESCE(du.count, 0) AS daily_usage_today
       FROM users u
       LEFT JOIN licenses l ON l.user_id = u.id AND l.is_active = TRUE
+      LEFT JOIN daily_usage du ON du.user_id = u.id AND du.usage_date = CURRENT_DATE
+      ${whereClause}
       ORDER BY COALESCE(u.last_seen_at, u.created_at) DESC
-    `);
+    `, params);
     res.json(result.rows);
   });
 
@@ -630,6 +702,51 @@ async function startServer() {
   app.post("/api/admin/users/:id/force-logout", requireAdmin as any, async (req, res) => {
     await pool.query("UPDATE users SET session_token = NULL WHERE id = $1", [req.params.id]);
     res.json({ ok: true });
+  });
+
+  // ── Bloquear / desbloquear usuario ────────────────────────────────────────────
+  app.patch("/api/admin/users/:id/block", requireAdmin as any, async (req, res) => {
+    const { block } = req.body; // true = bloquear, false = desbloquear
+    const result = await pool.query(
+      "UPDATE users SET is_blocked=$1, session_token=NULL WHERE id=$2 RETURNING id, username, is_blocked",
+      [!!block, req.params.id]
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: "Usuario no encontrado" });
+    res.json(result.rows[0]);
+  });
+
+  // ── Cambiar contraseña de usuario (admin) ─────────────────────────────────────
+  app.post("/api/admin/users/:id/reset-password", requireAdmin as any, async (req, res) => {
+    const { password } = req.body;
+    if (!password || password.length < 6)
+      return res.status(400).json({ error: "La contraseña debe tener al menos 6 caracteres" });
+    const hash = await bcrypt.hash(password, 10);
+    const result = await pool.query(
+      "UPDATE users SET password_hash=$1, session_token=NULL WHERE id=$2 RETURNING id, username",
+      [hash, req.params.id]
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: "Usuario no encontrado" });
+    res.json({ ok: true, username: result.rows[0].username });
+  });
+
+  // ── Usage diario del usuario autenticado ──────────────────────────────────────
+  app.get("/api/usage/today", requireAuth as any, async (req: AuthRequest, res) => {
+    const userId = req.user!.id;
+    const [usageRes, licRes] = await Promise.all([
+      pool.query("SELECT count FROM daily_usage WHERE user_id=$1 AND usage_date=CURRENT_DATE", [userId]),
+      pool.query(
+        "SELECT type FROM licenses WHERE user_id=$1 AND is_active=TRUE AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1",
+        [userId]
+      ),
+    ]);
+    const licType = licRes.rows[0]?.type;
+    const unlimited = req.user?.is_admin || licType === "monthly" || licType === "lifetime";
+    res.json({
+      used:      Number(usageRes.rows[0]?.count || 0),
+      limit:     unlimited ? null : DAILY_FREE_LIMIT,
+      unlimited,
+      resets_at: "00:00 UTC mañana",
+    });
   });
 
   // ── Feed de actividad reciente ────────────────────────────────────────────────
@@ -790,6 +907,60 @@ async function startServer() {
       LIMIT 200
     `);
     res.json(result.rows);
+  });
+
+  // ── Panel de monitoreo ───────────────────────────────────────────────────────
+  app.get("/api/admin/monitor", requireAdmin as any, async (_req, res) => {
+    const start = Date.now();
+    try {
+      const [
+        dbCheck, totalUsers, activeUsers24h, newUsersToday,
+        gensToday, gensTotal, gensByUser, errorsProxy,
+        activeLicenses, blockedUsers,
+      ] = await Promise.all([
+        pool.query("SELECT 1").then(() => true).catch(() => false),
+        pool.query("SELECT COUNT(*) FROM users"),
+        pool.query("SELECT COUNT(*) FROM users WHERE last_seen_at > NOW() - INTERVAL '24h'"),
+        pool.query("SELECT COUNT(*) FROM users WHERE created_at > CURRENT_DATE"),
+        pool.query("SELECT COALESCE(SUM(count),0) as total FROM daily_usage WHERE usage_date=CURRENT_DATE"),
+        pool.query("SELECT COALESCE(SUM(count),0) as total FROM daily_usage"),
+        pool.query(`
+          SELECT u.username, COALESCE(SUM(du.count),0) as total_today
+          FROM users u
+          LEFT JOIN daily_usage du ON du.user_id=u.id AND du.usage_date=CURRENT_DATE
+          GROUP BY u.id, u.username
+          HAVING COALESCE(SUM(du.count),0) > 0
+          ORDER BY total_today DESC LIMIT 10
+        `),
+        pool.query("SELECT COUNT(*) FROM activity_log WHERE action LIKE 'error%' AND created_at > NOW() - INTERVAL '24h'"),
+        pool.query("SELECT COUNT(*) FROM licenses WHERE is_active=TRUE AND (expires_at IS NULL OR expires_at > NOW())"),
+        pool.query("SELECT COUNT(*) FROM users WHERE is_blocked=TRUE"),
+      ]);
+      const dbLatencyMs = Date.now() - start;
+
+      res.json({
+        status:          dbCheck ? "ok" : "db_error",
+        db_latency_ms:   dbLatencyMs,
+        db_ok:           dbCheck,
+        uptime_s:        Math.floor(process.uptime()),
+        mem_mb:          Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+        node_version:    process.version,
+        metrics: {
+          total_users:      parseInt(totalUsers.rows[0].count),
+          active_users_24h: parseInt(activeUsers24h.rows[0].count),
+          new_users_today:  parseInt(newUsersToday.rows[0].count),
+          gens_today:       parseInt(gensToday.rows[0].total),
+          gens_total:       parseInt(gensTotal.rows[0].total),
+          active_licenses:  parseInt(activeLicenses.rows[0].count),
+          blocked_users:    parseInt(blockedUsers.rows[0].count),
+          errors_24h:       parseInt(errorsProxy.rows[0].count),
+        },
+        top_users_today: gensByUser.rows,
+        checked_at:      new Date().toISOString(),
+      });
+    } catch (err: any) {
+      res.status(500).json({ status: "error", error: err.message });
+    }
   });
 
   app.patch("/api/admin/users/:id/toggle-admin", requireAdmin as any, async (req, res) => {
@@ -2136,7 +2307,7 @@ IMPORTANTE: queremos el TOTAL del lote y el TOTAL de unidades, NO el precio unit
     res.json(data);
   });
 
-  app.post("/api/tongue/analyze", geminiLimiter, requireLicense as any, async (req: AuthRequest, res) => {
+  app.post("/api/tongue/analyze", geminiLimiter, requireLicense as any, checkDailyLimit as any, async (req: AuthRequest, res) => {
     const { imageBase64, brand } = req.body;
     if (!imageBase64) return res.status(400).json({ error: "Se requiere imagen" });
 
@@ -2720,7 +2891,7 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
     ].filter(Boolean).join("\n");
   }
 
-  app.post("/api/tongue/generate", geminiLimiter, requireLicense as any, async (req: AuthRequest, res) => {
+  app.post("/api/tongue/generate", geminiLimiter, requireLicense as any, checkDailyLimit as any, async (req: AuthRequest, res) => {
     const { imageBase64, brand, detections, customPrompt } = req.body;
     if (!detections) return res.status(400).json({ error: "Se requieren los datos detectados" });
     if (req.user?.id) logActivity(req.user.id, `lengueta:generate:${brand || '?'}`, (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip);
@@ -3145,7 +3316,7 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
     return null;
   }
 
-  app.post("/api/box/generate", geminiLimiter, requireLicense as any, async (req: any, res) => {
+  app.post("/api/box/generate", geminiLimiter, requireLicense as any, checkDailyLimit as any, async (req: any, res) => {
     const { imageBase64, brand, detections, customPrompt } = req.body;
     if (!detections) return res.status(400).json({ error: "Se requieren los datos detectados" });
 
@@ -3193,7 +3364,7 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
 
   // ── Dual generation: tongue + box in parallel with synced codes ────────────
 
-  app.post("/api/dual/generate", geminiLimiter, requireLicense as any, async (req: any, res) => {
+  app.post("/api/dual/generate", geminiLimiter, requireLicense as any, checkDailyLimit as any, async (req: any, res) => {
     const { tongueImageBase64, boxImageBase64, brand, detections, tonguePrompt, boxPrompt } = req.body;
     if (!detections) return res.status(400).json({ error: "Se requieren los datos detectados" });
 

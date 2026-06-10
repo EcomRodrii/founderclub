@@ -4,7 +4,9 @@ import {
   Users, Key, Activity, LogOut, Plus, Trash2,
   RefreshCcw, Shield, ShieldOff, Copy, Check,
   ToggleLeft, ToggleRight, Fingerprint, Globe, Clock,
-  FileText, Save, Package, ImagePlus, Hash
+  FileText, Save, Package, ImagePlus, Hash,
+  Search, Ban, Unlock, KeyRound, BarChart3,
+  Database, Cpu, Zap, AlertTriangle, TrendingUp
 } from 'lucide-react';
 
 interface AdminPanelProps {
@@ -13,7 +15,7 @@ interface AdminPanelProps {
   onBack?: () => void;
 }
 
-type Tab = 'stats' | 'users' | 'activity' | 'licenses' | 'sessions' | 'prompts' | 'references';
+type Tab = 'stats' | 'users' | 'activity' | 'licenses' | 'sessions' | 'prompts' | 'references' | 'monitor';
 
 const BRANDS = ['ADIDAS', 'NEW BALANCE', 'ASICS', 'ONITSUKA'] as const;
 type Brand = typeof BRANDS[number];
@@ -96,6 +98,21 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
   const [boxPromptSaving, setBoxPromptSaving] = useState<Record<Brand, boolean>>({ 'ADIDAS': false, 'NEW BALANCE': false, 'ASICS': false, 'ONITSUKA': false });
   const [boxPromptSaved, setBoxPromptSaved] = useState<Record<Brand, boolean>>({ 'ADIDAS': false, 'NEW BALANCE': false, 'ASICS': false, 'ONITSUKA': false });
 
+  // Search
+  const [userSearch, setUserSearch] = useState('');
+
+  // Block loading
+  const [blockLoading, setBlockLoading] = useState<Record<number, boolean>>({});
+
+  // Password modal
+  const [pwdModal, setPwdModal] = useState<{ userId: number; username: string } | null>(null);
+  const [pwdValue, setPwdValue] = useState('');
+  const [pwdLoading, setPwdLoading] = useState(false);
+  const [pwdDone, setPwdDone] = useState(false);
+
+  // Monitor data
+  const [monitor, setMonitor] = useState<any>(null);
+
   // Token editing per license (licenseId → draft value string)
   const [editingTokens, setEditingTokens] = useState<Record<number, string>>({});
 
@@ -114,12 +131,17 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
 
   const client = api(token);
 
-  const loadTab = useCallback(async (t: Tab) => {
+  const loadTab = useCallback(async (t: Tab, search?: string) => {
     setLoading(true);
     try {
       if (t === 'stats') setStats(await client.get('/api/admin/stats'));
-      else if (t === 'users') setUsers(await client.get('/api/admin/users'));
+      else if (t === 'users') {
+        const q = search !== undefined ? search : userSearch;
+        const url = q ? `/api/admin/users?search=${encodeURIComponent(q)}` : '/api/admin/users';
+        setUsers(await client.get(url));
+      }
       else if (t === 'activity') setActivity(await client.get('/api/admin/activity'));
+      else if (t === 'monitor') setMonitor(await client.get('/api/admin/monitor'));
       else if (t === 'licenses') setLicenses(await client.get('/api/admin/licenses'));
       else if (t === 'sessions') setSessions(await client.get('/api/admin/sessions'));
       else if (t === 'prompts') {
@@ -165,6 +187,22 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
     await client.post(`/api/admin/licenses/${licenseId}/tokens`, { tokens });
     setEditingTokens(prev => { const n = { ...prev }; delete n[licenseId]; return n; });
     loadTab('licenses');
+  };
+
+  const blockUser = async (userId: number, block: boolean) => {
+    setBlockLoading(prev => ({ ...prev, [userId]: true }));
+    await client.patch(`/api/admin/users/${userId}/block`, { block });
+    setBlockLoading(prev => ({ ...prev, [userId]: false }));
+    loadTab('users');
+  };
+
+  const resetPassword = async () => {
+    if (!pwdModal || !pwdValue) return;
+    setPwdLoading(true);
+    await client.post(`/api/admin/users/${pwdModal.userId}/reset-password`, { password: pwdValue });
+    setPwdLoading(false);
+    setPwdDone(true);
+    setTimeout(() => { setPwdModal(null); setPwdValue(''); setPwdDone(false); }, 1500);
   };
 
   const saveLicenseExpiry = async (licenseId: number) => {
@@ -232,6 +270,7 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
   };
 
   const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
+    { id: 'monitor',    label: 'Monitor',     icon: <BarChart3 className="w-4 h-4" /> },
     { id: 'stats',      label: 'Stats',       icon: <Activity className="w-4 h-4" /> },
     { id: 'users',      label: 'Usuarios',    icon: <Users className="w-4 h-4" /> },
     { id: 'activity',   label: 'Actividad',   icon: <Clock className="w-4 h-4" /> },
@@ -329,6 +368,23 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
         {/* Users */}
         {tab === 'users' && (
           <div className="space-y-3">
+            {/* Search bar */}
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
+              <input
+                type="text"
+                placeholder="Buscar por usuario o email…"
+                value={userSearch}
+                onChange={e => setUserSearch(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') loadTab('users', userSearch); }}
+                className="w-full pl-9 pr-4 py-2 bg-zinc-900 border border-zinc-700 rounded-xl text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-violet-500"
+              />
+              <button
+                onClick={() => loadTab('users', userSearch)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 px-3 py-1 bg-violet-600 hover:bg-violet-500 rounded-lg text-xs text-white transition"
+              >Buscar</button>
+            </div>
+
             {/* Online now banner */}
             {users.filter(u => isOnline(u.last_seen_at)).length > 0 && (
               <div className="flex items-center gap-2 bg-green-500/10 border border-green-500/20 rounded-xl px-4 py-2.5 text-sm text-green-400">
@@ -337,10 +393,10 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
               </div>
             )}
             <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-x-auto">
-              <table className="w-full text-sm min-w-[900px]">
+              <table className="w-full text-sm min-w-[1000px]">
                 <thead>
                   <tr className="border-b border-zinc-800">
-                    {['', 'Usuario', 'Email', 'Último login', 'Visto por última vez', 'Última IP', 'Licencia', 'Tipo', 'Expira', ''].map(h => (
+                    {['', 'Usuario', 'Email', 'Último login', 'Visto', 'IP', 'Licencia', 'Tipo', 'Expira', 'Hoy', 'Acciones'].map(h => (
                       <th key={h} className="text-left text-xs text-zinc-500 font-medium px-4 py-3">{h}</th>
                     ))}
                   </tr>
@@ -349,32 +405,51 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
                   {users.map(u => {
                     const online = isOnline(u.last_seen_at);
                     return (
-                      <tr key={u.id} className={`border-b border-zinc-800/60 hover:bg-zinc-800/30 transition ${online ? 'bg-green-500/5' : ''}`}>
+                      <tr key={u.id} className={`border-b border-zinc-800/60 hover:bg-zinc-800/30 transition ${u.is_blocked ? 'opacity-50' : ''} ${online ? 'bg-green-500/5' : ''}`}>
                         <td className="px-3 py-3">
                           <span className={`w-2 h-2 rounded-full inline-block ${online ? 'bg-green-400 animate-pulse' : 'bg-zinc-700'}`} title={online ? 'Online ahora' : 'Offline'} />
                         </td>
                         <td className="px-4 py-3 font-medium">
                           {u.username}
-                          {u.is_admin && <span className="ml-1.5 text-[10px] text-violet-400 border border-violet-500/30 rounded px-1">admin</span>}
+                          {u.is_admin && <span className="ml-1 text-[10px] text-violet-400 border border-violet-500/30 rounded px-1">admin</span>}
+                          {u.is_blocked && <span className="ml-1 text-[10px] text-red-400 border border-red-500/30 rounded px-1">bloqueado</span>}
                         </td>
                         <td className="px-4 py-3 text-zinc-400 text-xs">{u.email}</td>
-                        <td className="px-4 py-3 text-xs text-zinc-300" title={u.last_login_at || ''}>{timeAgo(u.last_login_at)}</td>
-                        <td className="px-4 py-3 text-xs" title={u.last_seen_at || ''}>
+                        <td className="px-4 py-3 text-xs text-zinc-300">{timeAgo(u.last_login_at)}</td>
+                        <td className="px-4 py-3 text-xs">
                           <span className={online ? 'text-green-400 font-medium' : 'text-zinc-400'}>{timeAgo(u.last_seen_at)}</span>
                         </td>
                         <td className="px-4 py-3 text-xs text-zinc-500 font-mono">{u.last_ip || '—'}</td>
                         <td className="px-4 py-3">
                           {u.license_key
-                            ? <span className="font-mono text-xs text-zinc-300 flex items-center">{truncate(u.license_key, 14)}<CopyButton text={u.license_key} /></span>
+                            ? <span className="font-mono text-xs text-zinc-300 flex items-center">{truncate(u.license_key, 12)}<CopyButton text={u.license_key} /></span>
                             : <span className="text-zinc-600 text-xs">Sin licencia</span>}
                         </td>
                         <td className="px-4 py-3">{u.license_type ? <Badge type={u.license_type} /> : '—'}</td>
                         <td className="px-4 py-3 text-xs text-zinc-400">{formatDate(u.expires_at)}</td>
+                        <td className="px-4 py-3 text-xs">
+                          <span className={`font-mono font-semibold ${Number(u.daily_usage_today) >= 10 ? 'text-red-400' : Number(u.daily_usage_today) > 0 ? 'text-acid' : 'text-zinc-600'}`}>
+                            {u.daily_usage_today ?? 0}/10
+                          </span>
+                        </td>
                         <td className="px-4 py-3">
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-1.5">
                             <button onClick={async () => { await client.patch(`/api/admin/users/${u.id}/toggle-admin`); loadTab('users'); }}
                               className="text-zinc-500 hover:text-violet-400 transition" title={u.is_admin ? 'Quitar admin' : 'Hacer admin'}>
                               {u.is_admin ? <ShieldOff className="w-4 h-4" /> : <Shield className="w-4 h-4" />}
+                            </button>
+                            <button
+                              onClick={() => blockUser(u.id, !u.is_blocked)}
+                              disabled={blockLoading[u.id]}
+                              className={`transition ${u.is_blocked ? 'text-green-400 hover:text-green-300' : 'text-zinc-500 hover:text-red-400'}`}
+                              title={u.is_blocked ? 'Desbloquear' : 'Bloquear'}
+                            >
+                              {u.is_blocked ? <Unlock className="w-4 h-4" /> : <Ban className="w-4 h-4" />}
+                            </button>
+                            <button
+                              onClick={() => { setPwdModal({ userId: u.id, username: u.username }); setPwdValue(''); }}
+                              className="text-zinc-500 hover:text-yellow-400 transition" title="Cambiar contraseña">
+                              <KeyRound className="w-4 h-4" />
                             </button>
                             <button
                               onClick={async () => { if (confirm(`¿Cerrar sesión de ${u.username}?`)) { await client.post(`/api/admin/users/${u.id}/force-logout`, {}); loadTab('users'); } }}
@@ -831,6 +906,121 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
           </div>
         )}
 
+        {/* Monitor */}
+        {tab === 'monitor' && (
+          <div className="space-y-4">
+            {!monitor && !loading && (
+              <div className="flex justify-center py-12">
+                <button onClick={() => loadTab('monitor')} className="flex items-center gap-2 px-5 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl text-sm transition">
+                  <RefreshCcw className="w-4 h-4" /> Cargar métricas
+                </button>
+              </div>
+            )}
+            {loading && (
+              <div className="flex justify-center py-12 text-zinc-500 text-sm gap-2">
+                <RefreshCcw className="w-4 h-4 animate-spin" /> Obteniendo métricas…
+              </div>
+            )}
+            {monitor && (
+              <>
+                {/* Status + Uptime row */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className={`bg-zinc-900 border rounded-2xl p-4 flex flex-col gap-1 ${monitor.status === 'ok' ? 'border-green-500/30' : 'border-red-500/30'}`}>
+                    <span className="text-xs text-zinc-500 uppercase tracking-wider">Estado</span>
+                    <span className={`text-lg font-bold ${monitor.status === 'ok' ? 'text-green-400' : 'text-red-400'}`}>
+                      {monitor.status === 'ok' ? '✅ ONLINE' : '❌ ERROR'}
+                    </span>
+                    <span className="text-xs text-zinc-500">DB {monitor.db_latency_ms}ms</span>
+                  </div>
+                  <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 flex flex-col gap-1">
+                    <span className="text-xs text-zinc-500 uppercase tracking-wider">Uptime</span>
+                    <span className="text-lg font-bold text-white font-mono">
+                      {(() => {
+                        const s = monitor.uptime_s || 0;
+                        const h = Math.floor(s / 3600);
+                        const m = Math.floor((s % 3600) / 60);
+                        return h > 0 ? `${h}h ${m}m` : `${m}m`;
+                      })()}
+                    </span>
+                    <span className="text-xs text-zinc-500">Node {monitor.node_version}</span>
+                  </div>
+                  <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 flex flex-col gap-1">
+                    <span className="text-xs text-zinc-500 uppercase tracking-wider flex items-center gap-1"><Cpu className="w-3.5 h-3.5" /> RAM Usada</span>
+                    <span className="text-lg font-bold text-white font-mono">{monitor.mem_mb?.rss} MB</span>
+                    <span className="text-xs text-zinc-500">Heap {monitor.mem_mb?.heapUsed}/{monitor.mem_mb?.heapTotal} MB</span>
+                  </div>
+                  <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 flex flex-col gap-1">
+                    <span className="text-xs text-zinc-500 uppercase tracking-wider flex items-center gap-1"><Database className="w-3.5 h-3.5" /> DB Latencia</span>
+                    <span className={`text-lg font-bold font-mono ${Number(monitor.db_latency_ms) < 50 ? 'text-green-400' : Number(monitor.db_latency_ms) < 200 ? 'text-yellow-400' : 'text-red-400'}`}>
+                      {monitor.db_latency_ms}ms
+                    </span>
+                    <span className="text-xs text-zinc-500">PostgreSQL</span>
+                  </div>
+                </div>
+
+                {/* Metrics grid */}
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                  {[
+                    { label: 'Usuarios totales', value: monitor.metrics?.total_users, icon: <Users className="w-4 h-4 text-violet-400" /> },
+                    { label: 'Activos (24h)', value: monitor.metrics?.active_users_24h, icon: <Activity className="w-4 h-4 text-green-400" /> },
+                    { label: 'Nuevos hoy', value: monitor.metrics?.new_users_today, icon: <TrendingUp className="w-4 h-4 text-blue-400" /> },
+                    { label: 'Generaciones hoy', value: monitor.metrics?.generations_today, icon: <Zap className="w-4 h-4 text-acid" /> },
+                    { label: 'Generaciones total', value: monitor.metrics?.generations_total, icon: <BarChart3 className="w-4 h-4 text-zinc-400" /> },
+                    { label: 'Licencias activas', value: monitor.metrics?.active_licenses, icon: <Key className="w-4 h-4 text-yellow-400" /> },
+                    { label: 'Usuarios bloqueados', value: monitor.metrics?.blocked_users, icon: <Ban className="w-4 h-4 text-red-400" /> },
+                    { label: 'Errores proxy (24h)', value: monitor.metrics?.errors_proxy_24h, icon: <AlertTriangle className="w-4 h-4 text-orange-400" /> },
+                  ].map(m => (
+                    <div key={m.label} className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-xl bg-zinc-800 flex items-center justify-center shrink-0">{m.icon}</div>
+                      <div>
+                        <p className="text-xs text-zinc-500">{m.label}</p>
+                        <p className="text-xl font-bold text-white">{m.value ?? '—'}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Top users today */}
+                {monitor.top_users_today?.length > 0 && (
+                  <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden">
+                    <div className="px-5 py-3 border-b border-zinc-800 flex items-center gap-2">
+                      <TrendingUp className="w-4 h-4 text-acid" />
+                      <h3 className="text-sm font-semibold">Top usuarios hoy</h3>
+                    </div>
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-zinc-800">
+                          <th className="text-left text-xs text-zinc-500 px-5 py-2">#</th>
+                          <th className="text-left text-xs text-zinc-500 px-4 py-2">Usuario</th>
+                          <th className="text-right text-xs text-zinc-500 px-5 py-2">Generaciones</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {monitor.top_users_today.map((u: any, i: number) => (
+                          <tr key={u.user_id} className="border-b border-zinc-800/60 hover:bg-zinc-800/20">
+                            <td className="px-5 py-2 text-zinc-500 text-xs font-mono">{i + 1}</td>
+                            <td className="px-4 py-2 font-medium">{u.username || `ID ${u.user_id}`}</td>
+                            <td className="px-5 py-2 text-right">
+                              <span className="font-mono font-bold text-acid">{u.count}</span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                <p className="text-xs text-zinc-600 text-right">
+                  Actualizado: {new Date(monitor.checked_at).toLocaleTimeString('es-ES')}
+                  <button onClick={() => loadTab('monitor')} className="ml-3 text-zinc-500 hover:text-zinc-300 transition inline-flex items-center gap-1">
+                    <RefreshCcw className="w-3 h-3" /> Refresh
+                  </button>
+                </p>
+              </>
+            )}
+          </div>
+        )}
+
         {/* Sessions */}
         {tab === 'sessions' && (
           <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-x-auto">
@@ -864,6 +1054,53 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
           </div>
         )}
       </div>
+
+      {/* Password reset modal */}
+      {pwdModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={e => { if (e.target === e.currentTarget) setPwdModal(null); }}>
+          <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
+            className="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 w-full max-w-sm mx-4 shadow-2xl"
+          >
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-9 h-9 rounded-xl bg-yellow-500/10 border border-yellow-500/20 flex items-center justify-center">
+                <KeyRound className="w-4 h-4 text-yellow-400" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-white">Cambiar contraseña</h3>
+                <p className="text-xs text-zinc-400">{pwdModal.username}</p>
+              </div>
+            </div>
+
+            {pwdDone ? (
+              <div className="flex items-center gap-2 text-green-400 bg-green-500/10 border border-green-500/20 rounded-xl px-4 py-3 text-sm">
+                <Check className="w-4 h-4" /> Contraseña actualizada correctamente
+              </div>
+            ) : (
+              <>
+                <input
+                  type="password"
+                  placeholder="Nueva contraseña (mín. 6 caracteres)"
+                  value={pwdValue}
+                  onChange={e => setPwdValue(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') resetPassword(); if (e.key === 'Escape') setPwdModal(null); }}
+                  autoFocus
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-yellow-500 mb-4"
+                />
+                <div className="flex gap-2">
+                  <button onClick={() => setPwdModal(null)}
+                    className="flex-1 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 rounded-xl text-sm transition">
+                    Cancelar
+                  </button>
+                  <button onClick={resetPassword} disabled={pwdLoading || pwdValue.length < 6}
+                    className="flex-1 py-2 bg-yellow-500 hover:bg-yellow-400 disabled:opacity-50 text-black font-semibold rounded-xl text-sm transition flex items-center justify-center gap-2">
+                    {pwdLoading ? <><RefreshCcw className="w-4 h-4 animate-spin" /> Guardando…</> : <><Check className="w-4 h-4" /> Guardar</>}
+                  </button>
+                </div>
+              </>
+            )}
+          </motion.div>
+        </div>
+      )}
     </div>
   );
 }
