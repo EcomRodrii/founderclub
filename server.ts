@@ -2196,8 +2196,11 @@ Para el resto, aplica la estructura de la marca. Si no ves un dato pon "". Solo 
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), timeoutMs);
       try {
+        // gemini-2.5-x → v1beta (características preview activas)
+        // gemini-1.5-x y gemini-2.0-x → v1 (se migraron fuera de v1beta)
+        const apiVersion = (model.includes("1.5") || model.includes("2.0")) ? "v1" : "v1beta";
         const r = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+          `https://generativelanguage.googleapis.com/${apiVersion}/models/${model}:generateContent?key=${apiKey}`,
           { method: "POST", headers: { "Content-Type": "application/json" }, signal: ctrl.signal, body: JSON.stringify(body) }
         );
         const data = await r.json().catch(() => ({}));
@@ -2225,7 +2228,7 @@ Para el resto, aplica la estructura de la marca. Si no ves un dato pon "". Solo 
       const base64Data = imageBase64.includes(",") ? imageBase64.split(",")[1] : imageBase64;
       console.log(`[OCR] mimeType detectado: ${mimeType}, base64 len: ${base64Data.length}`);
       let ocrResult: any = null;
-      let lastError = "";
+      const modelErrors: string[] = []; // acumular TODOS los errores para diagnóstico
 
       // ── Paso 1: OCR de imagen ──────────────────────────────────────────────
       // IMPORTANTE: NO usar responseMimeType:"application/json" — no es compatible
@@ -2250,13 +2253,15 @@ Para el resto, aplica la estructura de la marca. Si no ves un dato pon "". Solo 
 
           // Detectar bloqueo por filtros de seguridad
           if (!data.candidates?.[0] && data.promptFeedback?.blockReason) {
-            lastError = `safety_block:${data.promptFeedback.blockReason}`;
+            const err = `safety_block:${data.promptFeedback.blockReason}`;
+            modelErrors.push(`${model}→${err}`);
             console.warn(`[OCR] ${model} SAFETY BLOCK:`, data.promptFeedback.blockReason);
             continue;
           }
 
+          const finishReason = data.candidates?.[0]?.finishReason || "";
           const raw = data.candidates?.[0]?.content?.parts?.find((p: any) => p.text)?.text || "";
-          console.log(`[OCR] ${model} raw (150ch):`, raw.slice(0, 150));
+          console.log(`[OCR] ${model} finishReason=${finishReason} raw(150ch):`, raw.slice(0, 150));
 
           // Intentar parsear directo; extractJson como fallback para markdown
           let parsed: any = null;
@@ -2268,31 +2273,33 @@ Para el resto, aplica la estructura de la marca. Si no ves un dato pon "". Solo 
             const hasAnyData = (parsed.rawText && parsed.rawText.length > 3)
               || parsed.model || parsed.sku || parsed.reference || parsed.date || parsed.sizes?.fr;
             if (!hasAnyData) {
+              const err = `empty_json(finish=${finishReason})`;
+              modelErrors.push(`${model}→${err}`);
               console.warn(`[OCR] ${model} JSON vacío (todos campos vacíos), pruebo siguiente`);
-              lastError = "empty_json";
               continue;
             }
             ocrResult = parsed;
             console.log(`[OCR] ${model} OK → sku=${ocrResult.model}, fr=${ocrResult.sizes?.fr}`);
             break;
           }
-          lastError = "no_json: " + raw.slice(0, 300);
+          const err = `no_json(finish=${finishReason}): ${raw.slice(0, 200)}`;
+          modelErrors.push(`${model}→${err}`);
           console.warn(`[OCR] ${model} no_json:`, raw.slice(0, 300));
         } catch (e: any) {
-          lastError = e.message;
-          console.error(`[OCR] ${model} ERROR:`, lastError);
+          modelErrors.push(`${model}→${e.message}`);
+          console.error(`[OCR] ${model} ERROR:`, e.message);
         }
       }
 
       if (!ocrResult) {
-        console.error(`[OCR] Todos los modelos fallaron. Último error: ${lastError}`);
-        const userMsg = lastError.startsWith("HTTP 429") || lastError.includes("quota")
+        const allErrors = modelErrors.join(" | ");
+        console.error(`[OCR] Todos los modelos fallaron:`, allErrors);
+        const lastErr = modelErrors[modelErrors.length - 1] || "";
+        const userMsg = allErrors.includes("429") || allErrors.includes("quota")
           ? "Límite de API alcanzado. Espera 1 minuto e inténtalo de nuevo."
-          : lastError.startsWith("safety_block:")
+          : allErrors.includes("safety_block:")
             ? "La imagen fue bloqueada por los filtros de seguridad. Prueba con una foto más clara o diferente."
-            : lastError.startsWith("HTTP 4") || lastError.startsWith("HTTP 5")
-              ? `Error de API: ${lastError}. Inténtalo de nuevo.`
-              : `No se pudo leer la etiqueta (${lastError || "sin respuesta del modelo"}). Asegúrate de que la foto sea nítida e inténtalo de nuevo.`;
+            : `No se pudo leer la etiqueta. Error: ${lastErr}. Asegúrate de que la foto sea nítida e inténtalo de nuevo.`;
         return res.status(500).json({ error: userMsg });
       }
 
@@ -2403,7 +2410,7 @@ Para el resto, aplica la estructura de la marca. Si no ves un dato pon "". Solo 
 
       if (sku && sku !== "Desconocido" && sku !== "") {
         // gemini-2.0-flash deprecated mayo 2026 → usar solo 2.5-flash con más timeout
-        const SEARCH_MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-preview-05-20"];
+        const SEARCH_MODELS = ["gemini-2.5-flash", "gemini-2.5-pro"];
         for (const searchModel of SEARCH_MODELS) {
           try {
             // Construir query con toda la info disponible para máxima precisión
