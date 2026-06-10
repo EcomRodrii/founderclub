@@ -2089,7 +2089,7 @@ async function startServer() {
 
 IMPORTANTE: queremos el TOTAL del lote y el TOTAL de unidades, NO el precio unitario. Si la factura tiene varios productos diferentes, suma TODO. Si no encuentras un campo pon null. NO inventes datos. Si la factura no parece de compra de productos físicos, devuelve { "error": "No es factura de compra de producto" }.`;
 
-    const MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-preview-04-17", "gemini-2.0-flash"];
+    const MODELS = ["gemini-2.5-flash", "gemini-1.5-pro", "gemini-1.5-flash"];
     let lastError = "";
     try {
       for (const model of MODELS) {
@@ -2187,9 +2187,9 @@ Para el resto, aplica la estructura de la marca. Si no ves un dato pon "". Solo 
 
     // Modelos con soporte multimodal (imagen+texto) — actualizados junio 2026
     const OCR_MODELS = [
-      "gemini-2.5-flash",       // primary — multimodal estable, fuerza JSON via responseMimeType
-      "gemini-1.5-pro-latest",  // fallback — más capaz en imágenes borrosas/pequeñas
-      "gemini-1.5-flash",       // último recurso — más rápido
+      "gemini-2.5-flash",  // primary — multimodal estable junio 2026
+      "gemini-1.5-pro",    // fallback — más capaz en imágenes difíciles/borrosas
+      "gemini-1.5-flash",  // último recurso — más rápido
     ];
 
     async function geminiCall(model: string, body: object, timeoutMs = 30000): Promise<any> {
@@ -2228,32 +2228,47 @@ Para el resto, aplica la estructura de la marca. Si no ves un dato pon "". Solo 
       let lastError = "";
 
       // ── Paso 1: OCR de imagen ──────────────────────────────────────────────
+      // IMPORTANTE: NO usar responseMimeType:"application/json" — no es compatible
+      // con inputs multimodal (imagen+texto) en todos los modelos y provoca errores 400.
+      // extractJson ya maneja JSON puro, bloques markdown y texto con JSON embebido.
+      const SAFETY_OFF = [
+        { category: "HARM_CATEGORY_HARASSMENT",        threshold: "BLOCK_NONE" },
+        { category: "HARM_CATEGORY_HATE_SPEECH",       threshold: "BLOCK_NONE" },
+        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
+      ];
+
       for (const model of OCR_MODELS) {
         try {
-          const ocrBody: any = {
+          const data = await geminiCall(model, {
             contents: [{ parts: [
               { inlineData: { mimeType, data: base64Data } },
               { text: ocrPrompt }
             ]}],
-          };
-          // gemini-2.5-x soporta responseMimeType → devuelve JSON puro sin markdown
-          if (model.startsWith("gemini-2.5")) {
-            ocrBody.generationConfig = { responseMimeType: "application/json" };
+            safetySettings: SAFETY_OFF,
+          }, 45000); // 45s — imágenes grandes pueden tardar más
+
+          // Detectar bloqueo por filtros de seguridad
+          if (!data.candidates?.[0] && data.promptFeedback?.blockReason) {
+            lastError = `safety_block:${data.promptFeedback.blockReason}`;
+            console.warn(`[OCR] ${model} SAFETY BLOCK:`, data.promptFeedback.blockReason);
+            continue;
           }
-          const data = await geminiCall(model, ocrBody);
-          // Con responseMimeType:json el texto ya es JSON puro, sin markdown
+
           const raw = data.candidates?.[0]?.content?.parts?.find((p: any) => p.text)?.text || "";
-          console.log(`[OCR] ${model} raw (100ch):`, raw.slice(0, 100));
-          // Intentar parsear directo; extractJson como fallback
+          console.log(`[OCR] ${model} raw (150ch):`, raw.slice(0, 150));
+
+          // Intentar parsear directo; extractJson como fallback para markdown
           let parsed: any = null;
           try { parsed = JSON.parse(raw); } catch { parsed = extractJson(raw); }
+
           if (parsed) {
             // Aceptar si hay rawText con contenido O algún campo mapeado.
             // rawText es lo más fiable: el post-proceso regex extrae los campos de él.
             const hasAnyData = (parsed.rawText && parsed.rawText.length > 3)
               || parsed.model || parsed.sku || parsed.reference || parsed.date || parsed.sizes?.fr;
             if (!hasAnyData) {
-              console.warn(`[OCR] ${model} JSON vacío, pruebo siguiente`);
+              console.warn(`[OCR] ${model} JSON vacío (todos campos vacíos), pruebo siguiente`);
               lastError = "empty_json";
               continue;
             }
@@ -2261,8 +2276,8 @@ Para el resto, aplica la estructura de la marca. Si no ves un dato pon "". Solo 
             console.log(`[OCR] ${model} OK → sku=${ocrResult.model}, fr=${ocrResult.sizes?.fr}`);
             break;
           }
-          lastError = "no_json: " + raw.slice(0, 200);
-          console.warn(`[OCR] ${model} no_json:`, raw.slice(0, 200));
+          lastError = "no_json: " + raw.slice(0, 300);
+          console.warn(`[OCR] ${model} no_json:`, raw.slice(0, 300));
         } catch (e: any) {
           lastError = e.message;
           console.error(`[OCR] ${model} ERROR:`, lastError);
@@ -2273,9 +2288,11 @@ Para el resto, aplica la estructura de la marca. Si no ves un dato pon "". Solo 
         console.error(`[OCR] Todos los modelos fallaron. Último error: ${lastError}`);
         const userMsg = lastError.startsWith("HTTP 429") || lastError.includes("quota")
           ? "Límite de API alcanzado. Espera 1 minuto e inténtalo de nuevo."
-          : lastError.startsWith("HTTP 4") || lastError.startsWith("HTTP 5")
-            ? `Error de API Gemini: ${lastError}. Inténtalo de nuevo.`
-            : "No se pudo leer la etiqueta. Asegúrate de que la foto sea nítida e inténtalo de nuevo.";
+          : lastError.startsWith("safety_block:")
+            ? "La imagen fue bloqueada por los filtros de seguridad. Prueba con una foto más clara o diferente."
+            : lastError.startsWith("HTTP 4") || lastError.startsWith("HTTP 5")
+              ? `Error de API: ${lastError}. Inténtalo de nuevo.`
+              : `No se pudo leer la etiqueta (${lastError || "sin respuesta del modelo"}). Asegúrate de que la foto sea nítida e inténtalo de nuevo.`;
         return res.status(500).json({ error: userMsg });
       }
 
