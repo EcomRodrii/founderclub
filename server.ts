@@ -2303,11 +2303,13 @@ Para el resto, aplica la estructura de la marca. Si no ves un dato pon "". Solo 
       if (!ocrResult) {
         const allErrors = modelErrors.join(" | ");
         console.error(`[OCR] Todos los modelos fallaron:`, allErrors);
-        const userMsg = allErrors.includes("429") || allErrors.includes("quota")
-          ? "Límite de API alcanzado. Espera 1 minuto e inténtalo de nuevo."
-          : allErrors.includes("safety_block:")
-            ? "La imagen fue bloqueada por los filtros de seguridad. Prueba con una foto más clara o diferente."
-            : `No se pudo leer la etiqueta. Errores: ${allErrors}. Asegúrate de que la foto sea nítida e inténtalo de nuevo.`;
+        const userMsg = allErrors.includes("spending cap") || allErrors.includes("spend cap")
+          ? "❌ El proyecto de Gemini API ha superado su límite de gasto mensual. El administrador debe aumentarlo en aistudio.google.com/billing."
+          : allErrors.includes("429") || allErrors.includes("quota") || allErrors.includes("RESOURCE_EXHAUSTED")
+            ? "⏳ Límite de peticiones alcanzado. Espera 1 minuto e inténtalo de nuevo."
+            : allErrors.includes("safety_block:")
+              ? "La imagen fue bloqueada por los filtros de seguridad. Prueba con una foto más clara o diferente."
+              : `No se pudo leer la etiqueta. Errores: ${allErrors}. Asegúrate de que la foto sea nítida e inténtalo de nuevo.`;
         return res.status(500).json({ error: userMsg });
       }
 
