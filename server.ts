@@ -36,7 +36,10 @@ function logActivity(userId: number, action: string, ip?: string) {
 }
 
 // ── Control Panel: cifrado AES-256 para IBAN y contraseñas Vinted ─────────────
-const CTRL_KEY = (process.env.CONTROL_ENCRYPTION_KEY || "laminecontrol-key-32chars-secure").slice(0, 32).padEnd(32, "0");
+if (!process.env.CONTROL_ENCRYPTION_KEY) {
+  console.error("CRITICAL: CONTROL_ENCRYPTION_KEY no está configurada en las variables de entorno. Establécela en Railway antes del próximo deploy.");
+}
+const CTRL_KEY = (process.env.CONTROL_ENCRYPTION_KEY || "").slice(0, 32).padEnd(32, "0");
 
 function ctrlEncrypt(text: string): string {
   if (!text) return "";
@@ -59,7 +62,10 @@ function ctrlDecrypt(text: string): string {
 }
 
 // Código de invitación para registrarse en el panel de control
-const CONTROL_INVITE_CODE = process.env.CONTROL_INVITE_CODE || "lamine2024control";
+if (!process.env.CONTROL_INVITE_CODE) {
+  console.error("WARNING: CONTROL_INVITE_CODE no configurada. Establécela en Railway.");
+}
+const CONTROL_INVITE_CODE = process.env.CONTROL_INVITE_CODE || "";
 
 // ─── Auth Middleware ──────────────────────────────────────────────────────────
 
@@ -1230,15 +1236,28 @@ async function startServer() {
   };
   const axiosVinted = buildAxiosVinted();
 
-  // ── Vinted Routes (public) ──────────────────────────────────────────────────
+  // ── URL allow-list: solo permite hosts vinted.<tld> en HTTPS ─────────────────
+  function isVintedUrl(url: string): boolean {
+    try {
+      const u = new URL(url);
+      if (u.protocol !== "https:") return false;
+      return /^(?:www\.)?vinted\.[a-z]{2,10}(?:\.[a-z]{2})?$/.test(u.hostname.toLowerCase());
+    } catch { return false; }
+  }
+  function isVintedDomain(domain: string): boolean {
+    return /^[a-z]{2,10}(?:\.[a-z]{2})?$/.test(domain.toLowerCase());
+  }
 
-  app.get("/api/vinted/resolve-user", async (req, res) => {
+  // ── Vinted Routes ────────────────────────────────────────────────────────────
+
+  app.get("/api/vinted/resolve-user", requireLicense as any, async (req: AuthRequest, res) => {
     const { url } = req.query;
     if (!url || typeof url !== "string") return res.status(400).json({ error: "Se requiere la URL del usuario." });
+    if (!isVintedUrl(url)) return res.status(400).json({ error: "URL no permitida." });
     try {
       const m = url.match(/\/member\/(\d+)(?:-|$)/);
       if (m) return res.json({ userId: m[1] });
-      const response = await axiosVinted.get(url, { headers: { "User-Agent": "Mozilla/5.0" }, timeout: 10000 });
+      const response = await axiosVinted.get(url, { headers: { "User-Agent": "Mozilla/5.0" }, timeout: 10000, maxRedirects: 0 });
       const $ = cheerio.load(response.data);
       let userId = "";
       for (const s of $("script").toArray()) {
@@ -1250,17 +1269,18 @@ async function startServer() {
       if (!userId) return res.status(404).json({ error: "No se pudo extraer el ID de usuario." });
       res.json({ userId });
     } catch (error: any) {
-      res.status(500).json({ error: "Error al resolver usuario", details: error.message });
+      res.status(500).json({ error: "Error al resolver usuario" });
     }
   });
 
-  app.get("/api/vinted/resolve-product", async (req, res) => {
+  app.get("/api/vinted/resolve-product", requireLicense as any, async (req: AuthRequest, res) => {
     const { url } = req.query;
     if (!url || typeof url !== "string") return res.status(400).json({ error: "Product URL is required" });
+    if (!isVintedUrl(url)) return res.status(400).json({ error: "URL no permitida." });
     const domainMatch = url.match(/vinted\.([a-z.]+)/);
     const domain = domainMatch ? domainMatch[1] : "es";
     try {
-      const response = await axiosVinted.get(url, { headers: { "User-Agent": "Mozilla/5.0" } });
+      const response = await axiosVinted.get(url, { headers: { "User-Agent": "Mozilla/5.0" }, maxRedirects: 0 });
       const $ = cheerio.load(response.data);
       let itemId = url.match(/\/(\d+)-/)?.[1] || "";
       let title = "";
@@ -1276,19 +1296,19 @@ async function startServer() {
       if (!itemId) return res.status(404).json({ error: "Product ID not found." });
       res.json({ itemId, title, domain });
     } catch (error: any) {
-      res.status(500).json({ error: "Failed to resolve product", details: error.message });
+      res.status(500).json({ error: "Failed to resolve product" });
     }
   });
 
-  app.get("/api/vinted/item-status", async (req, res) => {
+  app.get("/api/vinted/item-status", requireLicense as any, async (req: AuthRequest, res) => {
     const { itemId, domain = "es" } = req.query;
-    if (!itemId) return res.status(400).json({ error: "Item ID is required" });
+    if (!itemId || typeof domain !== "string" || !isVintedDomain(domain)) return res.status(400).json({ error: "Parámetros inválidos" });
     try {
       const response = await axiosVinted.get(`https://www.vinted.${domain}/items/${itemId}`, {
-        headers: { "User-Agent": "Mozilla/5.0" }, validateStatus: () => true,
+        headers: { "User-Agent": "Mozilla/5.0" }, validateStatus: () => true, maxRedirects: 0,
       });
       res.json({ visible: response.status === 200, status: response.status });
-    } catch (error: any) {
+    } catch {
       res.json({ visible: false, status: 500 });
     }
   });
@@ -1563,17 +1583,18 @@ async function startServer() {
   });
 
   // ── Seller public items (no auth) ────────────────────────────────────────────
-  app.get("/api/vinted/seller-items", async (req, res) => {
+  app.get("/api/vinted/seller-items", requireLicense as any, async (req: AuthRequest, res) => {
     const { url, domain: qDomain = "es" } = req.query as Record<string, string>;
     if (!url) return res.status(400).json({ error: "url requerida" });
+    if (!isVintedUrl(url)) return res.status(400).json({ error: "URL no permitida." });
     let sellerId: string | null = null;
     const mId = url.match(/\/member\/(\d+)/);
     if (mId) sellerId = mId[1];
     const domMatch = url.match(/vinted\.([a-z.]+)/);
-    const dom = domMatch ? domMatch[1] : qDomain;
+    const dom = domMatch ? domMatch[1] : (isVintedDomain(qDomain) ? qDomain : "es");
     if (!sellerId) {
       try {
-        const r = await axiosVinted.get(url, { headers: { "User-Agent": "Mozilla/5.0" }, timeout: 8000 });
+        const r = await axiosVinted.get(url, { headers: { "User-Agent": "Mozilla/5.0" }, timeout: 8000, maxRedirects: 0 });
         const m = r.data.match(/"id":(\d+),"username":/);
         if (m) sellerId = m[1];
       } catch {}
@@ -1582,12 +1603,12 @@ async function startServer() {
     try {
       const r = await axiosVinted.get(
         `https://www.vinted.${dom}/api/v2/users/${sellerId}/items?page=1&per_page=96&status[]=active`,
-        { headers: { "User-Agent": "Mozilla/5.0", Accept: "application/json" }, timeout: 10000 }
+        { headers: { "User-Agent": "Mozilla/5.0", Accept: "application/json" }, timeout: 10000, maxRedirects: 0 }
       );
       const items = r.data.items || [];
       res.json({ sellerId, domain: dom, items, total: items.length });
-    } catch (err: any) {
-      res.status(500).json({ error: "No se pudieron obtener los artículos", details: err.message });
+    } catch {
+      res.status(500).json({ error: "No se pudieron obtener los artículos" });
     }
   });
 
@@ -3637,19 +3658,13 @@ Genera la imagen editada.`;
     windowMs: 15 * 60 * 1000,
     max: 10,
     message: { ok: false, error: "too_many_requests" },
-    keyGenerator: (req) =>
-      (req.headers["x-forwarded-for"] as string)?.split(",")[0].trim() ||
-      req.socket.remoteAddress ||
-      "unknown",
+    keyGenerator: (req) => req.ip || req.socket.remoteAddress || "unknown",
   });
   const extVerifyLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 500,
     message: { ok: false, error: "too_many_requests" },
-    keyGenerator: (req) =>
-      (req.headers["x-forwarded-for"] as string)?.split(",")[0].trim() ||
-      req.socket.remoteAddress ||
-      "unknown",
+    keyGenerator: (req) => req.ip || req.socket.remoteAddress || "unknown",
   });
 
   /**
@@ -4049,11 +4064,11 @@ Genera la imagen editada.`;
   app.get("/api/extension/verify", extensionVerifyHandler as any);
   app.post("/api/extension/verify", extensionVerifyHandler as any);
 
-  // Whitelist endpoints para bazooka — PUBLIC (workers check before reporting)
-  app.get("/api/extension/whitelist-items", async (_req: Request, res: Response) => {
+  // Whitelist stubs para bazooka workers — requieren licencia activa
+  app.get("/api/extension/whitelist-items", requireLicense as any, async (_req: Request, res: Response) => {
     res.json({ ok: true, items: [] });
   });
-  app.get("/api/extension/whitelist-profiles", async (_req: Request, res: Response) => {
+  app.get("/api/extension/whitelist-profiles", requireLicense as any, async (_req: Request, res: Response) => {
     res.json({ ok: true, profiles: [] });
   });
   app.post("/api/extension/whitelist-items", requireLicense as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
@@ -4068,10 +4083,18 @@ Genera la imagen editada.`;
     const token = req.headers.authorization?.replace("Bearer ", "");
     const key = req.body?.key || req.body?.license_key || req.headers["x-license-key"] || (req.query as any)?.key || "";
     if (token) {
-      try { jwt.verify(token, JWT_SECRET); return true; } catch {}
+      try {
+        const decoded = jwt.verify(token, JWT_SECRET) as any;
+        const u = await pool.query("SELECT is_blocked FROM users WHERE id=$1", [decoded.id]);
+        if (!u.rows[0] || u.rows[0].is_blocked) return false;
+        return true;
+      } catch {}
     }
     if (key) {
-      const r = await pool.query("SELECT id FROM licenses WHERE key=$1 AND is_active=TRUE LIMIT 1", [String(key).trim().toUpperCase()]);
+      const r = await pool.query(
+        "SELECT l.id FROM licenses l JOIN users u ON u.id=l.user_id WHERE l.key=$1 AND l.is_active=TRUE AND u.is_blocked=FALSE LIMIT 1",
+        [String(key).trim().toUpperCase()]
+      );
       return !!r.rows[0];
     }
     return false;
@@ -6116,6 +6139,9 @@ Genera la imagen editada.`;
 
   app.post("/api/vinted/accounts/:id/hide-all", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     const { reveal = false } = req.body;
+    // Verify ownership before bulk-updating inventory
+    const own = await pool.query("SELECT id FROM vinted_accounts WHERE id=$1 AND user_id=$2", [req.params.id, req.user!.id]);
+    if (!own.rows[0]) return res.status(404).json({ error: "Cuenta no encontrada" });
     await pool.query(
       "UPDATE vinted_inventory SET is_hidden = $1 WHERE account_id = $2",
       [!reveal, req.params.id]
