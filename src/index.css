@@ -104,3 +104,8 @@ body::before {
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(212, 255, 0, 0.32);
 }
+
+@keyframes shimmer-sweep {
+  0%   { left: -40%; }
+  100% { left: 140%; }
+}

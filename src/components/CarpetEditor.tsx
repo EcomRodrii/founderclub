@@ -17,6 +17,7 @@ interface CarpetJob {
   originalSize: number;
   status: 'pending' | 'processing' | 'done' | 'error';
   errorMsg?: string;
+  startedAt?: number;
 }
 
 // ─── Preset colors ────────────────────────────────────────────────────────────
@@ -123,6 +124,17 @@ async function saveAll(
   }
 }
 
+// ─── Elapsed timer (ticker propio para no rerender todo el árbol) ─────────────
+
+function ElapsedTimer({ startedAt }: { startedAt: number }) {
+  const [secs, setSecs] = React.useState(() => Math.floor((Date.now() - startedAt) / 1000));
+  React.useEffect(() => {
+    const t = setInterval(() => setSecs(Math.floor((Date.now() - startedAt) / 1000)), 1000);
+    return () => clearInterval(t);
+  }, [startedAt]);
+  return <span>{secs}s</span>;
+}
+
 // ─── Locked screen ────────────────────────────────────────────────────────────
 
 function LockedPro() {
@@ -203,7 +215,7 @@ export default function CarpetEditor({ token, isPro = false, isAdmin = false }: 
 
     for (const [i, file] of imgs.entries()) {
       const job = newJobs[i];
-      setJobs(prev => prev.map(j => j.id === job.id ? { ...j, status: 'processing' } : j));
+      setJobs(prev => prev.map(j => j.id === job.id ? { ...j, status: 'processing', startedAt: Date.now() } : j));
 
       try {
         const imageBase64 = await fileToBase64(file);
@@ -253,7 +265,7 @@ export default function CarpetEditor({ token, isPro = false, isAdmin = false }: 
 
   const reprocess = async (id: string) => {
     const job = jobs.find(j => j.id === id); if (!job) return;
-    setJobs(prev => prev.map(j => j.id === id ? { ...j, status: 'processing', resultUrl: null } : j));
+    setJobs(prev => prev.map(j => j.id === id ? { ...j, status: 'processing', resultUrl: null, startedAt: Date.now() } : j));
     try {
       const res = await fetch(job.originalUrl);
       const blob = await res.blob();
@@ -494,15 +506,55 @@ export default function CarpetEditor({ token, isPro = false, isAdmin = false }: 
                 {job.resultUrl ? (
                   <img src={job.resultUrl} alt={job.originalName} className="w-full h-full object-cover" />
                 ) : job.status === 'processing' ? (
-                  <div className="flex flex-col items-center gap-3">
-                    <Sparkles className="w-8 h-8 text-[#d4ff00] animate-pulse" />
-                    <span className="text-xs text-white/40">Editando con IA…</span>
-                  </div>
+                  <>
+                    {/* Original difuminada de fondo */}
+                    <img
+                      src={job.originalUrl}
+                      alt=""
+                      className="absolute inset-0 w-full h-full object-cover scale-105"
+                      style={{ filter: 'blur(12px) brightness(0.35) saturate(0.6)' }}
+                    />
+                    {/* Shimmer sweep */}
+                    <div className="absolute inset-0 overflow-hidden">
+                      <div
+                        className="absolute inset-y-0 w-1/3"
+                        style={{
+                          background: 'linear-gradient(90deg, transparent, rgba(212,255,0,0.07), transparent)',
+                          animation: 'shimmer-sweep 2s ease-in-out infinite',
+                        }}
+                      />
+                    </div>
+                    {/* Contenido central */}
+                    <div className="relative z-10 flex flex-col items-center gap-2 px-4 w-full">
+                      <Sparkles className="w-7 h-7 text-[#d4ff00]" style={{ animation: 'pulse 1.5s ease-in-out infinite' }} />
+                      <p className="text-[0.78rem] font-semibold text-white/90">Editando alfombra…</p>
+                      {/* Barra de progreso animada */}
+                      <div className="w-full bg-white/10 rounded-full h-1 overflow-hidden mt-1">
+                        <motion.div
+                          className="h-1 rounded-full bg-[#d4ff00]"
+                          initial={{ width: '0%' }}
+                          animate={{ width: '88%' }}
+                          transition={{ duration: 50, ease: 'linear' }}
+                        />
+                      </div>
+                      <p className="text-[10px] text-white/30 tabular-nums">
+                        {job.startedAt ? <ElapsedTimer startedAt={job.startedAt} /> : '0s'}
+                      </p>
+                    </div>
+                  </>
                 ) : job.status === 'pending' ? (
-                  <div className="flex flex-col items-center gap-3">
-                    <RefreshCcw className="w-8 h-8 text-white/20 animate-spin" />
-                    <span className="text-xs text-white/30">En cola…</span>
-                  </div>
+                  <>
+                    <img
+                      src={job.originalUrl}
+                      alt=""
+                      className="absolute inset-0 w-full h-full object-cover"
+                      style={{ filter: 'blur(6px) brightness(0.25)' }}
+                    />
+                    <div className="relative z-10 flex flex-col items-center gap-2">
+                      <RefreshCcw className="w-6 h-6 text-white/30 animate-spin" />
+                      <span className="text-[11px] text-white/30">En cola…</span>
+                    </div>
+                  </>
                 ) : job.status === 'error' ? (
                   <div className="flex flex-col items-center gap-2 text-red-400/60 px-4 text-center">
                     <ZapOff className="w-8 h-8" />
@@ -516,10 +568,12 @@ export default function CarpetEditor({ token, isPro = false, isAdmin = false }: 
                     <CheckCircle2 className="w-3.5 h-3.5 text-black" />
                   </div>
                 )}
-                {/* Original preview top-left */}
-                <div className="absolute bottom-2 left-2">
-                  <img src={job.originalUrl} alt="original" className="w-10 h-10 object-cover rounded-lg border border-white/20 opacity-70" />
-                </div>
+                {/* Original preview — solo cuando está listo */}
+                {job.status === 'done' && (
+                  <div className="absolute bottom-2 left-2">
+                    <img src={job.originalUrl} alt="original" className="w-10 h-10 object-cover rounded-lg border border-white/20 opacity-70" />
+                  </div>
+                )}
               </div>
 
               {/* Info + acciones */}
