@@ -11,6 +11,7 @@ import { generateExifProfile, injectExifProfile, type ExifProfile } from '../lib
 interface MetaJob {
   id: string;
   name: string;
+  randomName: string;
   originalUrl: string;
   resultUrl: string | null;
   status: 'pending' | 'processing' | 'done' | 'error';
@@ -53,6 +54,30 @@ function dl(dataUrl: string, name: string) {
   const a = document.createElement('a'); a.href = dataUrl; a.download = name; a.click();
 }
 
+// Genera un nombre de archivo realista tipo foto de móvil.
+function randomPhotoName(): string {
+  const r = Math.random();
+  if (r < 0.4) {
+    // iPhone: IMG_XXXX.JPG
+    const n = String(Math.floor(1000 + Math.random() * 8999)).padStart(4, '0');
+    return `IMG_${n}.JPG`;
+  }
+  const d = new Date(Date.now() - Math.floor(Math.random() * 60 * 24 * 60 * 60 * 1000));
+  const y  = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  const dy = String(d.getDate()).padStart(2, '0');
+  const h  = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  const s  = String(d.getSeconds()).padStart(2, '0');
+  if (r < 0.7) {
+    // Samsung: YYYYMMDD_HHMMSS.jpg
+    return `${y}${mo}${dy}_${h}${mi}${s}.jpg`;
+  }
+  // Google Pixel: PXL_YYYYMMDD_HHMMSSXXX.MP.jpg
+  const ms = String(Math.floor(Math.random() * 999)).padStart(3, '0');
+  return `PXL_${y}${mo}${dy}_${h}${mi}${s}${ms}.MP.jpg`;
+}
+
 function canShareFiles(): boolean {
   try {
     return (
@@ -83,6 +108,7 @@ export default function MetadatosEditor() {
     const newJobs: MetaJob[] = imgs.map(f => ({
       id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       name: f.name,
+      randomName: randomPhotoName(),
       originalUrl: URL.createObjectURL(f),
       resultUrl: null,
       status: 'pending' as const,
@@ -123,7 +149,7 @@ export default function MetadatosEditor() {
     setSavingAll(true);
     const items = doneJobs.map(j => ({
       dataUrl: j.resultUrl!,
-      name: j.name.replace(/\.[^.]+$/, '_meta.jpg'),
+      name: j.randomName,
     }));
 
     if (canShareFiles()) {
@@ -148,7 +174,7 @@ export default function MetadatosEditor() {
   };
 
   const saveSingle = async (job: MetaJob) => {
-    const name = job.name.replace(/\.[^.]+$/, '_meta.jpg');
+    const name = job.randomName;
     if (canShareFiles()) {
       try {
         const file = await dataUrlToFile(job.resultUrl!, name);
