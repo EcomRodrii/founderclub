@@ -1294,7 +1294,7 @@ async function startServer() {
   });
 
   // ── Debug: ver qué devuelve exactamente Vinted con la cookie del usuario ──────
-  app.post("/api/debug/vinted-item", requireLicense as any, async (req: AuthRequest, res) => {
+  app.post("/api/debug/vinted-item", requireLicense as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     const { cookie, itemId } = req.body;
     if (!cookie || !itemId) return res.status(400).json({ error: "cookie e itemId requeridos" });
     // Auto-detect domain from cookie
@@ -1348,7 +1348,7 @@ async function startServer() {
 
   // ── Vinted Routes (require license) ────────────────────────────────────────
 
-  app.post("/api/vinted/check-session", requireLicense as any, async (req: AuthRequest, res) => {
+  app.post("/api/vinted/check-session", requireLicense as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     const { cookie, domain = "es" } = req.body;
     if (!cookie) return res.status(400).json({ error: "Cookie is required" });
     try {
@@ -1361,7 +1361,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/vinted/inventory", requireLicense as any, async (req: AuthRequest, res) => {
+  app.post("/api/vinted/inventory", requireLicense as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     const { cookie, userId, domain = "es", userUrl } = req.body;
     if (!cookie || !userId) return res.status(400).json({ error: "Se requieren cookies e ID de usuario." });
 
@@ -1392,7 +1392,7 @@ async function startServer() {
     res.status(lastError?.response?.status || 500).json({ error: "No se pudo obtener el inventario.", details: lastError?.message });
   });
 
-  app.post("/api/vinted/hide", requireLicense as any, async (req: AuthRequest, res) => {
+  app.post("/api/vinted/hide", requireLicense as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     const { cookie, itemId, domain = "es" } = req.body;
     if (!cookie || !itemId) return res.status(400).json({ error: "Cookie and Item ID are required" });
     try {
@@ -1404,7 +1404,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/vinted/reveal", requireLicense as any, async (req: AuthRequest, res) => {
+  app.post("/api/vinted/reveal", requireLicense as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     const { cookie, itemId, domain = "es" } = req.body;
     if (!cookie || !itemId) return res.status(400).json({ error: "Cookie and Item ID are required" });
     try {
@@ -1416,7 +1416,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/vinted/report", requireLicense as any, async (req: AuthRequest, res) => {
+  app.post("/api/vinted/report", requireLicense as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     const { cookie, itemId, reasonId, description, domain = "es" } = req.body;
     if (!cookie || !itemId) return res.status(400).json({ error: "Cookie and Item ID are required" });
 
@@ -1502,7 +1502,7 @@ async function startServer() {
     res.status(finalError?.response?.status || 500).json({ error: "No se pudo enviar el reporte", details: finalError?.message });
   });
 
-  app.post("/api/vinted/spam-checkout", requireLicense as any, async (req: AuthRequest, res) => {
+  app.post("/api/vinted/spam-checkout", requireLicense as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     const { cookie, itemId, domain = "es" } = req.body;
     if (!cookie || !itemId) return res.status(400).json({ error: "Cookie and Item ID are required" });
 
@@ -1599,7 +1599,7 @@ async function startServer() {
   //   3. POST /api/v2/purchases/checkout/build                → item reservado
   //      body: { purchase_items:[{id:transactionId,type:'transaction'}] }
   // ─────────────────────────────────────────────────────────────────────────────
-  app.post("/api/sniper/fire", requireLicense as any, async (req: AuthRequest, res) => {
+  app.post("/api/sniper/fire", requireLicense as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     try {
       const { url, cookies, workers: numWorkers = 3 } = req.body;
       if (!url || !cookies) return res.status(400).json({ error: "url y cookies requeridos" });
@@ -2237,7 +2237,7 @@ async function startServer() {
   }
 
   // GET todas las cuentas del usuario (datos sensibles descifrados)
-  app.get("/api/control/accounts", requireAuth as any, async (req: AuthRequest, res) => {
+  app.get("/api/control/accounts", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     const r = await pool.query(
       `SELECT id, vinted_username, real_name, gmail, vinted_pass, phone, device, iban, dac7, status, notes, created_at
        FROM control_vinted_accounts WHERE owner_user_id=$1 ORDER BY created_at DESC`,
@@ -2247,7 +2247,7 @@ async function startServer() {
   });
 
   // POST crear cuenta (cifra IBAN y contraseña)
-  app.post("/api/control/accounts", requireAuth as any, async (req: AuthRequest, res) => {
+  app.post("/api/control/accounts", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     const { vinted_username, real_name, gmail, vinted_pass, phone, device, iban, dac7, status, notes } = req.body;
     if (!vinted_username) return res.status(400).json({ error: "vinted_username requerido" });
     const r = await pool.query(
@@ -2264,7 +2264,7 @@ async function startServer() {
   });
 
   // PUT editar cuenta (cifra IBAN y contraseña)
-  app.put("/api/control/accounts/:id", requireAuth as any, async (req: AuthRequest, res) => {
+  app.put("/api/control/accounts/:id", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     const { vinted_username, real_name, gmail, vinted_pass, phone, device, iban, dac7, status, notes } = req.body;
     const r = await pool.query(
       `UPDATE control_vinted_accounts SET
@@ -2283,7 +2283,7 @@ async function startServer() {
   });
 
   // DELETE eliminar cuenta Vinted
-  app.delete("/api/control/accounts/:id", requireAuth as any, async (req: AuthRequest, res) => {
+  app.delete("/api/control/accounts/:id", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     await pool.query(
       "DELETE FROM control_vinted_accounts WHERE id=$1 AND owner_user_id=$2",
       [req.params.id, req.user!.id]
@@ -2406,7 +2406,7 @@ IMPORTANTE: queremos el TOTAL del lote y el TOTAL de unidades, NO el precio unit
 
   // ── Tongue / Gemini endpoints ───────────────────────────────────────────────
 
-  app.get("/api/tongue/models", requireAuth as any, async (_req: AuthRequest, res) => {
+  app.get("/api/tongue/models", requireAuth as any, requireFeature("academia") as any, async (_req: AuthRequest, res) => {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return res.status(500).json({ error: "No API key" });
     const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
@@ -3120,7 +3120,7 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
 
   // ── Tongue Prompts (admin manage / auth read) ─────────────────────────────
 
-  app.get("/api/tongue/prompts", requireAuth as any, async (_req, res) => {
+  app.get("/api/tongue/prompts", requireAuth as any, requireFeature("academia") as any, async (_req, res) => {
     try {
       const result = await pool.query("SELECT brand, prompt, updated_at FROM tongue_prompts ORDER BY brand");
       res.json(result.rows);
@@ -3214,7 +3214,7 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
 
   // ── Box Prompts (admin manage / auth read) ────────────────────────────────
 
-  app.get("/api/box/prompts", requireAuth as any, async (_req, res) => {
+  app.get("/api/box/prompts", requireAuth as any, requireFeature("academia") as any, async (_req, res) => {
     try {
       const result = await pool.query("SELECT brand, prompt, updated_at FROM box_prompts ORDER BY brand");
       res.json(result.rows);
@@ -3474,7 +3474,7 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
 
   // ── Dual generation: tongue + box in parallel with synced codes ────────────
 
-  app.post("/api/dual/generate", geminiLimiter, requireLicense as any, checkDailyLimit as any, async (req: any, res) => {
+  app.post("/api/dual/generate", geminiLimiter, requireLicense as any, requireFeature("academia") as any, checkDailyLimit as any, async (req: any, res) => {
     const { tongueImageBase64, boxImageBase64, brand, detections, tonguePrompt, boxPrompt } = req.body;
     if (!detections) return res.status(400).json({ error: "Se requieren los datos detectados" });
 
@@ -3943,13 +3943,14 @@ Genera la imagen editada.`;
 
   /**
    * GET /api/ext/ai-config
-   * Returns server-side AI config (Gemini key) for authenticated extension sessions.
-   * The key is never exposed to the frontend — only via this authenticated endpoint.
+   * Confirma que la IA está disponible para la extensión. NO devuelve la key.
+   * La key permanece en el servidor; la extensión debe llamar a los endpoints
+   * de generación del servidor en vez de llamar a Gemini directamente.
    */
-  app.get("/api/ext/ai-config", requireAuth as any, async (req: AuthRequest, res) => {
-    const geminiKey = process.env.GEMINI_API_KEY || null;
-    if (!geminiKey) return res.status(503).json({ ok: false, error: "ai_not_configured" });
-    return res.json({ ok: true, geminiKey });
+  app.get("/api/ext/ai-config", requireLicense as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
+    const configured = !!process.env.GEMINI_API_KEY;
+    if (!configured) return res.status(503).json({ ok: false, error: "ai_not_configured" });
+    return res.json({ ok: true });
   });
 
   // ── Admin: reset HWID de una licencia ──────────────────────────────────────
@@ -4055,10 +4056,10 @@ Genera la imagen editada.`;
   app.get("/api/extension/whitelist-profiles", async (_req: Request, res: Response) => {
     res.json({ ok: true, profiles: [] });
   });
-  app.post("/api/extension/whitelist-items", requireLicense as any, async (req: AuthRequest, res) => {
+  app.post("/api/extension/whitelist-items", requireLicense as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     res.json({ ok: true });
   });
-  app.post("/api/extension/whitelist-profiles", requireLicense as any, async (req: AuthRequest, res) => {
+  app.post("/api/extension/whitelist-profiles", requireLicense as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     res.json({ ok: true });
   });
 
@@ -4141,7 +4142,7 @@ Genera la imagen editada.`;
   });
 
   // ── Vinted Entitlements — called by hub-addon.js background ────────────────
-  app.get("/api/vinted/entitlements", requireLicense as any, async (req: AuthRequest, res: Response) => {
+  app.get("/api/vinted/entitlements", requireLicense as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     const licResult = await pool.query(
       "SELECT type, plan, expires_at FROM licenses WHERE user_id = $1 AND is_active = TRUE AND (expires_at IS NULL OR expires_at > NOW()) ORDER BY created_at DESC LIMIT 1",
       [req.user!.id]
@@ -4185,7 +4186,7 @@ Genera la imagen editada.`;
   });
 
   // ── Extension Runtime ────────────────────────────────────────────────────────
-  app.get("/api/extension/runtime", requireLicense as any, async (req: AuthRequest, res: Response) => {
+  app.get("/api/extension/runtime", requireLicense as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     const licResult = await pool.query(
       "SELECT key, type, plan, expires_at FROM licenses WHERE user_id = $1 AND is_active = TRUE AND (expires_at IS NULL OR expires_at > NOW()) ORDER BY created_at DESC LIMIT 1",
       [req.user!.id]
@@ -4481,7 +4482,7 @@ Genera la imagen editada.`;
   });
 
   // ── Vinted offers (offer bot endpoint) ──────────────────────────────────────
-  app.post("/vinted/offers", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.post("/vinted/offers", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     // Offer bot rules engine — accept and queue the offer action
     try {
       const { itemId, price, cookieHeader } = req.body || {};
@@ -4509,7 +4510,7 @@ Genera la imagen editada.`;
   });
 
   // ── Extension: sync Vinted session / register account ───────────────────────
-  app.post("/api/extension/sync-vinted-session", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.post("/api/extension/sync-vinted-session", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.user!.id;
       // `cookie` = access_token_web Bearer token (for compat)
@@ -4567,7 +4568,7 @@ Genera la imagen editada.`;
   }
 
   // POST /api/extension/vinted/roster  ─ registra / actualiza cuenta (solo metadatos)
-  app.post("/api/extension/vinted/roster", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.post("/api/extension/vinted/roster", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.user!.id;
       const a      = req.body?.account ?? req.body ?? {};
@@ -4633,7 +4634,7 @@ Genera la imagen editada.`;
   });
 
   // GET /api/extension/vinted/roster  ─ lista cuentas vinculadas a la licencia
-  app.get("/api/extension/vinted/roster", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.get("/api/extension/vinted/roster", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const lic = await getRosterLicense(req.user!.id);
       if (!lic && !req.user!.is_admin) return res.json({ data: [], total: 0, limit: 0 });
@@ -4652,7 +4653,7 @@ Genera la imagen editada.`;
 
   // GET /api/extension/vinted/roster/:vintedId  ─ comprueba propietario
   // 401 si pertenece a otra licencia (dispara isDuplicate en la extensión)
-  app.get("/api/extension/vinted/roster/:vintedId", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.get("/api/extension/vinted/roster/:vintedId", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const { rows } = await pool.query(
         "SELECT * FROM extension_vinted_accounts WHERE vinted_id = $1",
@@ -4669,7 +4670,7 @@ Genera la imagen editada.`;
   });
 
   // DELETE /api/extension/vinted/roster/:vintedId  ─ desvincular cuenta
-  app.delete("/api/extension/vinted/roster/:vintedId", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.delete("/api/extension/vinted/roster/:vintedId", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const lic = await getRosterLicense(req.user!.id);
       if (!lic && !req.user!.is_admin) return res.json({ ok: false });
@@ -4706,7 +4707,7 @@ Genera la imagen editada.`;
 
   // POST /api/fleet/worker/register  (Bearer ext JWT) — crea o recupera worker
   // El token del worker es estable: ON CONFLICT devuelve el token ya almacenado.
-  app.post("/api/fleet/worker/register", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.post("/api/fleet/worker/register", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const lic = await getRosterLicense(req.user!.id);
       if (!lic && !req.user!.is_admin) return res.status(403).json({ error: "licencia_requerida" });
@@ -4833,7 +4834,7 @@ Genera la imagen editada.`;
   });
 
   // POST /api/fleet/jobs  (requireAuth + licencia) — encolar un job
-  app.post("/api/fleet/jobs", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.post("/api/fleet/jobs", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const lic = await getRosterLicense(req.user!.id);
       if (!lic && !req.user!.is_admin) return res.status(403).json({ error: "licencia_requerida" });
@@ -4857,7 +4858,7 @@ Genera la imagen editada.`;
   });
 
   // GET /api/fleet/worker/overview  (requireAuth) — panel de estado de workers y cola
-  app.get("/api/fleet/worker/overview", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.get("/api/fleet/worker/overview", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const lic = await getRosterLicense(req.user!.id);
       if (!lic && !req.user!.is_admin) return res.json({ data: { workers: [], queue: [] } });
@@ -4881,7 +4882,7 @@ Genera la imagen editada.`;
   // ── Fleet FASE 4: gestión de workers y cola desde el panel ──────────────────
 
   // GET /api/fleet/jobs  (requireAuth) — lista jobs de la licencia (más recientes primero)
-  app.get("/api/fleet/jobs", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.get("/api/fleet/jobs", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const lic = await getRosterLicense(req.user!.id);
       if (!lic && !req.user!.is_admin) return res.json({ data: [] });
@@ -4900,7 +4901,7 @@ Genera la imagen editada.`;
   });
 
   // POST /api/fleet/worker/:id/pause  (requireAuth) — pausar un worker
-  app.post("/api/fleet/worker/:id/pause", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.post("/api/fleet/worker/:id/pause", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const lic = await getRosterLicense(req.user!.id);
       if (!lic && !req.user!.is_admin) return res.status(403).json({ error: "licencia_requerida" });
@@ -4915,7 +4916,7 @@ Genera la imagen editada.`;
   });
 
   // POST /api/fleet/worker/:id/resume  (requireAuth) — reanudar un worker pausado
-  app.post("/api/fleet/worker/:id/resume", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.post("/api/fleet/worker/:id/resume", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const lic = await getRosterLicense(req.user!.id);
       if (!lic && !req.user!.is_admin) return res.status(403).json({ error: "licencia_requerida" });
@@ -4931,7 +4932,7 @@ Genera la imagen editada.`;
 
   // DELETE /api/fleet/worker/:id  (requireAuth) — eliminar un worker
   // Si el worker sigue vivo se re-registra en el siguiente ciclo con un token nuevo.
-  app.delete("/api/fleet/worker/:id", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.delete("/api/fleet/worker/:id", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const lic = await getRosterLicense(req.user!.id);
       if (!lic && !req.user!.is_admin) return res.status(403).json({ error: "licencia_requerida" });
@@ -4946,7 +4947,7 @@ Genera la imagen editada.`;
   });
 
   // POST /api/fleet/jobs/:id/cancel  (requireAuth) — cancelar un job en cola o fallido
-  app.post("/api/fleet/jobs/:id/cancel", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.post("/api/fleet/jobs/:id/cancel", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const lic = await getRosterLicense(req.user!.id);
       if (!lic && !req.user!.is_admin) return res.status(403).json({ error: "licencia_requerida" });
@@ -4962,7 +4963,7 @@ Genera la imagen editada.`;
   });
 
   // POST /api/fleet/jobs/:id/retry  (requireAuth) — reintentar un job failed o cancelado
-  app.post("/api/fleet/jobs/:id/retry", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.post("/api/fleet/jobs/:id/retry", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const lic = await getRosterLicense(req.user!.id);
       if (!lic && !req.user!.is_admin) return res.status(403).json({ error: "licencia_requerida" });
@@ -4982,7 +4983,7 @@ Genera la imagen editada.`;
   // ── Extension: server-side inventory fetch (Blackstock-style proxy) ─────────
   // The server fetches items from Vinted using the stored session_cookie,
   // so the extension never needs to call Vinted directly.
-  app.post("/api/extension/fetch-inventory", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.post("/api/extension/fetch-inventory", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.user!.id;
       const { accountId } = req.body || {};
@@ -5127,7 +5128,7 @@ Genera la imagen editada.`;
   });
 
   // ── Extension: bulk sync inventory items for an account ──────────────────
-  app.post("/api/extension/sync-items", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.post("/api/extension/sync-items", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.user!.id;
       const { accountId, items } = req.body || {};
@@ -5170,7 +5171,7 @@ Genera la imagen editada.`;
   });
 
   // 2. Whitelist items — añadir
-  app.post("/api/extension/whitelist-items", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.post("/api/extension/whitelist-items", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.user!.id;
       const { itemId, itemUrl } = req.body || {};
@@ -5189,7 +5190,7 @@ Genera la imagen editada.`;
   });
 
   // 3. Whitelist items — listar
-  app.get("/api/extension/whitelist-items", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.get("/api/extension/whitelist-items", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.user!.id;
       const result = await pool.query(
@@ -5210,7 +5211,7 @@ Genera la imagen editada.`;
   });
 
   // 4. Whitelist profiles — añadir
-  app.post("/api/extension/whitelist-profiles", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.post("/api/extension/whitelist-profiles", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.user!.id;
       const { memberId, profileUrl } = req.body || {};
@@ -5229,7 +5230,7 @@ Genera la imagen editada.`;
   });
 
   // 13. Whitelist profiles — listar
-  app.get("/api/extension/whitelist-profiles", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.get("/api/extension/whitelist-profiles", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.user!.id;
       const result = await pool.query(
@@ -5250,7 +5251,7 @@ Genera la imagen editada.`;
   });
 
   // 14. Whitelist items — borrar
-  app.delete("/api/extension/whitelist-items/:itemId", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.delete("/api/extension/whitelist-items/:itemId", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.user!.id;
       const { itemId } = req.params;
@@ -5266,7 +5267,7 @@ Genera la imagen editada.`;
   });
 
   // 15. Whitelist profiles — borrar
-  app.delete("/api/extension/whitelist-profiles/:memberId", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.delete("/api/extension/whitelist-profiles/:memberId", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.user!.id;
       const { memberId } = req.params;
@@ -5282,7 +5283,7 @@ Genera la imagen editada.`;
   });
 
   // 5. Camouflage tick — placeholder
-  app.get("/api/extension/camouflage/tick", requireLicense as any, async (_req: AuthRequest, res: Response) => {
+  app.get("/api/extension/camouflage/tick", requireLicense as any, requireFeature("academia") as any, async (_req: AuthRequest, res: Response) => {
     try {
       res.json({ ok: true, action: "noop" });
     } catch {
@@ -5514,7 +5515,7 @@ Genera la imagen editada.`;
   });
 
   // 10. Vinted show — stub
-  app.post("/api/vinted/show", requireLicense as any, async (_req: AuthRequest, res: Response) => {
+  app.post("/api/vinted/show", requireLicense as any, requireFeature("academia") as any, async (_req: AuthRequest, res: Response) => {
     try {
       res.json({ ok: true, stub: true });
     } catch {
@@ -5523,7 +5524,7 @@ Genera la imagen editada.`;
   });
 
   // 11. Vinted bump — stub
-  app.post("/api/vinted/bump", requireLicense as any, async (_req: AuthRequest, res: Response) => {
+  app.post("/api/vinted/bump", requireLicense as any, requireFeature("academia") as any, async (_req: AuthRequest, res: Response) => {
     try {
       res.json({ ok: true, stub: true });
     } catch {
@@ -5532,7 +5533,7 @@ Genera la imagen editada.`;
   });
 
   // 12. Vinted delete — stub
-  app.post("/api/vinted/delete", requireLicense as any, async (_req: AuthRequest, res: Response) => {
+  app.post("/api/vinted/delete", requireLicense as any, requireFeature("academia") as any, async (_req: AuthRequest, res: Response) => {
     try {
       res.json({ ok: true, stub: true });
     } catch {
@@ -5579,12 +5580,12 @@ Genera la imagen editada.`;
 
   // ── Vinte reposts (called by global-addon from page context) ─────────────────
   // hub-runtime-bridge.js intercepts this in page context; background-side stub:
-  app.post("/api/vinted/items/reposts", requireLicense as any, async (_req: AuthRequest, res: Response) => {
+  app.post("/api/vinted/items/reposts", requireLicense as any, requireFeature("academia") as any, async (_req: AuthRequest, res: Response) => {
     res.json({ ok: true });
   });
 
   // ── Vinted session save — decode Vinted JWT to extract userId + username ──
-  app.post("/api/vinted/session/save", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.post("/api/vinted/session/save", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const { bearerToken, domain, anonId } = req.body || {};
 
@@ -5632,7 +5633,7 @@ Genera la imagen editada.`;
   });
 
   // ── AI Inbox Reply — generate a suggested reply for a Vinted conversation ──
-  app.post("/api/ai/inbox/reply", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.post("/api/ai/inbox/reply", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const { messages, itemTitle, itemPrice, buyerName, sellerName } = req.body as {
         messages: { isMe: boolean; text: string }[];
@@ -5697,7 +5698,7 @@ Genera la imagen editada.`;
   // ════════════════════════════════════════════════════════════════════════════
 
   // GET /api/vinted/accounts — cuentas vinculadas con session_cookie
-  app.get("/api/vinted/accounts", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.get("/api/vinted/accounts", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const r = await pool.query(
         `SELECT id, username, vinted_id, domain, is_active, updated_at
@@ -5713,7 +5714,7 @@ Genera la imagen editada.`;
   });
 
   // GET /api/autopublish/listings
-  app.get("/api/autopublish/listings", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.get("/api/autopublish/listings", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const r = await pool.query(
         `SELECT id, title, description, price, condition, brand, size, gender,
@@ -5730,7 +5731,7 @@ Genera la imagen editada.`;
   });
 
   // POST /api/autopublish/listings — crear borrador
-  app.post("/api/autopublish/listings", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.post("/api/autopublish/listings", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const { title, description, price, condition, brand, size, gender, package_size, images } = req.body;
       if (!title || price == null) return res.status(400).json({ ok: false, error: "title y price requeridos" });
@@ -5753,7 +5754,7 @@ Genera la imagen editada.`;
   });
 
   // PUT /api/autopublish/listings/:id — actualizar borrador
-  app.put("/api/autopublish/listings/:id", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.put("/api/autopublish/listings/:id", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const { title, description, price, condition, brand, size, gender, package_size, images } = req.body;
       await pool.query(
@@ -5776,7 +5777,7 @@ Genera la imagen editada.`;
   });
 
   // DELETE /api/autopublish/listings/:id
-  app.delete("/api/autopublish/listings/:id", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.delete("/api/autopublish/listings/:id", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       await pool.query(
         "DELETE FROM vinted_autopublish_listings WHERE id=$1 AND user_id=$2",
@@ -5789,7 +5790,7 @@ Genera la imagen editada.`;
   });
 
   // POST /api/autopublish/listings/:id/publish — SSE stream
-  app.post("/api/autopublish/listings/:id/publish", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.post("/api/autopublish/listings/:id/publish", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     const userId = req.user!.id;
     const listingId = Number(req.params.id);
 
@@ -5905,7 +5906,7 @@ Genera la imagen editada.`;
   });
 
   // ── Vinted Sessions — list accounts linked to user ──────────────────────
-  app.get("/api/vinted/sessions", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.get("/api/vinted/sessions", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const r = await pool.query(
         `SELECT vinted_user_id, vinted_username, domain, last_seen
@@ -5921,7 +5922,7 @@ Genera la imagen editada.`;
   });
 
   // ── Labels — store label URLs found passively by vinted-favourite-sniffer ──
-  app.post("/api/extension/labels", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.post("/api/extension/labels", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const { transactionId, labelUrl, labelCarrier, vintedUserId } = req.body || {};
       if (!transactionId || !labelUrl) return res.status(400).json({ ok: false, error: "missing_fields" });
@@ -5940,7 +5941,7 @@ Genera la imagen editada.`;
     }
   });
 
-  app.get("/api/extension/labels", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.get("/api/extension/labels", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const r = await pool.query(
         `SELECT transaction_id, label_url, label_carrier, vinted_user_id, found_at
@@ -5958,7 +5959,7 @@ Genera la imagen editada.`;
 
   // ── Labels: sync with full PDF blob ──────────────────────────────────────
   // Called by background-hub.js when it intercepts the shipping label PDF
-  app.post("/api/extension/labels/sync", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.post("/api/extension/labels/sync", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.user!.id;
       const { etiquetas } = req.body || {};
@@ -5991,7 +5992,7 @@ Genera la imagen editada.`;
   });
 
   // ── Labels: serve stored PDF ──────────────────────────────────────────────
-  app.get("/api/extension/labels/:id/pdf", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.get("/api/extension/labels/:id/pdf", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.user!.id;
       const txId = req.params.id;
@@ -6020,7 +6021,7 @@ Genera la imagen editada.`;
   });
 
   // ── Extension accounts: simple alias (background-hub.js uses this) ────────
-  app.get("/api/extension/accounts", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.get("/api/extension/accounts", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const r = await pool.query(
         `SELECT id, username AS login, username AS title, domain AS country_code,
@@ -6035,7 +6036,7 @@ Genera la imagen editada.`;
   });
 
   // ── Restocker: pending label capture (hub-addon proactive sweep) ──────────
-  app.get("/api/restocker/labels/pending_capture", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.get("/api/restocker/labels/pending_capture", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.user!.id;
       const max = Math.min(Number(req.query.max) || 10, 50);
@@ -6064,7 +6065,7 @@ Genera la imagen editada.`;
   });
 
   // ── Vinted accounts CRUD (for extension FounderClub tab) ──────────────────
-  app.get("/api/vinted/accounts", requireAuth as any, async (req: AuthRequest, res) => {
+  app.get("/api/vinted/accounts", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     const result = await pool.query(
       `SELECT id, id::text AS vinted_id, username AS login, username AS title,
               label, domain AS country_code, balance, items_count, sold_count,
@@ -6087,7 +6088,7 @@ Genera la imagen editada.`;
     });
   });
 
-  app.post("/api/vinted/accounts", requireAuth as any, async (req: AuthRequest, res) => {
+  app.post("/api/vinted/accounts", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     const { cookie, domain = "es", label } = req.body;
     if (!cookie) return res.status(400).json({ success: false, error: "cookie_required" });
     try {
@@ -6102,18 +6103,18 @@ Genera la imagen editada.`;
     }
   });
 
-  app.delete("/api/vinted/accounts/:id", requireAuth as any, async (req: AuthRequest, res) => {
+  app.delete("/api/vinted/accounts/:id", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     await pool.query("DELETE FROM vinted_accounts WHERE id = $1 AND user_id = $2", [req.params.id, req.user!.id]);
     res.json({ success: true });
   });
 
-  app.post("/api/vinted/accounts/:id/sync", requireAuth as any, async (req: AuthRequest, res) => {
+  app.post("/api/vinted/accounts/:id/sync", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     // Placeholder — triggers a background sync job
     await pool.query("UPDATE vinted_accounts SET last_synced_at = NOW() WHERE id = $1 AND user_id = $2", [req.params.id, req.user!.id]);
     res.json({ success: true, message: "Sync iniciado" });
   });
 
-  app.post("/api/vinted/accounts/:id/hide-all", requireAuth as any, async (req: AuthRequest, res) => {
+  app.post("/api/vinted/accounts/:id/hide-all", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     const { reveal = false } = req.body;
     await pool.query(
       "UPDATE vinted_inventory SET is_hidden = $1 WHERE account_id = $2",
@@ -6123,7 +6124,7 @@ Genera la imagen editada.`;
   });
 
   // ── GET /api/vinted/:accountId/items  (Blackstock compat) ──────────────────
-  app.get("/api/vinted/:accountId/items", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.get("/api/vinted/:accountId/items", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const { accountId } = req.params;
       const limit  = Math.min(parseInt(String(req.query.limit  || "50")), 200);
@@ -6183,7 +6184,7 @@ Genera la imagen editada.`;
   });
 
   // ── GET /api/vinted/:accountId/orders  (Blackstock compat) ──────────────────
-  app.get("/api/vinted/:accountId/orders", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.get("/api/vinted/:accountId/orders", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const { accountId } = req.params;
       const limit  = Math.min(parseInt(String(req.query.limit  || "50")), 200);
@@ -6249,7 +6250,7 @@ Genera la imagen editada.`;
   });
 
   // ── GET /api/vinted/:accountId/stats  (Blackstock compat) ───────────────────
-  app.get("/api/vinted/:accountId/stats", requireAuth as any, async (req: AuthRequest, res: Response) => {
+  app.get("/api/vinted/:accountId/stats", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const { accountId } = req.params;
       const accResult = await pool.query(
