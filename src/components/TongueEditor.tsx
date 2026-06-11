@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   Upload, Scissors, Info, RefreshCcw,
   CheckCircle2, AlertCircle, ScanText,
@@ -45,75 +45,9 @@ export default function TongueEditor() {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [detections, setDetections] = useState<DetectionResult | null>(null);
-  const [customPromptAdidas, setCustomPromptAdidas] = useState<string>(`PROMPT ADIDAS - REGLAS DE ORO:
-1. NUNCA cambies el SKU / MODELO (el código que aparece después de "ART NO" o "A:"). Debe ser EXACTAMENTE igual al original.
-2. Modifica únicamente los dos últimos códigos de la parte inferior:
-   - El código que empieza por # (9 dígitos): Cambia los 9 dígitos por aleatorios (solo números).
-   - El código alfanumérico después de "adidas" (13 dígitos): Cámbialo manteniendo longitud y formato (mayúsculas/números).
-3. Mantén tipografía, alineación, materiales y calidad originales. Everything else stays the same.`);
-
-  const [customPromptNB, setCustomPromptNB] = useState<string>(`Modifica la etiqueta de esta zapatilla de New Balance. Cambia únicamente estos tres códigos:
-
-* 213772792545
-* 7173928
-* LXCK1298 CLX
-
-Reemplázalos por nuevos códigos aleatorios, pero manteniendo exactamente:
-- La misma cantidad de caracteres
-- El mismo formato (letras/números)
-- El espacio entre caracteres exactamente igual
-
-Específicamente:
-- 213772792545 → otro número de 12 dígitos.
-- 7173928 → otro número de 7 dígitos.
-- LXCK1298 CLX → 4 letras, 4 números, espacio, 3 letras.
-
-No cambies nada más (tipografía, texturas, iluminación y resto de datos deben ser idénticos).`);
-
-  const [customPromptAsics, setCustomPromptAsics] = useState<string>(`PROMPT ASICS - REGLAS DE ORO:
-1. NUNCA cambies el SKU (1204A191): Debe ser exacto para que el modelo sea reconocido como original.
-2. Modifica los códigos de rastreo individuales:
-   - Código F960925: Cambia la letra inicial y los 6 dígitos por otros aleatorios.
-   - Número de Serie (N4VDCSSVG6CSMGH): Cámbialo por una combinación aleatoria de 15 caracteres (letras mayúsculas y números).
-3. Mantén la estructura: Respeta las líneas verticales divisorias (|) en la tabla de tallas y la tipografía comprimida y limpia característica de Asics.`);
-
-  const [customPromptOnitsuka, setCustomPromptOnitsuka] = useState<string>(`PROMPT ONITSUKA TIGER - PROTOCOLO DE PRECISIÓN:
-1. Integridad del SKU (Modelo):
-PROHIBIDO alterar el código THL7C2. Debe aparecer en la parte superior, centrado y con un ligero espaciado entre caracteres.
-
-2. Bloque de Tallas (Matriz de Datos):
-Mantener exactamente la cuadrícula de 2x3 celdas separadas por líneas verticales finas (|).
-Valores Obligatorios: CM 24.0, EURO 38, US 5½, UK 4.5, BR 36, CN 240(2.5). No redondear ni cambiar formatos (ej. mantener el "½" en formato pequeño).
-
-3. Reglas de Variación Inferior (Identidad Única):
-Código de Lote: Debe empezar por F seguido de exactamente 6 dígitos aleatorios (ej. F602841).
-Identificador de Región: Mantener las siglas PI a la derecha del código de lote.
-Serial de Unidad: Generar un código alfanumérico de 15 caracteres en mayúsculas. Regla estricta: Debe ser diferente para la zapatilla izquierda y la derecha para simular un par auténtico.
-
-4. Especificaciones Técnicas de Diseño:
-Tipografía: Usar una fuente Sans-Serif ultra-condensada (tipo Helvetica Compressed o similar), con impresión de transferencia térmica (puntos de tinta ligeramente visibles bajo aumento).
-Ausencia de Branding: No incluir el logo del tigre ni la palabra "Onitsuka". La etiqueta debe ser estrictamente informativa.
-Soporte: Fondo blanco mate con textura de tejido sintético, bordes termosellados y costura perimetral que la une a la lengüeta.
-Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
-
-  // Load admin-defined prompts from server on mount
-  useEffect(() => {
-    fetch('/api/tongue/prompts')
-      .then(r => r.ok ? r.json() : [])
-      .then((rows: { brand: string; prompt: string }[]) => {
-        rows.forEach(({ brand, prompt }) => {
-          if (!prompt) return;
-          if (brand === 'ADIDAS') setCustomPromptAdidas(prompt);
-          else if (brand === 'NEW BALANCE') setCustomPromptNB(prompt);
-          else if (brand === 'ASICS') setCustomPromptAsics(prompt);
-          else if (brand === 'ONITSUKA') setCustomPromptOnitsuka(prompt);
-        });
-      })
-      .catch(() => {}); // silently ignore if offline
-  }, []);
 
   const compressImage = (dataUrl: string, maxPx = 1280, quality = 0.85): Promise<string> =>
     new Promise((resolve) => {
@@ -255,7 +189,6 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
         imageBase64: originalImage,
         brand: activeBrand,
         detections,
-        customPrompt: activeBrand === 'ADIDAS' ? customPromptAdidas : activeBrand === 'ASICS' ? customPromptAsics : activeBrand === 'ONITSUKA' ? customPromptOnitsuka : customPromptNB,
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Error en el servidor');
@@ -539,17 +472,6 @@ Idioma: "MADE IN INDONESIA" seguido de "FABRIQUE EN INDONESIE" justo debajo.`);
                   </div>
                 </div>
 
-                <div className="col-span-2 space-y-1">
-                  <label className="text-[9px] uppercase text-white/30">
-                    Prompt de Generación ({activeBrand})
-                  </label>
-                  <textarea 
-                    placeholder={`Pega aquí el prompt personalizado de ${activeBrand}...`}
-                    value={activeBrand === 'ADIDAS' ? customPromptAdidas : activeBrand === 'ASICS' ? customPromptAsics : activeBrand === 'ONITSUKA' ? customPromptOnitsuka : customPromptNB}
-                    onChange={e => activeBrand === 'ADIDAS' ? setCustomPromptAdidas(e.target.value) : activeBrand === 'ASICS' ? setCustomPromptAsics(e.target.value) : activeBrand === 'ONITSUKA' ? setCustomPromptOnitsuka(e.target.value) : setCustomPromptNB(e.target.value)}
-                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-acid outline-none h-20 resize-none"
-                  />
-                </div>
               </motion.div>
             )}
 

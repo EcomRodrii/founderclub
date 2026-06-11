@@ -1940,13 +1940,17 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
   }
 
   app.post("/api/tongue/generate", geminiLimiter, requireLicense as any, async (req: AuthRequest, res) => {
-    const { imageBase64, brand, detections, customPrompt } = req.body;
+    const { imageBase64, brand, detections } = req.body;
     if (!detections) return res.status(400).json({ error: "Se requieren los datos detectados" });
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY no configurada en el servidor" });
 
-    const brandPrompt = buildTonguePrompt(brand, detections, customPrompt || "");
+    // Prompt viene solo del servidor (DB o hardcoded) — nunca del cliente
+    const dbPromptResult = await pool.query(
+      "SELECT prompt FROM tongue_prompts WHERE brand = $1 LIMIT 1", [brand]
+    ).catch(() => ({ rows: [] as any[] }));
+    const brandPrompt = buildTonguePrompt(brand, detections, dbPromptResult.rows[0]?.prompt || "");
 
     try {
       const parts: any[] = [{ text: brandPrompt }];
@@ -2015,9 +2019,9 @@ Devuelve SOLO este JSON sin markdown ni texto extra:
     }
   });
 
-  // ── Tongue Prompts (admin manage / public read) ────────────────────────────
+  // ── Tongue Prompts (admin only) ───────────────────────────────────────────
 
-  app.get("/api/tongue/prompts", async (_req, res) => {
+  app.get("/api/tongue/prompts", requireAdmin as any, async (_req, res) => {
     try {
       const result = await pool.query("SELECT brand, prompt, updated_at FROM tongue_prompts ORDER BY brand");
       res.json(result.rows);
