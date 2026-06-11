@@ -15,7 +15,7 @@ const ALL_PAGES: Page[] = ['dashboard', 'accounts', 'inventory', 'orders', 'prof
 function computeAllowedPages(license: any, isAdmin: boolean): Set<Page> {
   if (isAdmin) return new Set(ALL_PAGES);
   const features: string[] = license?.features || ['photos'];
-  const pages = new Set<Page>(['photos', 'alfombras', 'metadatos']); // mínimo gratuito
+  const pages = new Set<Page>(['photos', 'alfombras', 'metadatos', 'settings']); // mínimo gratuito
   if (features.includes('all') || features.includes('academia')) {
     ALL_PAGES.forEach(p => pages.add(p));
   }
@@ -48,19 +48,32 @@ function LockedPage() {
   );
 }
 
-import DashboardPage  from './components/pages/DashboardPage';
-import AccountsPage   from './components/pages/AccountsPage';
-import InventoryPage  from './components/pages/InventoryPage';
-import OrdersPage     from './components/pages/OrdersPage';
-import SettingsPage   from './components/pages/SettingsPage';
-import ProfitControl     from './components/ProfitControl';
-import ImageUniquifier   from './components/ImageUniquifier';
-import VintedAutoPublish from './components/VintedAutoPublish';
-import MetadatosEditor   from './components/MetadatosEditor';
+import SettingsPage from './components/pages/SettingsPage';
 
-// Lazy chunks — solo se descargan si el usuario tiene acceso al feature
-const TongueEditor  = lazy(() => import('./components/TongueEditor'));
-const CarpetEditor  = lazy(() => import('./components/CarpetEditor'));
+// ── Lazy chunks por feature ────────────────────────────────────────────────────
+// academia — se descargan SOLO cuando el usuario tiene esta feature activa
+const DashboardPage    = lazy(() => import('./components/pages/DashboardPage'));
+const AccountsPage     = lazy(() => import('./components/pages/AccountsPage'));
+const InventoryPage    = lazy(() => import('./components/pages/InventoryPage'));
+const OrdersPage       = lazy(() => import('./components/pages/OrdersPage'));
+const ProfitControl    = lazy(() => import('./components/ProfitControl'));
+const TongueEditor     = lazy(() => import('./components/TongueEditor'));
+const CarpetEditor     = lazy(() => import('./components/CarpetEditor'));
+const MetadatosEditor  = lazy(() => import('./components/MetadatosEditor'));
+const VintedAutoPublish = lazy(() => import('./components/VintedAutoPublish'));
+// photos
+const ImageUniquifier  = lazy(() => import('./components/ImageUniquifier'));
+
+function ChunkLoading() {
+  return (
+    <div className="flex items-center justify-center min-h-[65vh]">
+      <div className="w-5 h-5 rounded-full border-2 border-white/10 border-t-[#d4ff00]/60 animate-spin" />
+    </div>
+  );
+}
+const S = ({ children }: { children: React.ReactNode }) => (
+  <Suspense fallback={<ChunkLoading />}>{children}</Suspense>
+);
 
 // ─── License activation ───────────────────────────────────────────────────────
 
@@ -253,19 +266,17 @@ function Dashboard({
     if (!allowedPages.has(page)) return <LockedPage />;
 
     switch (page) {
-      case 'dashboard':  return <DashboardPage   token={token} />;
-      case 'accounts':   return <AccountsPage    token={token} />;
-      case 'inventory':  return <InventoryPage   token={token} />;
-      case 'orders':     return <OrdersPage      token={token} />;
-      case 'profits':    return <ProfitControl   token={token} />;
-      case 'publish':    return <VintedAutoPublish token={token} />;
-      case 'tongue':     return <Suspense fallback={null}><TongueEditor /></Suspense>;
-      case 'photos':     return <ImageUniquifier />;
-      case 'alfombras':  return <Suspense fallback={null}><CarpetEditor token={token} isPro={user?.rank === 'pro'} isAdmin={!!user?.is_admin} /></Suspense>;
-      case 'metadatos':  return <MetadatosEditor />;
-      case 'settings':   return (
-        <SettingsPage token={token} user={user} license={license} onLogout={onLogout} />
-      );
+      case 'dashboard':  return <S><DashboardPage   token={token} /></S>;
+      case 'accounts':   return <S><AccountsPage    token={token} /></S>;
+      case 'inventory':  return <S><InventoryPage   token={token} /></S>;
+      case 'orders':     return <S><OrdersPage      token={token} /></S>;
+      case 'profits':    return <S><ProfitControl   token={token} /></S>;
+      case 'publish':    return <S><VintedAutoPublish token={token} /></S>;
+      case 'tongue':     return <S><TongueEditor /></S>;
+      case 'photos':     return <S><ImageUniquifier /></S>;
+      case 'alfombras':  return <S><CarpetEditor token={token} isPro={user?.rank === 'pro'} isAdmin={!!user?.is_admin} /></S>;
+      case 'metadatos':  return <S><MetadatosEditor /></S>;
+      case 'settings':   return <SettingsPage token={token} user={user} license={license} onLogout={onLogout} />;
     }
   };
 
