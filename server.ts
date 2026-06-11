@@ -2234,9 +2234,7 @@ async function startServer() {
 
   // Registro exclusivo con código de invitación
   app.post("/api/control/register", authLimiter, async (req, res) => {
-    const { username, email, password, invite_code } = req.body;
-    if (!invite_code || invite_code !== CONTROL_INVITE_CODE)
-      return res.status(403).json({ error: "Código de invitación incorrecto" });
+    const { username, email, password } = req.body;
     if (!username || !email || !password)
       return res.status(400).json({ error: "Faltan campos obligatorios" });
     if (password.length < 8)
