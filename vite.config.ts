@@ -32,6 +32,8 @@ export default defineConfig({
     },
     rollupOptions: {
       output: {
+        chunkFileNames: '[hash].js',
+        assetFileNames: '[hash][extname]',
         manualChunks: {
           vendor:  ['react', 'react-dom'],
           motion:  ['motion'],

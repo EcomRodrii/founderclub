@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { Key, AlertCircle, CheckCircle2, Lock, GraduationCap } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -54,11 +54,13 @@ import InventoryPage  from './components/pages/InventoryPage';
 import OrdersPage     from './components/pages/OrdersPage';
 import SettingsPage   from './components/pages/SettingsPage';
 import ProfitControl     from './components/ProfitControl';
-import TongueEditor      from './components/TongueEditor';
 import ImageUniquifier   from './components/ImageUniquifier';
 import VintedAutoPublish from './components/VintedAutoPublish';
-import CarpetEditor      from './components/CarpetEditor';
 import MetadatosEditor   from './components/MetadatosEditor';
+
+// Lazy chunks — solo se descargan si el usuario tiene acceso al feature
+const TongueEditor  = lazy(() => import('./components/TongueEditor'));
+const CarpetEditor  = lazy(() => import('./components/CarpetEditor'));
 
 // ─── License activation ───────────────────────────────────────────────────────
 
@@ -257,9 +259,9 @@ function Dashboard({
       case 'orders':     return <OrdersPage      token={token} />;
       case 'profits':    return <ProfitControl   token={token} />;
       case 'publish':    return <VintedAutoPublish token={token} />;
-      case 'tongue':     return <TongueEditor />;
+      case 'tongue':     return <Suspense fallback={null}><TongueEditor /></Suspense>;
       case 'photos':     return <ImageUniquifier />;
-      case 'alfombras':  return <CarpetEditor token={token} isPro={user?.rank === 'pro'} isAdmin={!!user?.is_admin} />;
+      case 'alfombras':  return <Suspense fallback={null}><CarpetEditor token={token} isPro={user?.rank === 'pro'} isAdmin={!!user?.is_admin} /></Suspense>;
       case 'metadatos':  return <MetadatosEditor />;
       case 'settings':   return (
         <SettingsPage token={token} user={user} license={license} onLogout={onLogout} />
