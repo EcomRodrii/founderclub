@@ -678,7 +678,7 @@ async function startServer() {
     const params = search ? [`%${search}%`] : [];
     const result = await pool.query(`
       SELECT u.id, u.username, u.email, u.is_admin, u.is_blocked, u.created_at,
-        u.last_login_at, u.last_seen_at, u.last_ip,
+        u.last_login_at, u.last_seen_at, u.last_ip, u.rank,
         l.key AS license_key, l.type AS license_type, l.expires_at, l.is_active AS license_active,
         l.hwid, l.ip,
         COALESCE(du.count, 0) AS daily_usage_today
@@ -764,6 +764,25 @@ async function startServer() {
       [req.params.id]
     );
     res.json({ ok: true, reset: true });
+  });
+
+  // ── Dar crédito de generaciones extra (admin) ─────────────────────────────────
+  app.patch("/api/admin/users/:id/add-daily", requireAdmin as any, async (req, res) => {
+    const amount = parseInt(req.body.amount, 10);
+    if (!amount || amount < 1 || amount > 9999)
+      return res.status(400).json({ error: "Cantidad inválida (1-9999)" });
+    // Restar al contador (puede ir negativo → crédito extra)
+    await pool.query(
+      `INSERT INTO daily_usage (user_id, usage_date, count)
+       VALUES ($1, CURRENT_DATE, -$2)
+       ON CONFLICT (user_id, usage_date) DO UPDATE SET count = daily_usage.count - $2`,
+      [req.params.id, amount]
+    );
+    const cur = await pool.query(
+      "SELECT count FROM daily_usage WHERE user_id=$1 AND usage_date=CURRENT_DATE",
+      [req.params.id]
+    );
+    res.json({ ok: true, count: Number(cur.rows[0]?.count || 0) });
   });
 
   // ── Usage diario del usuario autenticado ──────────────────────────────────────

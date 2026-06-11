@@ -116,6 +116,7 @@ function UserDrawer({ user, token, onClose, onRefresh }: {
   const [pwd, setPwd] = useState('');
   const [pwdDone, setPwdDone] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [creditAmt, setCreditAmt] = useState('50');
 
   const act = async (key: string, fn: () => Promise<any>) => {
     setBusy(key);
@@ -199,22 +200,41 @@ function UserDrawer({ user, token, onClose, onRefresh }: {
         </div>
 
         {/* Generaciones hoy */}
-        <div className="px-4 py-2.5 border-b border-zinc-800 shrink-0 flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
-            <RefreshCcw className="w-3.5 h-3.5 text-zinc-600" />
-            <span className="text-xs text-zinc-400">
-              Generaciones hoy: <span className={`font-semibold ${(user.daily_usage_today ?? 0) >= 10 ? 'text-red-400' : 'text-zinc-300'}`}>{user.daily_usage_today ?? 0}/10</span>
-            </span>
+        <div className="px-4 py-3 border-b border-zinc-800 shrink-0 space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <RefreshCcw className="w-3.5 h-3.5 text-zinc-600" />
+              <span className="text-xs text-zinc-400">
+                Generaciones hoy: <span className={`font-semibold ${(user.daily_usage_today ?? 0) >= 10 ? 'text-red-400' : 'text-zinc-300'}`}>{user.daily_usage_today ?? 0}/10</span>
+              </span>
+            </div>
+            {(user.daily_usage_today ?? 0) > 0 && (
+              <button
+                onClick={() => act('resetdaily', () => client.patch(`/api/admin/users/${user.id}/reset-daily`))}
+                disabled={!!busy}
+                className="text-[11px] text-zinc-600 hover:text-green-400 transition disabled:opacity-40"
+              >
+                {busy === 'resetdaily' ? '…' : 'resetear'}
+              </button>
+            )}
           </div>
-          {(user.daily_usage_today ?? 0) > 0 && (
+          {/* Añadir crédito extra */}
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={1} max={9999}
+              value={creditAmt}
+              onChange={e => setCreditAmt(e.target.value)}
+              className="w-16 bg-zinc-900 border border-zinc-700 rounded-lg px-2 py-1 text-xs text-white text-center focus:outline-none focus:border-[#d4ff00]/50"
+            />
             <button
-              onClick={() => act('resetdaily', () => client.patch(`/api/admin/users/${user.id}/reset-daily`))}
-              disabled={busy === 'resetdaily'}
-              className="text-[11px] text-zinc-600 hover:text-green-400 transition"
+              onClick={() => act('addcredit', () => client.patch(`/api/admin/users/${user.id}/add-daily`, { amount: parseInt(creditAmt, 10) || 50 }))}
+              disabled={!!busy}
+              className="flex-1 text-[11px] bg-[#d4ff00]/10 hover:bg-[#d4ff00]/20 text-[#d4ff00] border border-[#d4ff00]/20 rounded-lg py-1 transition disabled:opacity-40"
             >
-              {busy === 'resetdaily' ? '…' : 'resetear'}
+              {busy === 'addcredit' ? '…' : `+ dar ${creditAmt} generaciones`}
             </button>
-          )}
+          </div>
         </div>
 
         {/* Acciones */}
