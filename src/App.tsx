@@ -3,7 +3,7 @@ import { Key, AlertCircle, CheckCircle2, Lock, GraduationCap } from 'lucide-reac
 import { motion, AnimatePresence } from 'motion/react';
 
 import AuthPage from './components/AuthPage';
-import AdminPanel from './components/AdminPanel';
+const AdminPanel = lazy(() => import('./components/AdminPanel'));
 import Sidebar, { MobileTabBar, type Page } from './components/Sidebar';
 
 // ─── Permisos ─────────────────────────────────────────────────────────────────
@@ -222,7 +222,7 @@ export default function App() {
   }
 
   if (authUser.is_admin && showAdmin) {
-    return <AdminPanel token={authToken} onLogout={handleLogout} onBack={() => setShowAdmin(false)} />;
+    return <S><AdminPanel token={authToken} onLogout={handleLogout} onBack={() => setShowAdmin(false)} /></S>;
   }
 
   return (

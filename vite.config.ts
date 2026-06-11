@@ -35,8 +35,9 @@ export default defineConfig({
         // Nombres opacos para chunks premium; vendor queda legible (no es secreto)
         chunkFileNames: (info) => {
           const map: Record<string, string> = {
-            'academia': 'utils-core',
-            'photos':   'assets-loader',
+            'academia':   'utils-core',
+            'photos':     'assets-loader',
+            'AdminPanel': 'admin-panel',
           };
           const name = map[info.name] ?? info.name;
           return `assets/${name}-[hash].js`;
@@ -60,6 +61,9 @@ export default defineConfig({
 
           // Photos chunk
           if (id.includes('/components/ImageUniquifier')) return 'photos';
+
+          // Admin chunk
+          if (id.includes('/components/AdminPanel')) return 'AdminPanel';
         },
       },
     },
