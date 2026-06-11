@@ -413,6 +413,7 @@ async function startServer() {
       /^chrome-extension:\/\//.test(origin) ||
       /^https?:\/\/localhost/.test(origin) ||
       /^https?:\/\/founderclub-production\.up\.railway\.app/.test(origin) ||
+      /^https?:\/\/bylamineresell\.app/.test(origin) ||
       /^https?:\/\/lamineresell\.com/.test(origin) ||
       !origin;
     if (allowed) {
