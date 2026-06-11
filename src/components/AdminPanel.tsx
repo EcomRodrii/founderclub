@@ -198,6 +198,25 @@ function UserDrawer({ user, token, onClose, onRefresh }: {
           )}
         </div>
 
+        {/* Generaciones hoy */}
+        <div className="px-4 py-2.5 border-b border-zinc-800 shrink-0 flex items-center justify-between">
+          <div className="flex items-center gap-1.5">
+            <RefreshCcw className="w-3.5 h-3.5 text-zinc-600" />
+            <span className="text-xs text-zinc-400">
+              Generaciones hoy: <span className={`font-semibold ${(user.daily_usage_today ?? 0) >= 10 ? 'text-red-400' : 'text-zinc-300'}`}>{user.daily_usage_today ?? 0}/10</span>
+            </span>
+          </div>
+          {(user.daily_usage_today ?? 0) > 0 && (
+            <button
+              onClick={() => act('resetdaily', () => client.patch(`/api/admin/users/${user.id}/reset-daily`))}
+              disabled={busy === 'resetdaily'}
+              className="text-[11px] text-zinc-600 hover:text-green-400 transition"
+            >
+              {busy === 'resetdaily' ? '…' : 'resetear'}
+            </button>
+          )}
+        </div>
+
         {/* Acciones */}
         <div className="flex-1 p-4 space-y-2">
 

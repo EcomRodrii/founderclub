@@ -155,7 +155,8 @@ const DAILY_FREE_LIMIT = 10;
 async function checkDailyLimit(req: AuthRequest, res: Response, next: NextFunction) {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: "No autenticado" });
-  if (req.user?.is_admin) return next(); // solo admins sin límite
+  if (req.user?.is_admin) return next();  // admins sin límite
+  if (req.user?.rank === 'pro') return next(); // pro ilimitado
 
   // Leer contador actual del día
   const cur = await pool.query(
@@ -754,6 +755,15 @@ async function startServer() {
     );
     if (!result.rows[0]) return res.status(404).json({ error: "Usuario no encontrado" });
     res.json(result.rows[0]);
+  });
+
+  // ── Resetear generaciones diarias (admin) ────────────────────────────────────
+  app.patch("/api/admin/users/:id/reset-daily", requireAdmin as any, async (req, res) => {
+    await pool.query(
+      "DELETE FROM daily_usage WHERE user_id = $1 AND usage_date = CURRENT_DATE",
+      [req.params.id]
+    );
+    res.json({ ok: true, reset: true });
   });
 
   // ── Usage diario del usuario autenticado ──────────────────────────────────────
