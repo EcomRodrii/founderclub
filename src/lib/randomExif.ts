@@ -48,31 +48,43 @@ function randomExifDate(): string {
   return `${d.getFullYear()}:${pad(d.getMonth() + 1)}:${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-// Inyecta EXIF aleatorio en un JPEG dataURL y devuelve uno nuevo.
-// Si la librería falla por algún motivo (red caída, CORS), devuelve el dataURL
-// original sin metadata (no rompe el flujo).
-export async function injectRandomExif(jpegDataUrl: string): Promise<string> {
+// Perfil EXIF: todos los valores aleatorios generados de una vez.
+// Permite aplicar el mismo perfil a varias fotos del mismo lote.
+export interface ExifProfile {
+  device: typeof DEVICES[0];
+  date: string;
+  iso: number;
+  exposureNum: number;
+  exposureDen: number;
+}
+
+export function generateExifProfile(): ExifProfile {
+  return {
+    device:      pick(DEVICES),
+    date:        randomExifDate(),
+    iso:         pick([100, 125, 160, 200, 250, 320, 400, 500, 640, 800]),
+    exposureNum: pick([1, 1, 1, 1, 1, 2, 3]),
+    exposureDen: pick([15, 30, 60, 100, 125, 160, 200, 250, 320, 500]),
+  };
+}
+
+// Aplica un perfil EXIF concreto a un JPEG dataURL.
+export async function injectExifProfile(jpegDataUrl: string, profile: ExifProfile): Promise<string> {
   try {
     const piexif = await loadPiexif();
-    const dev = pick(DEVICES);
-    const date = randomExifDate();
-    const iso = pick([100, 125, 160, 200, 250, 320, 400, 500, 640, 800]);
-    const exposureNum = pick([1, 1, 1, 1, 1, 2, 3]);
-    const exposureDen = pick([15, 30, 60, 100, 125, 160, 200, 250, 320, 500]);
-    const orientation = 1; // Normal — no queremos que Vinted rote la foto.
+    const { device: dev, date, iso, exposureNum, exposureDen } = profile;
 
     const zerothIfd: any = {
       [piexif.ImageIFD.Make]: dev.make,
       [piexif.ImageIFD.Model]: dev.model,
       [piexif.ImageIFD.Software]: dev.software,
       [piexif.ImageIFD.DateTime]: date,
-      [piexif.ImageIFD.Orientation]: orientation,
+      [piexif.ImageIFD.Orientation]: 1,
       [piexif.ImageIFD.XResolution]: [72, 1],
       [piexif.ImageIFD.YResolution]: [72, 1],
       [piexif.ImageIFD.ResolutionUnit]: 2,
       [piexif.ImageIFD.YCbCrPositioning]: 1,
     };
-
     const exifIfd: any = {
       [piexif.ExifIFD.DateTimeOriginal]: date,
       [piexif.ExifIFD.DateTimeDigitized]: date,
@@ -81,24 +93,27 @@ export async function injectRandomExif(jpegDataUrl: string): Promise<string> {
       [piexif.ExifIFD.ISOSpeedRatings]: iso,
       [piexif.ExifIFD.FocalLength]: [dev.focalLengthMm, 1],
       [piexif.ExifIFD.FocalLengthIn35mmFilm]: dev.focalLengthMm,
-      [piexif.ExifIFD.ExposureProgram]: 2, // Normal
-      [piexif.ExifIFD.MeteringMode]: pick([2, 3, 5]), // Center / Spot / Pattern
-      [piexif.ExifIFD.Flash]: pick([0, 16, 24]), // No flash / off / on
-      [piexif.ExifIFD.WhiteBalance]: 0, // Auto
+      [piexif.ExifIFD.ExposureProgram]: 2,
+      [piexif.ExifIFD.MeteringMode]: pick([2, 3, 5]),
+      [piexif.ExifIFD.Flash]: pick([0, 16, 24]),
+      [piexif.ExifIFD.WhiteBalance]: 0,
       [piexif.ExifIFD.ExifVersion]: '0231',
-      [piexif.ExifIFD.ColorSpace]: 1, // sRGB
+      [piexif.ExifIFD.ColorSpace]: 1,
       [piexif.ExifIFD.LensMake]: dev.make,
       [piexif.ExifIFD.LensModel]: `${dev.model} back camera`,
       [piexif.ExifIFD.SceneCaptureType]: 0,
     };
-
-    const exifObj = { '0th': zerothIfd, 'Exif': exifIfd };
-    const exifStr = piexif.dump(exifObj);
+    const exifStr = piexif.dump({ '0th': zerothIfd, 'Exif': exifIfd });
     return piexif.insert(exifStr, jpegDataUrl);
   } catch (err) {
     console.warn('[exif] inyección falló, devuelvo sin EXIF:', err);
     return jpegDataUrl;
   }
+}
+
+// Genera un perfil aleatorio y lo aplica. Mantiene compatibilidad con código existente.
+export async function injectRandomExif(jpegDataUrl: string): Promise<string> {
+  return injectExifProfile(jpegDataUrl, generateExifProfile());
 }
 
 // Clona los metadatos EXIF de una foto real (sourceJpegDataUrl) e inyecta

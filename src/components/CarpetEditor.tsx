@@ -5,6 +5,7 @@ import {
   ImageIcon, ZapOff, Images, CheckCircle2, X,
   Sparkles, Palette, Crown, MessageCircle,
 } from 'lucide-react';
+import { generateExifProfile, injectExifProfile, type ExifProfile } from '../lib/randomExif';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -55,6 +56,28 @@ function dl(dataUrl: string, name: string) {
 async function dataUrlToFile(dataUrl: string, name: string): Promise<File> {
   const blob = await fetch(dataUrl).then(r => r.blob());
   return new File([blob], name, { type: 'image/jpeg' });
+}
+
+// Gemini devuelve PNG; piexifjs solo funciona con JPEG → convertir antes de inyectar EXIF.
+function pngToJpeg(dataUrl: string, quality = 0.93): Promise<string> {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      canvas.getContext('2d')!.drawImage(img, 0, 0);
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
+// Convierte el PNG de Gemini a JPEG e inyecta el perfil EXIF del lote.
+async function applyBatchExif(pngDataUrl: string, profile: ExifProfile): Promise<string> {
+  const jpeg = await pngToJpeg(pngDataUrl);
+  return injectExifProfile(jpeg, profile);
 }
 
 function canShareFiles(): boolean {
@@ -165,57 +188,52 @@ export default function CarpetEditor({ token, isPro = false, isAdmin = false }: 
     if (!imgs.length) return;
     setIsRunning(true);
 
+    // Un único perfil EXIF para todo el lote — todas las fotos quedan "del mismo móvil"
+    const batchProfile: ExifProfile = generateExifProfile();
+
     const newJobs: CarpetJob[] = imgs.map(f => ({
       id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       originalName: f.name,
       originalUrl: URL.createObjectURL(f),
       resultUrl: null,
       originalSize: f.size,
-      status: 'pending',
+      status: 'pending' as const,
     }));
     setJobs(prev => [...newJobs, ...prev]);
 
     for (const [i, file] of imgs.entries()) {
       const job = newJobs[i];
-
-      // Mark as processing
       setJobs(prev => prev.map(j => j.id === job.id ? { ...j, status: 'processing' } : j));
 
       try {
         const imageBase64 = await fileToBase64(file);
-
         const body: any = { imageBase64, carpetColor: effectiveColor };
         if (refImage) body.referenceBase64 = refImage;
 
         const res = await fetch('/api/carpet/generate', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-          },
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
           body: JSON.stringify(body),
         });
 
         const data = await res.json();
 
         if (!res.ok) {
-          const errMsg = data?.error || `Error ${res.status}`;
           setJobs(prev => prev.map(j =>
-            j.id === job.id ? { ...j, status: 'error', errorMsg: errMsg } : j
+            j.id === job.id ? { ...j, status: 'error', errorMsg: data?.error || `Error ${res.status}` } : j
           ));
           continue;
         }
 
+        // Convertir PNG→JPEG e inyectar el mismo perfil EXIF del lote
+        const resultUrl = await applyBatchExif(data.image, batchProfile);
+
         setJobs(prev => prev.map(j =>
-          j.id === job.id
-            ? { ...j, status: 'done', resultUrl: data.image }
-            : j
+          j.id === job.id ? { ...j, status: 'done', resultUrl } : j
         ));
       } catch (err: any) {
         setJobs(prev => prev.map(j =>
-          j.id === job.id
-            ? { ...j, status: 'error', errorMsg: err.message || 'Error desconocido' }
-            : j
+          j.id === job.id ? { ...j, status: 'error', errorMsg: err.message || 'Error desconocido' } : j
         ));
       }
     }
@@ -250,7 +268,8 @@ export default function CarpetEditor({ token, isPro = false, isAdmin = false }: 
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data?.error || `Error ${r.status}`);
-      setJobs(prev => prev.map(j => j.id === id ? { ...j, status: 'done', resultUrl: data.image } : j));
+      const resultUrl = await applyBatchExif(data.image, generateExifProfile());
+      setJobs(prev => prev.map(j => j.id === id ? { ...j, status: 'done', resultUrl } : j));
     } catch (err: any) {
       setJobs(prev => prev.map(j => j.id === id ? { ...j, status: 'error', errorMsg: err.message } : j));
     }
@@ -419,10 +438,14 @@ export default function CarpetEditor({ token, isPro = false, isAdmin = false }: 
             </p>
             <p className="text-white/40 text-sm mt-1">
               {isRunning
-                ? 'Cada imagen tarda ~15-30 segundos'
-                : `Alfombra destino: ${useCustom && customColor.trim() ? customColor.trim() : CARPET_PRESETS.find(p => p.value === carpetColor)?.label || carpetColor}`
-              }
+                ? 'Cada imagen tarda ~15–30 segundos'
+                : 'Puedes adjuntar varias fotos a la vez'}
             </p>
+            {!isRunning && (
+              <p className="text-white/25 text-xs mt-0.5">
+                Alfombra: {useCustom && customColor.trim() ? customColor.trim() : CARPET_PRESETS.find(p => p.value === carpetColor)?.label || carpetColor}
+              </p>
+            )}
           </div>
         </div>
       </div>
