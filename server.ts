@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { randomUUID } from "crypto";
 import crypto from "crypto";
 import express, { Request, Response, NextFunction } from "express";
@@ -139,6 +140,59 @@ function requireLicense(req: AuthRequest, res: Response, next: NextFunction) {
     if (!result.rows[0]) return res.status(403).json({ error: "Licencia requerida o expirada" });
     next();
   });
+}
+
+// ── Feature gating: comprueba que la licencia incluye el feature requerido ────
+function requireFeature(feature: string) {
+  return async (req: AuthRequest, res: Response, next: NextFunction) => {
+    if (!req.user) return res.status(401).json({ error: "No autenticado" });
+    if (req.user.is_admin) return next();
+    const lic = await pool.query(
+      "SELECT features FROM licenses WHERE user_id=$1 AND is_active=TRUE AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1",
+      [req.user.id]
+    ).catch(() => ({ rows: [] as any[] }));
+    const features: string[] = lic.rows[0]?.features || [];
+    if (features.includes("all") || features.includes(feature)) return next();
+    return res.status(403).json({
+      error: "Esta función requiere acceso a la academia de Lamine.",
+      feature_required: feature,
+    });
+  };
+}
+
+// ── Zod schemas para validación de entrada ────────────────────────────────────
+const BASE64_IMG = z.string().min(50).max(12_000_000);
+const BRAND_ENUM = z.enum(["ADIDAS", "NEW BALANCE", "ASICS", "ONITSUKA"]);
+
+const ZTongueAnalyze = z.object({
+  imageBase64: BASE64_IMG,
+  brand: BRAND_ENUM.optional(),
+});
+const ZTongueGenerate = z.object({
+  imageBase64: BASE64_IMG.optional(),
+  brand: BRAND_ENUM.optional(),
+  detections: z.record(z.string(), z.unknown()),
+  customPrompt: z.string().max(5_000).optional(),
+});
+const ZBoxGenerate = z.object({
+  imageBase64: BASE64_IMG.optional(),
+  brand: BRAND_ENUM,
+  detections: z.record(z.string(), z.unknown()),
+  customPrompt: z.string().max(5_000).optional(),
+});
+const ZCarpetGenerate = z.object({
+  imageBase64: BASE64_IMG,
+  carpetColor: z.string().max(300).optional(),
+  referenceBase64: BASE64_IMG.optional(),
+});
+
+function validate<T>(schema: z.ZodSchema<T>, req: Request, res: Response): T | null {
+  const result = schema.safeParse(req.body);
+  if (!result.success) {
+    res.status(400).json({ error: "Datos inválidos", details: result.error.issues.map((e: any) => `${e.path.join('.')}: ${e.message}`) });
+    return null;
+  }
+  return result.data;
 }
 
 function requireWorkerSecret(req: Request, res: Response, next: NextFunction) {
@@ -2021,7 +2075,7 @@ async function startServer() {
   // ── Profits / Sales endpoints ────────────────────────────────────────────────
 
   // ── Dashboard unificado — todas las cuentas ───────────────────────────────
-  app.get("/api/dashboard", requireAuth as any, async (req: AuthRequest, res) => {
+  app.get("/api/dashboard", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     const accounts = await pool.query(
       "SELECT id, username, domain, balance, items_count, sold_count, last_synced_at FROM vinted_accounts WHERE user_id=$1 AND is_active=TRUE",
       [req.user!.id]
@@ -2079,11 +2133,11 @@ async function startServer() {
   });
 
   // ── Gastos ────────────────────────────────────────────────────────────────
-  app.get("/api/expenses", requireAuth as any, async (req: AuthRequest, res) => {
+  app.get("/api/expenses", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     const r = await pool.query("SELECT * FROM vinted_expenses WHERE user_id=$1 ORDER BY date DESC", [req.user!.id]);
     res.json(r.rows);
   });
-  app.post("/api/expenses", requireAuth as any, async (req: AuthRequest, res) => {
+  app.post("/api/expenses", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     const { description, amount, category = "general", date, account_id } = req.body;
     if (!description || !amount) return res.status(400).json({ error: "description y amount requeridos" });
     const r = await pool.query(
@@ -2092,17 +2146,17 @@ async function startServer() {
     );
     res.json(r.rows[0]);
   });
-  app.delete("/api/expenses/:id", requireAuth as any, async (req: AuthRequest, res) => {
+  app.delete("/api/expenses/:id", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     await pool.query("DELETE FROM vinted_expenses WHERE id=$1 AND user_id=$2", [req.params.id, req.user!.id]);
     res.json({ ok: true });
   });
 
   // ── Legacy profits endpoints (compatibilidad) ─────────────────────────────
-  app.get("/api/profits/accounts", requireAuth as any, async (req: AuthRequest, res) => {
+  app.get("/api/profits/accounts", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     const r = await pool.query("SELECT id, username, domain, is_active, created_at FROM vinted_accounts WHERE user_id=$1 ORDER BY created_at DESC", [req.user!.id]);
     res.json(r.rows);
   });
-  app.post("/api/profits/accounts", requireAuth as any, async (req: AuthRequest, res) => {
+  app.post("/api/profits/accounts", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     const { username } = req.body;
     if (!username) return res.status(400).json({ error: "Username requerido" });
     try {
@@ -2110,17 +2164,17 @@ async function startServer() {
       res.json(r.rows[0]);
     } catch { res.status(409).json({ error: "Esa cuenta ya existe" }); }
   });
-  app.delete("/api/profits/accounts/:id", requireAuth as any, async (req: AuthRequest, res) => {
+  app.delete("/api/profits/accounts/:id", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     await pool.query("DELETE FROM vinted_accounts WHERE id=$1 AND user_id=$2", [req.params.id, req.user!.id]);
     res.json({ ok: true });
   });
 
   // Sales
-  app.get("/api/profits/sales", requireAuth as any, async (req: AuthRequest, res) => {
+  app.get("/api/profits/sales", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     const r = await pool.query("SELECT * FROM sales WHERE user_id=$1 ORDER BY date DESC, created_at DESC", [req.user!.id]);
     res.json(r.rows);
   });
-  app.post("/api/profits/sales", requireAuth as any, async (req: AuthRequest, res) => {
+  app.post("/api/profits/sales", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     const rows = Array.isArray(req.body) ? req.body : [req.body];
     const inserted: any[] = [];
     for (const s of rows) {
@@ -2143,7 +2197,7 @@ async function startServer() {
     }
     res.json(inserted);
   });
-  app.delete("/api/profits/sales/:id", requireAuth as any, async (req: AuthRequest, res) => {
+  app.delete("/api/profits/sales/:id", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     await pool.query("DELETE FROM sales WHERE id=$1 AND user_id=$2", [req.params.id, req.user!.id]);
     res.json({ ok: true });
   });
@@ -2243,7 +2297,7 @@ async function startServer() {
     res.json({ ok: true });
   });
   // Toggle reembolso (PATCH /api/profits/sales/:id/refund con body { refunded: true/false })
-  app.patch("/api/profits/sales/:id/refund", requireAuth as any, async (req: AuthRequest, res) => {
+  app.patch("/api/profits/sales/:id/refund", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     const { refunded } = req.body;
     const isRef = refunded === true;
     const r = await pool.query(
@@ -2256,14 +2310,14 @@ async function startServer() {
   });
 
   // ── Purchases (facturas de lote) ──────────────────────────────────────────
-  app.get("/api/profits/purchases", requireAuth as any, async (req: AuthRequest, res) => {
+  app.get("/api/profits/purchases", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     const r = await pool.query(
       "SELECT * FROM purchases WHERE user_id=$1 ORDER BY date DESC, created_at DESC",
       [req.user!.id]
     );
     res.json(r.rows);
   });
-  app.post("/api/profits/purchases", requireAuth as any, async (req: AuthRequest, res) => {
+  app.post("/api/profits/purchases", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     const rows = Array.isArray(req.body) ? req.body : [req.body];
     const inserted: any[] = [];
     for (const p of rows) {
@@ -2278,7 +2332,7 @@ async function startServer() {
     }
     res.json(inserted);
   });
-  app.delete("/api/profits/purchases/:id", requireAuth as any, async (req: AuthRequest, res) => {
+  app.delete("/api/profits/purchases/:id", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     await pool.query("DELETE FROM purchases WHERE id=$1 AND user_id=$2", [req.params.id, req.user!.id]);
     res.json({ ok: true });
   });
@@ -2287,7 +2341,7 @@ async function startServer() {
   // Recibe { pdfBase64, filename } y devuelve los datos extraídos:
   //   { supplier, total_amount, units, date, currency, raw_summary }
   // Usa gemini-2.5-flash que soporta PDFs nativamente (inlineData).
-  app.post("/api/profits/ocr-invoice", geminiLimiter, requireAuth as any, async (req: AuthRequest, res) => {
+  app.post("/api/profits/ocr-invoice", geminiLimiter, requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
     const { pdfBase64, filename } = req.body;
     if (!pdfBase64) return res.status(400).json({ error: "pdfBase64 requerido" });
     const apiKey = process.env.GEMINI_API_KEY;
@@ -2359,9 +2413,10 @@ IMPORTANTE: queremos el TOTAL del lote y el TOTAL de unidades, NO el precio unit
     res.json(data);
   });
 
-  app.post("/api/tongue/analyze", geminiLimiter, requireLicense as any, checkDailyLimit as any, async (req: AuthRequest, res) => {
-    const { imageBase64, brand } = req.body;
-    if (!imageBase64) return res.status(400).json({ error: "Se requiere imagen" });
+  app.post("/api/tongue/analyze", geminiLimiter, requireLicense as any, requireFeature("academia") as any, checkDailyLimit as any, async (req: AuthRequest, res) => {
+    const parsed = validate(ZTongueAnalyze, req, res);
+    if (!parsed) return;
+    const { imageBase64, brand } = parsed;
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY no configurada en el servidor" });
@@ -2943,9 +2998,10 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
     ].filter(Boolean).join("\n");
   }
 
-  app.post("/api/tongue/generate", geminiLimiter, requireLicense as any, checkDailyLimit as any, async (req: AuthRequest, res) => {
-    const { imageBase64, brand, detections, customPrompt } = req.body;
-    if (!detections) return res.status(400).json({ error: "Se requieren los datos detectados" });
+  app.post("/api/tongue/generate", geminiLimiter, requireLicense as any, requireFeature("academia") as any, checkDailyLimit as any, async (req: AuthRequest, res) => {
+    const parsed = validate(ZTongueGenerate, req, res);
+    if (!parsed) return;
+    const { imageBase64, brand, detections, customPrompt } = parsed;
     if (req.user?.id) logActivity(req.user.id, `lengueta:generate:${brand || '?'}`, (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip);
 
     const tokenCheck = await checkTokens(req, res, 1);
@@ -3368,9 +3424,10 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
     return null;
   }
 
-  app.post("/api/box/generate", geminiLimiter, requireLicense as any, checkDailyLimit as any, async (req: any, res) => {
-    const { imageBase64, brand, detections, customPrompt } = req.body;
-    if (!detections) return res.status(400).json({ error: "Se requieren los datos detectados" });
+  app.post("/api/box/generate", geminiLimiter, requireLicense as any, requireFeature("academia") as any, checkDailyLimit as any, async (req: any, res) => {
+    const parsed = validate(ZBoxGenerate, req, res);
+    if (!parsed) return;
+    const { imageBase64, brand, detections, customPrompt } = parsed;
 
     const tokenCheck = await checkTokens(req, res, 1);
     if (!tokenCheck.ok) return;
@@ -3381,7 +3438,7 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
     const barcodeValue = generateEAN13(EAN_PREFIXES[brand] || "400");
 
     // Cargar referencia de caja + prompt admin en paralelo
-    const sizeUsBox = detections?.sizes?.us || null;
+    const sizeUsBox = (detections as any)?.sizes?.us || null;
     const [boxPromptResult, boxRefResult] = await Promise.all([
       pool.query("SELECT prompt FROM box_prompts WHERE brand = $1", [brand]).catch(() => ({ rows: [] })),
       pool.query(
@@ -3478,8 +3535,9 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
       });
     }
 
-    const { imageBase64, carpetColor, referenceBase64 } = req.body;
-    if (!imageBase64) return res.status(400).json({ error: "Falta la imagen del producto" });
+    const parsed = validate(ZCarpetGenerate, req, res);
+    if (!parsed) return;
+    const { imageBase64, carpetColor, referenceBase64 } = parsed;
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY no configurada" });
