@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { E } from '../lib/ep';
 import {
   Upload, Scissors, Info, RefreshCcw,
   CheckCircle2, AlertCircle, ScanText,
@@ -262,7 +263,7 @@ export default function TongueEditor() {
   // Load admin-defined prompts from server on mount + token balance
   useEffect(() => {
     refreshTokens();
-    fetch('/api/tongue/prompts', { headers: { Authorization: `Bearer ${localStorage.getItem('fc_token') || ''}` } })
+    fetch(E.TP, { headers: { Authorization: `Bearer ${localStorage.getItem('fc_token') || ''}` } })
       .then(r => r.ok ? r.json() : [])
       .then((rows: { brand: string; prompt: string }[]) => {
         rows.forEach(({ brand, prompt }) => {
@@ -327,7 +328,7 @@ export default function TongueEditor() {
     setDetections(null);
     setStatus('Leyendo lengüeta...');
     try {
-      const res = await authFetch('/api/tongue/analyze', { imageBase64: base64Image, brand: activeBrand });
+      const res = await authFetch(E.TA, { imageBase64: base64Image, brand: activeBrand });
       const data = await res.json();
       if (!res.ok) {
         if (res.status === 429 && data.daily_limit_reached) {
@@ -454,7 +455,7 @@ export default function TongueEditor() {
     setDailyLimitReached(false);
     setStatus('Generando lengüeta...');
     try {
-      const res = await authFetch('/api/tongue/generate', {
+      const res = await authFetch(E.TG, {
         imageBase64: originalImage,
         brand: activeBrand,
         detections,
@@ -500,7 +501,7 @@ export default function TongueEditor() {
     setError(null);
     setDailyLimitReached(false);
     try {
-      const res = await authFetch('/api/box/generate', {
+      const res = await authFetch(E.BG, {
         imageBase64: boxOriginalImage,
         brand: activeBrand,
         detections,

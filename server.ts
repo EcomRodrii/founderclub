@@ -2429,7 +2429,7 @@ IMPORTANTE: queremos el TOTAL del lote y el TOTAL de unidades, NO el precio unit
 
   // ── Tongue / Gemini endpoints ───────────────────────────────────────────────
 
-  app.get("/api/tongue/models", requireAuth as any, requireFeature("academia") as any, async (_req: AuthRequest, res) => {
+  app.get("/api/q/3", requireAuth as any, requireFeature("academia") as any, async (_req: AuthRequest, res) => {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return res.status(500).json({ error: "No API key" });
     const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
@@ -2437,7 +2437,7 @@ IMPORTANTE: queremos el TOTAL del lote y el TOTAL de unidades, NO el precio unit
     res.json(data);
   });
 
-  app.post("/api/tongue/analyze", geminiLimiter, requireLicense as any, requireFeature("academia") as any, checkDailyLimit as any, async (req: AuthRequest, res) => {
+  app.post("/api/q/1", geminiLimiter, requireLicense as any, requireFeature("academia") as any, checkDailyLimit as any, async (req: AuthRequest, res) => {
     const parsed = validate(ZTongueAnalyze, req, res);
     if (!parsed) return;
     const { imageBase64, brand } = parsed;
@@ -3022,7 +3022,7 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
     ].filter(Boolean).join("\n");
   }
 
-  app.post("/api/tongue/generate", geminiLimiter, requireLicense as any, requireFeature("academia") as any, checkDailyLimit as any, async (req: AuthRequest, res) => {
+  app.post("/api/q/2", geminiLimiter, requireLicense as any, requireFeature("academia") as any, checkDailyLimit as any, async (req: AuthRequest, res) => {
     const parsed = validate(ZTongueGenerate, req, res);
     if (!parsed) return;
     const { imageBase64, brand, detections, customPrompt } = parsed;
@@ -3143,7 +3143,7 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
 
   // ── Tongue Prompts (admin manage / auth read) ─────────────────────────────
 
-  app.get("/api/tongue/prompts", requireAuth as any, requireFeature("academia") as any, async (_req, res) => {
+  app.get("/api/q/4", requireAuth as any, requireFeature("academia") as any, async (_req, res) => {
     try {
       const result = await pool.query("SELECT brand, prompt, updated_at FROM tongue_prompts ORDER BY brand");
       res.json(result.rows);
@@ -3152,7 +3152,7 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
     }
   });
 
-  app.post("/api/admin/tongue/prompts", requireAdmin as any, async (req, res) => {
+  app.post("/api/q/6", requireAdmin as any, async (req, res) => {
     const { brand, prompt } = req.body;
     const validBrands = ["ADIDAS", "NEW BALANCE", "ASICS", "ONITSUKA"];
     if (!brand || !validBrands.includes(brand))
@@ -3448,7 +3448,7 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
     return null;
   }
 
-  app.post("/api/box/generate", geminiLimiter, requireLicense as any, requireFeature("academia") as any, checkDailyLimit as any, async (req: any, res) => {
+  app.post("/api/q/5", geminiLimiter, requireLicense as any, requireFeature("academia") as any, checkDailyLimit as any, async (req: any, res) => {
     const parsed = validate(ZBoxGenerate, req, res);
     if (!parsed) return;
     const { imageBase64, brand, detections, customPrompt } = parsed;

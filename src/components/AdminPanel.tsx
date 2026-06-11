@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { E } from '../lib/ep';
 import { motion } from 'motion/react';
 import {
   Users, Key, Activity, LogOut, Plus, Trash2,
@@ -433,8 +434,8 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
       else if (t === 'sessions') setSessions(await client.get('/api/admin/sessions'));
       else if (t === 'prompts') {
         const [tongueRows, boxRows]: [any[], any[]] = await Promise.all([
-          client.get('/api/tongue/prompts'),
-          client.get('/api/box/prompts'),
+          client.get(E.TP),
+          client.get(E.BP),
         ]);
         const tm: Partial<Record<Brand, string>> = {};
         tongueRows.forEach((r: any) => { if (BRANDS.includes(r.brand as Brand)) tm[r.brand as Brand] = r.prompt; });
@@ -453,7 +454,7 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
 
   const savePrompt = async (brand: Brand) => {
     setPromptSaving(prev => ({ ...prev, [brand]: true }));
-    await client.post('/api/admin/tongue/prompts', { brand, prompt: prompts[brand] });
+    await client.post(E.ATP, { brand, prompt: prompts[brand] });
     setPromptSaving(prev => ({ ...prev, [brand]: false }));
     setPromptSaved(prev => ({ ...prev, [brand]: true }));
     setTimeout(() => setPromptSaved(prev => ({ ...prev, [brand]: false })), 2000);
