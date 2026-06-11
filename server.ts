@@ -3061,9 +3061,9 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
     }
   });
 
-  // ── Tongue Prompts (admin manage / public read) ────────────────────────────
+  // ── Tongue Prompts (admin manage / auth read) ─────────────────────────────
 
-  app.get("/api/tongue/prompts", async (_req, res) => {
+  app.get("/api/tongue/prompts", requireAuth as any, async (_req, res) => {
     try {
       const result = await pool.query("SELECT brand, prompt, updated_at FROM tongue_prompts ORDER BY brand");
       res.json(result.rows);
@@ -3155,9 +3155,9 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
-  // ── Box Prompts (admin manage / public read) ──────────────────────────────
+  // ── Box Prompts (admin manage / auth read) ────────────────────────────────
 
-  app.get("/api/box/prompts", async (_req, res) => {
+  app.get("/api/box/prompts", requireAuth as any, async (_req, res) => {
     try {
       const result = await pool.query("SELECT brand, prompt, updated_at FROM box_prompts ORDER BY brand");
       res.json(result.rows);

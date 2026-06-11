@@ -14,8 +14,22 @@ export default defineConfig({
     hmr: process.env.DISABLE_HMR !== 'true',
   },
   build: {
-    sourcemap: false,      // sin source maps en producción
-    minify: 'esbuild',
+    sourcemap: false,
+    minify: 'terser',
+    terserOptions: {
+      compress: {
+        drop_console: true,   // elimina todos los console.log/warn/error
+        drop_debugger: true,
+        passes: 2,
+        pure_funcs: ['console.info', 'console.debug', 'console.warn'],
+      },
+      mangle: {
+        toplevel: true,       // ofusca nombres de funciones/vars de nivel módulo
+      },
+      format: {
+        comments: false,      // elimina todos los comentarios
+      },
+    },
     rollupOptions: {
       output: {
         manualChunks: {

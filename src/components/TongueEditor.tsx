@@ -262,7 +262,7 @@ export default function TongueEditor() {
   // Load admin-defined prompts from server on mount + token balance
   useEffect(() => {
     refreshTokens();
-    fetch('/api/tongue/prompts')
+    fetch('/api/tongue/prompts', { headers: { Authorization: `Bearer ${localStorage.getItem('fc_token') || ''}` } })
       .then(r => r.ok ? r.json() : [])
       .then((rows: { brand: string; prompt: string }[]) => {
         rows.forEach(({ brand, prompt }) => {
