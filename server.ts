@@ -1560,7 +1560,7 @@ async function startServer() {
             // Conversación de compra — mismo flujo que el sniper, paso 1
             { url: `https://www.vinted.${dom}/api/v2/conversations`,
               body: { initiator: "buy", item_id: String(id), opposite_user_id: "0" } },
-            // Favourite toggle (confirmado en background.js de Blackstock)
+            // Favourite toggle (confirmado en background.js de Lamineresell)
             { url: `https://www.vinted.${dom}/api/v2/user_favourites/toggle`,
               body: { type: "item", user_favourites: [iid] } },
             // Complaint
@@ -1615,8 +1615,8 @@ async function startServer() {
     }
   });
 
-  // ── Sniper Bazooka (flujo real Blackstock) ────────────────────────────────────
-  // Flujo exacto interceptado de api.blackstock.es:
+  // ── Sniper Bazooka (flujo real Lamineresell) ────────────────────────────────────
+  // Flujo exacto interceptado de api.lamineresell.es:
   //   1. GET  /api/v2/items/{id}                              → sellerId + title
   //   2. POST /api/v2/conversations                           → transactionId
   //      body: { initiator:'buy', item_id, opposite_user_id:sellerId }
@@ -1633,7 +1633,7 @@ async function startServer() {
       const domain = domMatch ? domMatch[1] : "es";
 
       const itemId: string | null =
-        url.match(/\/items\/(\d+)/i)?.[1] ||   // /items/123456 (formato Blackstock)
+        url.match(/\/items\/(\d+)/i)?.[1] ||   // /items/123456 (formato Lamineresell)
         url.match(/\/(\d{5,})-/)?.[1] ||        // /123456-slug
         url.match(/\/(\d{5,})\/?(?:[?#]|$)/)?.[1] || // /123456 bare
         null;
@@ -1681,7 +1681,7 @@ async function startServer() {
       const userDomain = detectUserDomain(cookieList[0]);
       console.log(`[sniper] itemDomain=${domain} userDomain=${userDomain}`);
 
-      // ── Un worker: flujo Blackstock completo ─────────────────────────────────
+      // ── Un worker: flujo Lamineresell completo ─────────────────────────────────
       const runWorker = async (idx: number) => {
         const cookie = cookieList[idx % cookieList.length];
         // Detectar dominio de este cookie concreto (puede diferir entre workers)
@@ -4993,7 +4993,7 @@ Genera la imagen editada.`;
     }
   });
 
-  // ── Extension: server-side inventory fetch (Blackstock-style proxy) ─────────
+  // ── Extension: server-side inventory fetch (Lamineresell-style proxy) ─────────
   // The server fetches items from Vinted using the stored session_cookie,
   // so the extension never needs to call Vinted directly.
   app.post("/api/extension/fetch-inventory", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
@@ -5019,7 +5019,7 @@ Genera la imagen editada.`;
       const allItems: any[] = [];
       let page = 1;
 
-      // Fetch all pages of the wardrobe (same as Blackstock: server proxies Vinted)
+      // Fetch all pages of the wardrobe (same as Lamineresell: server proxies Vinted)
       while (page <= 5) {
         const url = `${base}/api/v2/wardrobe/${encodeURIComponent(String(vinted_id))}/items?page=${page}&per_page=96&order=newest_first`;
         const headers: Record<string, string> = {
@@ -6089,7 +6089,7 @@ Genera la imagen editada.`;
        FROM vinted_accounts WHERE user_id = $1 ORDER BY created_at DESC`,
       [req.user!.id]
     );
-    // Dual format: ok/data (Blackstock compat) + success/accounts (legacy panel compat)
+    // Dual format: ok/data (Lamineresell compat) + success/accounts (legacy panel compat)
     res.json({
       ok: true,
       success: true,
@@ -6139,7 +6139,7 @@ Genera la imagen editada.`;
     res.json({ success: true, reveal });
   });
 
-  // ── GET /api/vinted/:accountId/items  (Blackstock compat) ──────────────────
+  // ── GET /api/vinted/:accountId/items  (Lamineresell compat) ──────────────────
   app.get("/api/vinted/:accountId/items", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const { accountId } = req.params;
@@ -6199,7 +6199,7 @@ Genera la imagen editada.`;
     }
   });
 
-  // ── GET /api/vinted/:accountId/orders  (Blackstock compat) ──────────────────
+  // ── GET /api/vinted/:accountId/orders  (Lamineresell compat) ──────────────────
   app.get("/api/vinted/:accountId/orders", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const { accountId } = req.params;
@@ -6265,7 +6265,7 @@ Genera la imagen editada.`;
     }
   });
 
-  // ── GET /api/vinted/:accountId/stats  (Blackstock compat) ───────────────────
+  // ── GET /api/vinted/:accountId/stats  (Lamineresell compat) ───────────────────
   app.get("/api/vinted/:accountId/stats", requireAuth as any, requireFeature("academia") as any, async (req: AuthRequest, res: Response) => {
     try {
       const { accountId } = req.params;
