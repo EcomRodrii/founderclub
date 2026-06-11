@@ -17,7 +17,10 @@ import { pool, initDB } from "./db.js";
 
 dotenv.config({ path: ".env.local" });
 
-const JWT_SECRET = process.env.JWT_SECRET || "changeme-use-a-real-secret";
+if (!process.env.JWT_SECRET) {
+  console.error("CRITICAL: JWT_SECRET no configurada. Cualquiera con el código puede firmar tokens de admin. Establécela en Railway.");
+}
+const JWT_SECRET = process.env.JWT_SECRET || "";
 
 // ── Genera un session_token único, lo persiste en la BD y devuelve el JWT ──────
 async function mintSessionToken(userId: number, expiresIn = "30d", ip?: string): Promise<string> {
@@ -1872,11 +1875,12 @@ async function startServer() {
   app.post("/api/bazooka/goolazo-bridge", requireLicense as any, async (req: AuthRequest, res) => {
     const { url, title } = req.body;
     if (!url) return res.status(400).json({ error: "url requerida" });
+    if (!isVintedUrl(url)) return res.status(400).json({ error: "URL no permitida." });
     const dom = url.match(/vinted\.([a-z.]+)/)?.[1] || "es";
     let itemId: string | null = url.match(/\/(\d{5,})-/)?.[1] || null;
     if (!itemId) {
       try {
-        const p = await axiosVinted.get(url, { headers: { "User-Agent": "Mozilla/5.0" }, timeout: 8000 });
+        const p = await axiosVinted.get(url, { headers: { "User-Agent": "Mozilla/5.0" }, timeout: 8000, maxRedirects: 0 });
         const m = p.data.match(/"id":(\d+),"title":/);
         if (m) itemId = m[1];
       } catch {}
@@ -4064,19 +4068,7 @@ Genera la imagen editada.`;
   app.get("/api/extension/verify", extensionVerifyHandler as any);
   app.post("/api/extension/verify", extensionVerifyHandler as any);
 
-  // Whitelist stubs para bazooka workers — requieren licencia activa
-  app.get("/api/extension/whitelist-items", requireLicense as any, async (_req: Request, res: Response) => {
-    res.json({ ok: true, items: [] });
-  });
-  app.get("/api/extension/whitelist-profiles", requireLicense as any, async (_req: Request, res: Response) => {
-    res.json({ ok: true, profiles: [] });
-  });
-  app.post("/api/extension/whitelist-items", requireLicense as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
-    res.json({ ok: true });
-  });
-  app.post("/api/extension/whitelist-profiles", requireLicense as any, requireFeature("academia") as any, async (req: AuthRequest, res) => {
-    res.json({ ok: true });
-  });
+  // Whitelist handlers reales están registrados más abajo (con requireAuth + requireFeature)
 
   // Monitor stubs — usados por el módulo analisis de la extensión
   const monitorAuthOk = async (req: Request) => {
