@@ -1,7 +1,22 @@
 import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
+import * as Sentry from '@sentry/react';
 import App from './App.tsx';
 import './index.css';
+
+if (import.meta.env.VITE_SENTRY_DSN) {
+  Sentry.init({
+    dsn: import.meta.env.VITE_SENTRY_DSN as string,
+    integrations: [Sentry.browserTracingIntegration()],
+    tracesSampleRate: 0.1,
+    environment: import.meta.env.PROD ? 'production' : 'development',
+    beforeSend: (event) => {
+      const val = event.exception?.values?.[0]?.value || '';
+      if (val.includes('debugger') || val.includes('DevTools')) return null;
+      return event;
+    },
+  });
+}
 
 // ── Bloquear React DevTools en producción ─────────────────────────────────────
 if (import.meta.env.PROD) {

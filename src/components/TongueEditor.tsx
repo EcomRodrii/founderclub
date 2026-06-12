@@ -25,6 +25,16 @@ const authFetch = (url: string, body: any, timeoutMs = 150_000) => {
   }).finally(() => clearTimeout(t));
 };
 
+const authGet = (url: string, timeoutMs = 30_000) => {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  return fetch(url, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${localStorage.getItem("fc_token") || ""}` },
+    signal: ctrl.signal,
+  }).finally(() => clearTimeout(t));
+};
+
 interface DetectionResult {
   model: string;
   sku: string;
@@ -473,7 +483,32 @@ export default function TongueEditor() {
         if (res.status === 422) throw new Error(data.error || 'Gemini no generó imagen. Inténtalo de nuevo.');
         throw new Error(data.error || `Error (${res.status}). Inténtalo de nuevo.`);
       }
-      if (data.image) {
+
+      if (data.jobId) {
+        // BullMQ async — poll until done
+        setStatus('En cola...');
+        const MAX_WAIT_MS = 150_000;
+        let elapsed = 0;
+        while (elapsed < MAX_WAIT_MS) {
+          await new Promise(r => setTimeout(r, 3_000));
+          elapsed += 3_000;
+          const pollRes = await authGet(`${E.TGR}/${data.jobId}`);
+          const pollData = await pollRes.json();
+          if (!pollRes.ok) throw new Error(pollData.error || `Error al consultar estado`);
+          if (pollData.status === 'done' && pollData.image) {
+            setGeneratedImage(pollData.image);
+            setStatus('✓ Lengüeta generada');
+            refreshTokens();
+            return;
+          }
+          if (pollData.status === 'failed') {
+            throw new Error(pollData.error || 'Generación fallida. Inténtalo de nuevo.');
+          }
+          setStatus(`Procesando… (${Math.round(elapsed / 1000)}s)`);
+        }
+        throw new Error('Tiempo de espera agotado. Inténtalo de nuevo.');
+      } else if (data.image) {
+        // Sync mode (no BullMQ)
         setGeneratedImage(data.image);
         setStatus('✓ Lengüeta generada');
         refreshTokens();
