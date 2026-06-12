@@ -64,12 +64,12 @@ if (import.meta.env.PROD) {
   }, 1000);
 
   // Capa 3 — Debugger trap en producción (ralentiza análisis si DevTools está pausando)
-  // new Function bypasses terser drop_debugger; solo activa si el inspector está pausing
+  // vite.config drop_debugger:false → el debugger keyword sobrevive al build de producción
   if ((import.meta as any).env?.PROD) {
-    const _dbg = new Function('debugger');
     setInterval(() => {
       const t = performance.now();
-      _dbg();
+      // eslint-disable-next-line no-debugger
+      debugger;
       if (performance.now() - t > 100) {
         _c.log('%c¡Casi crack! 😂 Pero no.', 'color:lime;font-weight:bold;font-size:18px');
       }

@@ -308,6 +308,9 @@ async function seedAdminUser() {
   const adminEmail = process.env.ADMIN_EMAIL;
   if (!adminEmail) return;
   try {
+    // Solo actúa si el usuario con ese email NO es ya admin — evita UPDATE silencioso cada restart
+    const check = await pool.query("SELECT id FROM users WHERE email=$1 AND is_admin=TRUE LIMIT 1", [adminEmail]);
+    if (check.rows.length > 0) return; // ya es admin, nada que hacer
     await pool.query("UPDATE users SET is_admin = TRUE WHERE email = $1", [adminEmail]);
     console.log(`[seed] is_admin=true para ${adminEmail}`);
   } catch (e: any) {
@@ -425,7 +428,22 @@ async function startServer() {
   const app = express();
 
   // ── Seguridad + Compresión ────────────────────────────────────────────────
-  app.use(helmet({ contentSecurityPolicy: false }));
+  app.use(helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc:  ["'self'"],
+        styleSrc:   ["'self'", "'unsafe-inline'"],  // Tailwind genera atributos style en runtime
+        imgSrc:     ["'self'", "data:", "blob:", "https:"], // data: para imágenes generadas por Gemini
+        connectSrc: ["'self'"],
+        fontSrc:    ["'self'"],
+        objectSrc:  ["'none'"],
+        mediaSrc:   ["'self'", "blob:"],
+        frameSrc:   ["'none'"],
+        upgradeInsecureRequests: [],
+      },
+    },
+  }));
   app.use(compression()); // GZIP/Brotli automático
   app.set("trust proxy", 1); // necesario para rate limit detrás de Railway
 
@@ -486,7 +504,9 @@ async function startServer() {
     message: { error: "Máximo 5 generaciones por minuto. Espera un momento." }
   });
 
-  app.use(express.json({ limit: "20mb" }));
+  // Limit global: 5MB cubre base64 de imágenes JPEG (~3.5MB) + overhead JSON.
+  // Endpoints que no necesitan imágenes no pueden ser abusados con payloads masivos.
+  app.use(express.json({ limit: "5mb" }));
   const PORT = parseInt(process.env.PORT || "3000");
 
   // ── Auth Routes ─────────────────────────────────────────────────────────────
