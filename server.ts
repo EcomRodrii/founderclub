@@ -860,6 +860,18 @@ async function startServer() {
       [rank, req.params.id]
     );
     if (!result.rows[0]) return res.status(404).json({ error: "Usuario no encontrado" });
+
+    // Sync license features: pro ↔ academia access
+    await pool.query(
+      `UPDATE licenses SET features =
+        CASE WHEN $1 = 'pro'
+          THEN (SELECT array(SELECT DISTINCT unnest(array_append(features, 'academia'))))
+          ELSE (SELECT array(SELECT unnest(features) EXCEPT SELECT unnest(ARRAY['academia','all'])))
+        END
+       WHERE user_id = $2`,
+      [rank, req.params.id]
+    ).catch(() => {}); // non-fatal: user may not have a license yet
+
     res.json(result.rows[0]);
   });
 
@@ -1020,18 +1032,6 @@ async function startServer() {
     const result = await pool.query(
       "UPDATE licenses SET image_tokens = $1 WHERE id = $2 RETURNING id, image_tokens",
       [tokens ?? null, req.params.id]
-    );
-    if (!result.rows[0]) return res.status(404).json({ error: "Licencia no encontrada" });
-    res.json(result.rows[0]);
-  });
-
-  app.patch("/api/admin/licenses/:id/features", requireAdmin as any, async (req, res) => {
-    const { features } = req.body;
-    if (!Array.isArray(features)) return res.status(400).json({ error: "features debe ser un array" });
-    const clean: string[] = Array.from(new Set(['photos', ...features.map(String)]));
-    const result = await pool.query(
-      "UPDATE licenses SET features = $1 WHERE id = $2 RETURNING *",
-      [clean, req.params.id]
     );
     if (!result.rows[0]) return res.status(404).json({ error: "Licencia no encontrada" });
     res.json(result.rows[0]);
