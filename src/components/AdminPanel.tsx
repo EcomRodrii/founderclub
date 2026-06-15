@@ -242,9 +242,9 @@ function UserDrawer({ user, token, onClose, onRefresh }: {
         <div className="flex-1 p-4 space-y-2">
 
           <ActionRow
-            label="Rango" value={user.rank === 'pro' ? 'Pro' : 'Normal'}
+            label="Acceso" value={user.rank === 'pro' ? '🎓 Pro · Academia' : '🔒 Normal · Solo Fantasma'}
             valueColor={user.rank === 'pro' ? 'text-yellow-400' : 'text-zinc-400'}
-            btnLabel={user.rank === 'pro' ? '→ Normal' : '→ Pro'}
+            btnLabel={user.rank === 'pro' ? '→ Quitar Pro' : '→ Dar Pro + Academia'}
             btnColor={user.rank === 'pro'
               ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
               : 'bg-yellow-500/15 hover:bg-yellow-500/25 text-yellow-400 border border-yellow-500/30'}

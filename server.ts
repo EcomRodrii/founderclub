@@ -860,6 +860,18 @@ async function startServer() {
       [rank, req.params.id]
     );
     if (!result.rows[0]) return res.status(404).json({ error: "Usuario no encontrado" });
+
+    // Sync license features: pro → add 'academia', normal → remove it
+    await pool.query(
+      `UPDATE licenses SET features =
+        CASE WHEN $1 = 'pro'
+          THEN array(SELECT DISTINCT unnest(array_append(features, 'academia'::text)))
+          ELSE array(SELECT unnest(features) EXCEPT SELECT unnest(ARRAY['academia','all']::text[]))
+        END
+       WHERE user_id = $2`,
+      [rank, req.params.id]
+    ).catch(() => {}); // non-fatal if user has no license yet
+
     res.json(result.rows[0]);
   });
 
