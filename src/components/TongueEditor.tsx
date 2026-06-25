@@ -336,7 +336,7 @@ export default function TongueEditor() {
     setError(null);
     setDailyLimitReached(false);
     setDetections(null);
-    setStatus('Leyendo lengüeta...');
+    setStatus('Leyendo RealG...');
     try {
       const res = await authFetch(E.TA, { imageBase64: base64Image, brand: activeBrand });
       const data = await res.json();
@@ -463,7 +463,7 @@ export default function TongueEditor() {
     setLoading(true);
     setError(null);
     setDailyLimitReached(false);
-    setStatus('Generando lengüeta...');
+    setStatus('Generando RealG...');
     try {
       const res = await authFetch(E.TG, {
         imageBase64: originalImage,
@@ -497,7 +497,7 @@ export default function TongueEditor() {
           if (!pollRes.ok) throw new Error(pollData.error || `Error al consultar estado`);
           if (pollData.status === 'done' && pollData.image) {
             setGeneratedImage(pollData.image);
-            setStatus('✓ Lengüeta generada');
+            setStatus('✓ RealG generada');
             refreshTokens();
             return;
           }
@@ -733,9 +733,9 @@ export default function TongueEditor() {
         </div>
 
         <div className="grid grid-cols-2 gap-3">
-          {/* Lengüeta */}
+          {/* RealG */}
           <div>
-            <p className="text-[9px] uppercase text-white/30 mb-2 tracking-wider">Lengüeta</p>
+            <p className="text-[9px] uppercase text-white/30 mb-2 tracking-wider">RealG</p>
             {originalImage ? (
               <div className="relative h-32 rounded-2xl overflow-hidden border border-acid/40 bg-black">
                 <img src={originalImage} className="w-full h-full object-contain" />
@@ -1037,14 +1037,14 @@ export default function TongueEditor() {
           <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
             className={`grid gap-4 ${(generatedImage || loading) && (boxImage || loadingBox) ? 'grid-cols-2' : 'grid-cols-1'}`}>
 
-            {/* Lengüeta resultado */}
+            {/* RealG resultado */}
             {(generatedImage || (loading && detections)) && (
               <div className="bg-[#141414] border border-white/5 rounded-3xl p-4 flex flex-col items-center gap-3 relative overflow-hidden">
                 <div className="absolute top-0 left-0 w-full h-0.5 bg-gradient-to-r from-transparent via-acid to-transparent" />
-                <p className="text-[9px] uppercase text-white/30 tracking-widest self-start">Lengüeta</p>
+                <p className="text-[9px] uppercase text-white/30 tracking-widest self-start">RealG</p>
                 {generatedImage ? (
                   <>
-                    <img src={generatedImage} className="max-w-full rounded-xl border border-white/10 shadow-lg" alt="Lengüeta generada" />
+                    <img src={generatedImage} className="max-w-full rounded-xl border border-white/10 shadow-lg" alt="RealG generada" />
                     <div className="flex gap-2 w-full">
                       <button onClick={handleDownload}
                         className="flex-1 py-2.5 bg-acid text-black font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 hover:bg-acid/90 transition">
