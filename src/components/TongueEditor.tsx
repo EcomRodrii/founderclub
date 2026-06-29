@@ -25,6 +25,16 @@ const authFetch = (url: string, body: any, timeoutMs = 150_000) => {
   }).finally(() => clearTimeout(t));
 };
 
+const authGet = (url: string, timeoutMs = 30_000) => {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  return fetch(url, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${localStorage.getItem("fc_token") || ""}` },
+    signal: ctrl.signal,
+  }).finally(() => clearTimeout(t));
+};
+
 interface DetectionResult {
   model: string;
   sku: string;
@@ -326,7 +336,7 @@ export default function TongueEditor() {
     setError(null);
     setDailyLimitReached(false);
     setDetections(null);
-    setStatus('Leyendo lengüeta...');
+    setStatus('Leyendo RealG...');
     try {
       const res = await authFetch(E.TA, { imageBase64: base64Image, brand: activeBrand });
       const data = await res.json();
@@ -453,7 +463,7 @@ export default function TongueEditor() {
     setLoading(true);
     setError(null);
     setDailyLimitReached(false);
-    setStatus('Generando lengüeta...');
+    setStatus('Generando RealG...');
     try {
       const res = await authFetch(E.TG, {
         imageBase64: originalImage,
@@ -473,7 +483,32 @@ export default function TongueEditor() {
         if (res.status === 422) throw new Error(data.error || 'Gemini no generó imagen. Inténtalo de nuevo.');
         throw new Error(data.error || `Error (${res.status}). Inténtalo de nuevo.`);
       }
-      if (data.image) {
+
+      if (data.jobId) {
+        // BullMQ async — poll until done
+        setStatus('En cola...');
+        const MAX_WAIT_MS = 150_000;
+        let elapsed = 0;
+        while (elapsed < MAX_WAIT_MS) {
+          await new Promise(r => setTimeout(r, 3_000));
+          elapsed += 3_000;
+          const pollRes = await authGet(`${E.TGR}/${data.jobId}`);
+          const pollData = await pollRes.json();
+          if (!pollRes.ok) throw new Error(pollData.error || `Error al consultar estado`);
+          if (pollData.status === 'done' && pollData.image) {
+            setGeneratedImage(pollData.image);
+            setStatus('✓ RealG generada');
+            refreshTokens();
+            return;
+          }
+          if (pollData.status === 'failed') {
+            throw new Error(pollData.error || 'Generación fallida. Inténtalo de nuevo.');
+          }
+          setStatus(`Procesando… (${Math.round(elapsed / 1000)}s)`);
+        }
+        throw new Error('Tiempo de espera agotado. Inténtalo de nuevo.');
+      } else if (data.image) {
+        // Sync mode (no BullMQ)
         setGeneratedImage(data.image);
         setStatus('✓ Lengüeta generada');
         refreshTokens();
@@ -698,9 +733,9 @@ export default function TongueEditor() {
         </div>
 
         <div className="grid grid-cols-2 gap-3">
-          {/* Lengüeta */}
+          {/* RealG */}
           <div>
-            <p className="text-[9px] uppercase text-white/30 mb-2 tracking-wider">Lengüeta</p>
+            <p className="text-[9px] uppercase text-white/30 mb-2 tracking-wider">RealG</p>
             {originalImage ? (
               <div className="relative h-32 rounded-2xl overflow-hidden border border-acid/40 bg-black">
                 <img src={originalImage} className="w-full h-full object-contain" />
@@ -1002,14 +1037,14 @@ export default function TongueEditor() {
           <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
             className={`grid gap-4 ${(generatedImage || loading) && (boxImage || loadingBox) ? 'grid-cols-2' : 'grid-cols-1'}`}>
 
-            {/* Lengüeta resultado */}
+            {/* RealG resultado */}
             {(generatedImage || (loading && detections)) && (
               <div className="bg-[#141414] border border-white/5 rounded-3xl p-4 flex flex-col items-center gap-3 relative overflow-hidden">
                 <div className="absolute top-0 left-0 w-full h-0.5 bg-gradient-to-r from-transparent via-acid to-transparent" />
-                <p className="text-[9px] uppercase text-white/30 tracking-widest self-start">Lengüeta</p>
+                <p className="text-[9px] uppercase text-white/30 tracking-widest self-start">RealG</p>
                 {generatedImage ? (
                   <>
-                    <img src={generatedImage} className="max-w-full rounded-xl border border-white/10 shadow-lg" alt="Lengüeta generada" />
+                    <img src={generatedImage} className="max-w-full rounded-xl border border-white/10 shadow-lg" alt="RealG generada" />
                     <div className="flex gap-2 w-full">
                       <button onClick={handleDownload}
                         className="flex-1 py-2.5 bg-acid text-black font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 hover:bg-acid/90 transition">

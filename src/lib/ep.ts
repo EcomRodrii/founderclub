@@ -8,4 +8,5 @@ export const E = {
   BG:  _d('L2FwaS9xLzU='),
   ATP: _d('L2FwaS9xLzY='),
   BP:  _d('L2FwaS9ib3gvcHJvbXB0cw=='),
+  TGR: _d('L2FwaS9xL3Jlc3VsdA=='),
 };

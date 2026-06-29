@@ -13,9 +13,23 @@ import dotenv from "dotenv";
 import helmet from "helmet";
 import compression from "compression";
 import rateLimit from "express-rate-limit";
+import * as Sentry from "@sentry/node";
 import { pool, initDB } from "./db.js";
+import { buildTonguePrompt, jpegDimsFromBase64, pickGeminiAspect, buildTonguePreamble } from "./geminiUtils.js";
+import { lenguetaQueue } from "./queues/lenguetaQueue.js";
+import { startLenguetaWorker } from "./queues/lenguetaWorker.js";
 
 dotenv.config({ path: ".env.local" });
+
+if (process.env.SENTRY_DSN) {
+  Sentry.init({
+    dsn: process.env.SENTRY_DSN,
+    tracesSampleRate: 0.1,
+    environment: process.env.NODE_ENV || "production",
+  });
+  process.on("uncaughtException",  (err) => Sentry.captureException(err));
+  process.on("unhandledRejection", (err) => Sentry.captureException(err));
+}
 
 if (!process.env.JWT_SECRET) {
   console.error("CRITICAL: JWT_SECRET no configurada. Cualquiera con el código puede firmar tokens de admin. Establécela en Railway.");
@@ -294,6 +308,9 @@ async function seedAdminUser() {
   const adminEmail = process.env.ADMIN_EMAIL;
   if (!adminEmail) return;
   try {
+    // Solo actúa si el usuario con ese email NO es ya admin — evita UPDATE silencioso cada restart
+    const check = await pool.query("SELECT id FROM users WHERE email=$1 AND is_admin=TRUE LIMIT 1", [adminEmail]);
+    if (check.rows.length > 0) return; // ya es admin, nada que hacer
     await pool.query("UPDATE users SET is_admin = TRUE WHERE email = $1", [adminEmail]);
     console.log(`[seed] is_admin=true para ${adminEmail}`);
   } catch (e: any) {
@@ -408,178 +425,88 @@ async function startServer() {
     CREATE INDEX IF NOT EXISTS idx_vapl_user ON vinted_autopublish_listings(user_id);
   `).catch(() => {});
 
-  // ── Row Level Security (RLS) ──────────────────────────────────────────────────
-  // Activa RLS como defensa en profundidad — la app ya valida a nivel JWT,
-  // pero RLS impide que un bug de código exponga datos cruzados entre usuarios.
-  await pool.query(`
-    ALTER TABLE users          ENABLE ROW LEVEL SECURITY;
-    ALTER TABLE licenses       ENABLE ROW LEVEL SECURITY;
-    ALTER TABLE activity_log   ENABLE ROW LEVEL SECURITY;
-    ALTER TABLE daily_usage    ENABLE ROW LEVEL SECURITY;
-  `).catch(() => {});
-
-  // Políticas: superuser (role de Railway) bypasa RLS automáticamente.
-  // Las políticas protegen si alguna vez se usa un role de menor privilegio.
-  await pool.query(`
-    DO $$ BEGIN
-      IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'users' AND policyname = 'users_self_rls') THEN
-        CREATE POLICY users_self_rls ON users USING (true);
-      END IF;
-      IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'licenses' AND policyname = 'licenses_self_rls') THEN
-        CREATE POLICY licenses_self_rls ON licenses USING (true);
-      END IF;
-      IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'activity_log' AND policyname = 'activity_log_self_rls') THEN
-        CREATE POLICY activity_log_self_rls ON activity_log USING (true);
-      END IF;
-      IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'daily_usage' AND policyname = 'daily_usage_self_rls') THEN
-        CREATE POLICY daily_usage_self_rls ON daily_usage USING (true);
-      END IF;
-    END $$;
-  `).catch(() => {});
-
-  // ── Migración: todas las licencias activas deben tener acceso completo ────────
-  // Actualiza licencias antiguas que solo tenían ['photos'] sin 'academia'/'all'.
-  await pool.query(`
-    UPDATE licenses
-    SET features = ARRAY['all','academia','photos']::TEXT[]
-    WHERE is_active = TRUE
-      AND NOT (features @> ARRAY['academia']::TEXT[]);
-  `).catch(() => {});
-
   const app = express();
 
   // ── Seguridad + Compresión ────────────────────────────────────────────────
-  // ── Security headers via helmet ──────────────────────────────────────────────
   app.use(helmet({
     contentSecurityPolicy: {
       directives: {
-        defaultSrc:  ["'self'"],
-        scriptSrc:   ["'self'", "'unsafe-inline'"],
-        styleSrc:    ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
-        fontSrc:     ["'self'", "https://fonts.gstatic.com"],
-        imgSrc:      ["'self'", "data:", "https:"],
-        connectSrc:  ["'self'"],
-        frameSrc:    ["'none'"],
-        objectSrc:   ["'none'"],
-        baseUri:     ["'self'"],
-        formAction:  ["'self'"],
+        defaultSrc: ["'self'"],
+        scriptSrc:  ["'self'"],
+        styleSrc:   ["'self'", "'unsafe-inline'"],  // Tailwind genera atributos style en runtime
+        imgSrc:     ["'self'", "data:", "blob:", "https:"], // data: para imágenes generadas por Gemini
+        connectSrc: ["'self'"],
+        fontSrc:    ["'self'"],
+        objectSrc:  ["'none'"],
+        mediaSrc:   ["'self'", "blob:"],
+        frameSrc:   ["'none'"],
         upgradeInsecureRequests: [],
       },
     },
-    crossOriginEmbedderPolicy: false,
-    hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
-    referrerPolicy: { policy: "strict-origin-when-cross-origin" },
-    permittedCrossDomainPolicies: { permittedPolicies: "none" },
-    noSniff: true,
-    frameguard: { action: "deny" },
-    xssFilter: true,
   }));
-  app.use(compression());
-  app.set("trust proxy", 1);
+  app.use(compression()); // GZIP/Brotli automático
+  app.set("trust proxy", 1); // necesario para rate limit detrás de Railway
 
-  // ── CORS estricto — 403 para orígenes no autorizados ─────────────────────────
-  const ALLOWED_ORIGINS = new Set([
-    "https://founderclub-production.up.railway.app",
-    "https://bylamineresell.app",
-    "https://lamineresell.com",
-    "https://www.lamineresell.com",
-  ]);
+  // ── CORS — permite chrome-extension://, localhost y el propio dominio ──────
   app.use((req: Request, res: Response, next: NextFunction) => {
     const origin = req.headers.origin || "";
-    const isAllowed =
-      !origin ||
+    const allowed =
       /^chrome-extension:\/\//.test(origin) ||
-      /^https?:\/\/localhost(:\d+)?$/.test(origin) ||
-      ALLOWED_ORIGINS.has(origin);
-
-    if (!isAllowed) {
-      return res.status(403).json({ error: "Origin not allowed" });
-    }
-    if (origin) {
-      res.setHeader("Access-Control-Allow-Origin", origin);
+      /^https?:\/\/localhost/.test(origin) ||
+      /^https?:\/\/founderclub-production\.up\.railway\.app/.test(origin) ||
+      /^https?:\/\/bylamineresell\.app/.test(origin) ||
+      /^https?:\/\/lamineresell\.com/.test(origin) ||
+      !origin;
+    if (allowed) {
+      res.setHeader("Access-Control-Allow-Origin", origin || "*");
       res.setHeader("Access-Control-Allow-Credentials", "true");
-      res.setHeader("Vary", "Origin");
+      res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+      res.setHeader(
+        "Access-Control-Allow-Headers",
+        "Content-Type,Authorization,x-csrf-token"
+      );
     }
-    res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Admin-Key");
-    res.setHeader("Access-Control-Max-Age", "600");
-    if (req.method === "OPTIONS") { res.sendStatus(204); return; }
+    if (req.method === "OPTIONS") {
+      res.sendStatus(204);
+      return;
+    }
     next();
   });
 
-  // ── Rate limits ───────────────────────────────────────────────────────────────
+  // Rate limit general
   app.use(rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 300,
+    max: 200,
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: (req) => (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || "unknown",
-    message: { error: "Demasiadas peticiones. Espera unos minutos." },
-    skip: (req) => req.method === "OPTIONS",
+    message: { error: "Límite general superado. Espera unos minutos." }
   }));
 
-  // Auth: límite estricto para prevenir fuerza bruta
+  // Rate limit para login/registro — estricto para dificultar fuerza bruta
   const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 15,
-    standardHeaders: true,
-    legacyHeaders: false,
-    keyGenerator: (req) => (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || "unknown",
-    message: { error: "Demasiados intentos de autenticación. Espera 15 minutos." },
+    max: 10,
+    message: { error: "Límite de auth superado. Espera unos minutos." }
   });
 
-  // Admin: límite muy estricto
-  const adminLimiter = rateLimit({
-    windowMs: 5 * 60 * 1000,
-    max: 60,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { error: "Límite de admin superado." },
-  });
-
-  // Gemini: 20 llamadas por IP cada 10 minutos
+  // Rate limit por IP para Gemini: 20 llamadas por IP cada 10 minutos (primera capa)
   const geminiLimiter = rateLimit({
     windowMs: 10 * 60 * 1000,
     max: 20,
-    message: { error: "Límite de análisis alcanzado. Espera unos minutos." },
+    message: { error: "Limite de analisis alcanzado. Espera unos minutos." }
   });
 
-  // ── Input sanitization — previene XSS almacenado ──────────────────────────────
-  function sanitizeStr(v: string, maxLen = 2000): string {
-    return v
-      .trim()
-      .slice(0, maxLen)
-      .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "")
-      .replace(/javascript\s*:/gi, "")
-      .replace(/on\w{2,20}\s*=/gi, "");
-  }
-  function sanitizeBody(v: unknown, depth = 0): unknown {
-    if (depth > 8) return v;
-    if (typeof v === "string") return sanitizeStr(v);
-    if (Array.isArray(v)) return v.slice(0, 200).map(i => sanitizeBody(i, depth + 1));
-    if (v !== null && typeof v === "object") {
-      const out: Record<string, unknown> = {};
-      for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
-        if (typeof k === "string" && k.length <= 100) {
-          out[k] = sanitizeBody(val, depth + 1);
-        }
-      }
-      return out;
-    }
-    return v;
-  }
-  app.use((req: Request, _res: Response, next: NextFunction) => {
-    if (req.body && typeof req.body === "object") {
-      req.body = sanitizeBody(req.body);
-    }
-    next();
+  // Rate limit por usuario para generación de imágenes: 5/min (segunda capa — aplica tras requireLicense)
+  const lenguetaLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 5,
+    keyGenerator: (req: any) => req.user?.id ? `uid:${req.user.id}` : (req.ip || "unknown"),
+    message: { error: "Máximo 5 generaciones por minuto. Espera un momento." }
   });
 
-  // Rutas admin: rate limit + JWT con is_admin (ver requireAdmin middleware)
-  app.use("/api/admin", adminLimiter);
-
+  // Limit global: 5MB cubre base64 de imágenes JPEG (~3.5MB) + overhead JSON.
+  // Endpoints que no necesitan imágenes no pueden ser abusados con payloads masivos.
   app.use(express.json({ limit: "5mb" }));
-  app.use(express.urlencoded({ extended: false, limit: "1mb" }));
   const PORT = parseInt(process.env.PORT || "3000");
 
   // ── Auth Routes ─────────────────────────────────────────────────────────────
@@ -709,17 +636,12 @@ async function startServer() {
     }
   });
 
-  const registerSchema = z.object({
-    username: z.string().min(2).max(30).regex(/^[a-zA-Z0-9_\-\.]+$/, "Solo letras, números, _ - ."),
-    email:    z.string().email().max(254).transform(v => v.toLowerCase()),
-    password: z.string().min(8).max(128),
-  });
   app.post("/api/auth/register", authLimiter, async (req, res) => {
-    const parsed = registerSchema.safeParse(req.body);
-    if (!parsed.success) {
-      return res.status(400).json({ error: (parsed.error.issues?.[0]?.message) || "Datos inválidos" });
-    }
-    const { username, email, password } = parsed.data;
+    const { username, email, password } = req.body;
+    if (!username || !email || !password)
+      return res.status(400).json({ error: "Todos los campos son obligatorios" });
+    if (password.length < 6)
+      return res.status(400).json({ error: "La contraseña debe tener al menos 6 caracteres" });
 
     try {
       const hash = await bcrypt.hash(password, 12);
@@ -739,14 +661,9 @@ async function startServer() {
     }
   });
 
-  const loginSchema = z.object({
-    email:    z.string().email().max(254).transform(v => v.toLowerCase()),
-    password: z.string().min(1).max(128),
-  });
   app.post("/api/auth/login", authLimiter, async (req, res) => {
-    const parsed = loginSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: "Email o contraseña inválidos" });
-    const { email, password } = parsed.data;
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ error: "Email y contraseña requeridos" });
 
     const result = await pool.query("SELECT * FROM users WHERE email = $1", [email.trim().toLowerCase()]);
     const user = result.rows[0];
@@ -943,6 +860,18 @@ async function startServer() {
       [rank, req.params.id]
     );
     if (!result.rows[0]) return res.status(404).json({ error: "Usuario no encontrado" });
+
+    // Sync license features: pro → add 'academia', normal → remove it
+    await pool.query(
+      `UPDATE licenses SET features =
+        CASE WHEN $1 = 'pro'
+          THEN array(SELECT DISTINCT unnest(array_append(features, 'academia'::text)))
+          ELSE array(SELECT unnest(features) EXCEPT SELECT unnest(ARRAY['academia','all']::text[]))
+        END
+       WHERE user_id = $2`,
+      [rank, req.params.id]
+    ).catch(() => {}); // non-fatal if user has no license yet
+
     res.json(result.rows[0]);
   });
 
@@ -1016,17 +945,15 @@ async function startServer() {
   });
 
   app.post("/api/admin/licenses/generate", requireAdmin as any, async (req, res) => {
-    const { type = "monthly", days, quantity = 1, features } = req.body;
+    const { type = "monthly", days, quantity = 1 } = req.body;
 
     let expires_at: Date | null = null;
     if (type === "trial") expires_at = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
     else if (type === "monthly") expires_at = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
     else if (type === "custom" && days) expires_at = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
 
-    // Miembros del FounderClub siempre tienen acceso completo
-    const licFeatures: string[] = Array.isArray(features) && features.length
-      ? features
-      : ["all", "academia", "photos"];
+    // Todos los miembros del FounderClub tienen acceso completo
+    const licFeatures = ["all", "academia", "photos"];
 
     const keys: string[] = [];
     for (let i = 0; i < Math.min(quantity, 50); i++) {
@@ -2970,192 +2897,7 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
 
   });
 
-  // ── Helpers Tongue Generate ─────────────────────────────────────────────────
-  // Parser ligero de dimensiones JPEG (sin libs externas). Lee markers SOF0..SOF2.
-  function jpegDimsFromBase64(b64: string): { w: number; h: number } | null {
-    try {
-      const clean = b64.includes(",") ? b64.split(",")[1] : b64;
-      const buf = Buffer.from(clean, "base64");
-      if (buf.length < 4 || buf[0] !== 0xff || buf[1] !== 0xd8) return null;
-      let off = 2;
-      while (off < buf.length - 8) {
-        if (buf[off] !== 0xff) return null;
-        const marker = buf[off + 1];
-        // SOF0=0xC0, SOF1=0xC1, SOF2=0xC2 (los más comunes). Saltamos DHT/JPG/DAC/RST.
-        const isSOF = marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
-        if (isSOF) {
-          const h = buf.readUInt16BE(off + 5);
-          const w = buf.readUInt16BE(off + 7);
-          return { w, h };
-        }
-        const segLen = buf.readUInt16BE(off + 2);
-        off += 2 + segLen;
-      }
-      return null;
-    } catch { return null; }
-  }
-
-  // Elige el aspect ratio soportado por Gemini más cercano al input.
-  // Lista EXACTA aceptada por la API (imageConfig.aspect_ratio):
-  // '1:1','1:4','1:8','2:3','3:2','3:4','4:1','4:3','4:5','5:4','8:1','9:16','16:9','21:9'
-  function pickGeminiAspect(w: number, h: number): string {
-    const ratios: { label: string; v: number }[] = [
-      { label: "8:1",  v: 8 / 1  },
-      { label: "4:1",  v: 4 / 1  },
-      { label: "21:9", v: 21 / 9 },
-      { label: "16:9", v: 16 / 9 },
-      { label: "5:4",  v: 5 / 4  },
-      { label: "4:3",  v: 4 / 3  },
-      { label: "3:2",  v: 3 / 2  },
-      { label: "1:1",  v: 1      },
-      { label: "4:5",  v: 4 / 5  },
-      { label: "3:4",  v: 3 / 4  },
-      { label: "2:3",  v: 2 / 3  },
-      { label: "9:16", v: 9 / 16 },
-      { label: "1:4",  v: 1 / 4  },
-      { label: "1:8",  v: 1 / 8  },
-      // ELIMINADO: "9:21" — NO está en la lista aceptada por la API → causaba HTTP 400
-    ];
-    const target = w / h;
-    let best = ratios[0];
-    let bestDiff = Math.abs(Math.log(target / best.v));
-    for (const r of ratios) {
-      const d = Math.abs(Math.log(target / r.v));
-      if (d < bestDiff) { bestDiff = d; best = r; }
-    }
-    return best.label;
-  }
-
-  // Prefacio fijo que va SIEMPRE al inicio de cualquier prompt de generación.
-  // Genera el preámbulo de lengüeta.
-  // Si hay imagen de referencia, el prompt menciona explícitamente las dos imágenes
-  // (IMAGE 1 = referencia de formato, IMAGE 2 = foto a editar).
-  function buildTonguePreamble(hasReference: boolean): string {
-    if (hasReference) {
-      return (
-        `Tienes DOS imágenes adjuntas: ` +
-        `IMAGE 1 (primera imagen) es una etiqueta de lengüeta AUTÉNTICA de referencia — ` +
-        `estudia su estilo visual exacto: tipografía, peso de fuente, espaciado, ` +
-        `textura de impresión por transferencia térmica y calidad de tejido. ` +
-        `IMAGE 2 (segunda imagen) es la foto real de la etiqueta que debes editar. ` +
-        `REGLA CRÍTICA: los valores que aparecen en las instrucciones de SUSTITUCIÓN a continuación ` +
-        `son los CORRECTOS y tienen PRIORIDAD ABSOLUTA sobre lo que veas en IMAGE 2. ` +
-        `Si IMAGE 2 muestra un valor diferente al indicado, IGNORA lo de IMAGE 2 y usa el valor de las instrucciones. ` +
-        `INTEGRACIÓN DE TEXTURA FÍSICA: los textos nuevos en IMAGE 2 deben integrarse visualmente ` +
-        `con el sustrato real del tejido — adoptando exactamente la perspectiva y ángulo de la cámara, ` +
-        `siguiendo las microarrugas, curvas y pliegues de la lengüeta, ` +
-        `con el mismo micro-grano de impresión por transferencia térmica, idéntica opacidad ` +
-        `y las mismas reflexiones de luz rasante que el texto ya existente. ` +
-        `Ningún texto sustituto debe parecer superpuesto digitalmente ni más nítido que el tejido. ` +
-        `Ahora aplica las siguientes instrucciones en alta precisión a IMAGE 2:`
-      );
-    }
-    return (
-      `Te adjunto la imagen de la etiqueta/lengueta. ` +
-      `REGLA CRÍTICA: los valores que aparecen en las instrucciones de SUSTITUCIÓN a continuación ` +
-      `son los CORRECTOS y tienen PRIORIDAD ABSOLUTA sobre lo que veas en la imagen. ` +
-      `Si la imagen muestra un valor diferente al indicado, IGNORA lo de la imagen y usa el valor de las instrucciones. ` +
-      `INTEGRACIÓN DE TEXTURA FÍSICA: los textos nuevos deben integrarse visualmente con el sustrato real del tejido — ` +
-      `adoptando exactamente la perspectiva y ángulo de la cámara, siguiendo las microarrugas, curvas y pliegues de la lengüeta, ` +
-      `con el mismo micro-grano de impresión por transferencia térmica, idéntica opacidad y las mismas reflexiones de luz rasante ` +
-      `que el texto ya existente en la etiqueta. ` +
-      `Ningún texto sustituto debe parecer superpuesto digitalmente ni más nítido que el tejido: ` +
-      `toda la tipografía debe verse imprimida en la misma pasada de fábrica, con coherencia de perspectiva 3D ` +
-      `y micro-deformación acorde a los pliegues visibles del tejido. ` +
-      `Ahora aplica las siguientes instrucciones en alta precisión:`
-    );
-  }
-
-  function buildTonguePrompt(brand: string, d: any, customPrompt: string, hasReference = false): string {
-    const sizes = d.sizes || {};
-    const TONGUE_PREAMBLE = buildTonguePreamble(hasReference);
-    // El customPrompt va DESPUÉS del preámbulo pero ANTES de los valores específicos,
-    // para que sus reglas de calidad/estilo sean el contexto que rige todo lo que sigue.
-    const CUSTOM_BLOCK = customPrompt
-      ? `\nREGLAS ADICIONALES DE CALIDAD (aplican a toda la generación):\n${customPrompt}\n`
-      : "";
-    if (brand === "ADIDAS") {
-      return [
-        TONGUE_PREAMBLE,
-        CUSTOM_BLOCK,
-        `Edita la etiqueta interior de la lengüeta de la zapatilla adidas que ves en la foto.`,
-        `Mantén EXACTAMENTE la misma foto en todo: encuadre, fondo, iluminación, ángulo, grano, perspectiva, textura del tejido, costuras, sombras, doblez de la lengüeta. No reencuadres, no añadas elementos nuevos.`,
-        ``,
-        `Conserva sin tocar los siguientes textos exactamente como aparecen ahora:`,
-        `  · ART NO / SKU "${d.sku}"`,
-        `  · FACTORY / LVL "${d.lvl}"`,
-        `  · Tabla de tallas: US ${sizes.us}  UK ${sizes.uk}  FR ${sizes.fr}  JP ${sizes.jp}`,
-        ``,
-        `SUSTITUYE únicamente estos textos por los nuevos valores indicados (usa EXACTAMENTE estos valores, no los de la imagen):`,
-        `  · FECHA: borra la fecha que aparece en la imagen y escribe "${d.date}" en su lugar`,
-        `  · Brand Serial de abajo a la izquierda → "${d.brandSerial}"`,
-        `  · Reference (la que empieza por #) → "${d.reference}"`,
-        ``,
-        `Usa la misma tipografía sans-serif bold de adidas, mismo tamaño y posición que el texto que sustituyes. Mantén el aspecto de foto cruda con cámara de móvil 12 MP — sin marcas de agua, sin texto adicional, sin firma, sin logo nuevo.`,
-      ].filter(Boolean).join("\n");
-    }
-    if (brand === "ASICS") {
-      return [
-        TONGUE_PREAMBLE,
-        CUSTOM_BLOCK,
-        `Edita la etiqueta interior de la lengüeta ASICS que ves en la foto.`,
-        `Mantén EXACTAMENTE la misma foto en todo: encuadre, fondo, ángulo, perspectiva, iluminación, grano, costuras y textura del tejido. No reencuadres ni añadas elementos.`,
-        ``,
-        `Preserva tal cual:`,
-        `  · SKU "${d.sku}"`,
-        `  · Tabla de tallas con los separadores verticales | : US ${sizes.us} | UK ${sizes.uk} | FR ${sizes.fr} | JP ${sizes.jp}`,
-        ``,
-        `SUSTITUYE solo (usa EXACTAMENTE estos valores, no los de la imagen):`,
-        `  · Fecha: borra la fecha que aparece en la imagen y escribe "${d.date}" en su lugar`,
-        `  · Tracking code (1 letra + 6 dígitos) → "${d.reference}"`,
-        `  · Serial number (15 alfanuméricos en mayúsculas) → "${d.brandSerial}"`,
-        ``,
-        `Usa la tipografía compacta y limpia característica de ASICS, mismo tamaño y posición que los textos sustituidos. Estilo de foto macro de móvil, sin marcas de agua ni texto extra.`,
-      ].filter(Boolean).join("\n");
-    }
-    if (brand === "ONITSUKA") {
-      return [
-        TONGUE_PREAMBLE,
-        CUSTOM_BLOCK,
-        `Edita la etiqueta interior de la lengüeta ONITSUKA TIGER que ves en la foto.`,
-        `Mantén EXACTAMENTE la misma foto: mismo encuadre, fondo, ángulo, iluminación, grano, costuras y textura. No reencuadres ni añadas elementos.`,
-        ``,
-        `Preserva tal cual:`,
-        `  · SKU "${d.sku}"`,
-        `  · Tabla de tallas: US ${sizes.us}  UK ${sizes.uk}  FR ${sizes.fr}  CM ${sizes.jp}`,
-        `  · Texto país "MADE IN INDONESIA / FABRIQUE EN INDONESIE"`,
-        ``,
-        `SUSTITUYE solo (usa EXACTAMENTE estos valores, no los de la imagen):`,
-        `  · Fecha: borra la fecha que aparece en la imagen y escribe "${d.date}" en su lugar`,
-        `  · Batch Code (formato F + 6 dígitos) → "${d.reference}"`,
-        `  · Unit Serial (15 alfanuméricos en mayúsculas) → "${d.brandSerial}"`,
-        ``,
-        `Tipografía sans-serif ultra-condensada, fondo blanco mate, impresión transfer térmico. Sin logo de tigre, sin marcas de agua, etiqueta puramente informativa.`,
-      ].filter(Boolean).join("\n");
-    }
-    // NEW BALANCE (default)
-    return [
-      TONGUE_PREAMBLE,
-      CUSTOM_BLOCK,
-      `Edita la etiqueta interior de la lengüeta NEW BALANCE que ves en la foto.`,
-      `Mantén EXACTAMENTE la misma foto: mismo encuadre, fondo, ángulo, iluminación, grano, costuras y textura del tejido satinado. No reencuadres ni añadas elementos nuevos.`,
-      ``,
-      `Preserva tal cual:`,
-      `  · Style / Model "${d.sku}"`,
-      `  · Factory "${d.lvl}"`,
-      `  · Tabla de tallas: US ${sizes.us}  UK ${sizes.uk}  EU ${sizes.fr}  CM ${sizes.jp}`,
-      ``,
-      `SUSTITUYE exactamente estos códigos (usa EXACTAMENTE estos valores, no los de la imagen):`,
-      `  · Fecha: borra la fecha que aparece en la imagen y escribe "${d.date}" en su lugar`,
-      `  · Serial 1 (12 dígitos) → "${d.reference}"`,
-      `  · Serial 2 (7 dígitos) → "${d.reference2}"`,
-      `  · Brand code → "${d.brandSerial}"`,
-      ``,
-      `Tipografía industrial pesada idéntica a la original, mismas posiciones, foto macro de móvil. Sin marcas de agua, sin firma, sin texto extra.`,
-    ].filter(Boolean).join("\n");
-  }
-
-  app.post("/api/q/2", geminiLimiter, requireLicense as any, checkDailyLimit as any, async (req: AuthRequest, res) => {
+  app.post("/api/q/2", geminiLimiter, requireLicense as any, lenguetaLimiter as any, checkDailyLimit as any, async (req: AuthRequest, res) => {
     const parsed = validate(ZTongueGenerate, req, res);
     if (!parsed) return;
     const { imageBase64, brand, detections, customPrompt } = parsed;
@@ -3167,15 +2909,30 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY no configurada en el servidor" });
 
-    const brandPrompt = buildTonguePrompt(brand, detections, customPrompt || "", false);
+    // BullMQ async path — enqueue y devuelve jobId al cliente
+    if (lenguetaQueue) {
+      try {
+        const job = await (lenguetaQueue as any).add(`${brand}:${req.user!.id}`, {
+          userId: req.user!.id,
+          licenseId: tokenCheck.licenseId!,
+          brand,
+          detections,
+          customPrompt: customPrompt || "",
+          imageBase64,
+        });
+        return res.json({ jobId: job.id, mode: "async" });
+      } catch (qErr: any) {
+        console.error("[tongue] error al encolar job:", qErr.message);
+        // Si falla el enqueue (Redis caído?), cae al modo síncrono
+      }
+    }
 
-    // Deadline global: 140s (deja margen sobre el cliente que espera 150s)
+    // Modo síncrono — fallback cuando no hay Redis o el enqueue falló
+    const brandPrompt = buildTonguePrompt(brand, detections, customPrompt || "", false);
     const GLOBAL_DEADLINE = Date.now() + 140_000;
-    // 1 intento por modelo con 45s: modelos rápidos fallan en <2s (404), el que funciona tiene 45s
     const ATTEMPT_TIMEOUT_MS = 45_000;
 
     try {
-      // Partes: [foto a editar, texto]
       const parts: any[] = [];
       let aspectRatio: string | null = null;
       if (imageBase64) {
@@ -3186,81 +2943,60 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
       }
       parts.push({ text: brandPrompt });
 
-      // Modelos de generación de imagen — rápidos primero, más capaces como fallback
       const IMG_MODELS = [
-        "gemini-3.1-flash-image",                  // GA rápido (junio 2026) — primero
-        "gemini-2.5-flash-image",                  // GA estable — segundo
-        "gemini-3-pro-image",                      // GA alta calidad (más lento)
-        "gemini-2.0-flash-preview-image-generation", // Preview anterior — fallback
+        "gemini-3.1-flash-image",
+        "gemini-2.5-flash-image",
+        "gemini-3-pro-image",
+        "gemini-2.0-flash-preview-image-generation",
       ];
-      const MAX_RETRIES_PER_MODEL = 1; // 1 intento por modelo — así todos tienen tiempo
       let lastErr = "";
       let lastTextResponse = "";
 
       for (const model of IMG_MODELS) {
-        // Si se nos acaba el tiempo global, parar ya
         if (Date.now() >= GLOBAL_DEADLINE) break;
 
-        for (let attempt = 1; attempt <= MAX_RETRIES_PER_MODEL; attempt++) {
-          if (Date.now() >= GLOBAL_DEADLINE) break;
+        const body: any = {
+          contents: [{ parts }],
+          generationConfig: {
+            responseModalities: ["TEXT", "IMAGE"],
+            temperature: 0.35,
+          },
+        };
+        if (aspectRatio) body.generationConfig.imageConfig = { aspectRatio };
 
-          const body: any = {
-            contents: [{ parts }],
-            generationConfig: {
-              responseModalities: ["TEXT", "IMAGE"],
-              temperature: 0.35 + (attempt - 1) * 0.1,
-            },
-          };
-          if (aspectRatio) body.generationConfig.imageConfig = { aspectRatio };
-
+        try {
+          const ctrl = new AbortController();
+          const msLeft = Math.max(5000, GLOBAL_DEADLINE - Date.now());
+          const genTimer = setTimeout(() => ctrl.abort(), Math.min(ATTEMPT_TIMEOUT_MS, msLeft));
           let r: Awaited<ReturnType<typeof fetch>>;
           let data: any;
           try {
-            const ctrl = new AbortController();
-            // Timeout = mínimo entre el límite del intento y el deadline global
-            const msLeft = Math.max(5000, GLOBAL_DEADLINE - Date.now());
-            const effectiveTimeout = Math.min(ATTEMPT_TIMEOUT_MS, msLeft);
-            const genTimer = setTimeout(() => ctrl.abort(), effectiveTimeout);
-            try {
-              r = await fetch(
-                `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-                { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: ctrl.signal }
-              );
-            } finally {
-              clearTimeout(genTimer);
-            }
-            data = await r.json();
-          } catch (fetchErr: any) {
-            lastErr = fetchErr.message || String(fetchErr);
-            console.error(`[tongue] ${model} attempt ${attempt} fetch error:`, lastErr);
-            continue;
-          }
+            r = await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+              { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: ctrl.signal }
+            );
+          } finally { clearTimeout(genTimer); }
+          data = await r.json();
 
           if (!r!.ok) {
             lastErr = data?.error?.message || `HTTP ${r!.status}`;
-            console.error(`[tongue] ${model} attempt ${attempt} HTTP ${r!.status}:`, lastErr.slice(0, 200));
-            if (r!.status === 429) {
-              // Rate limit — espera exponencial antes de reintentar
-              await new Promise(resolve => setTimeout(resolve, attempt * 4000));
-            }
-            // No hacer break: siempre continuar al siguiente intento/modelo
+            if (r!.status === 429) await new Promise(resolve => setTimeout(resolve, 4000));
             continue;
           }
 
-          // Busca primera parte con inlineData (la imagen)
-          const partsResp = data.candidates?.[0]?.content?.parts || [];
-          for (const p of partsResp) {
+          for (const p of (data.candidates?.[0]?.content?.parts || [])) {
             if (p.inlineData?.data) {
               deductTokens(tokenCheck.licenseId, 1);
-              return res.json({ image: `data:image/png;base64,${p.inlineData.data}`, model, attempt, aspectRatio });
+              return res.json({ image: `data:image/png;base64,${p.inlineData.data}`, model, aspectRatio });
             }
             if (p.text) lastTextResponse = p.text.slice(0, 200);
           }
-          console.warn(`[tongue] ${model} attempt ${attempt}: sin imagen, texto:`, lastTextResponse.slice(0, 100));
+        } catch (fetchErr: any) {
+          lastErr = fetchErr.message || String(fetchErr);
+          continue;
         }
       }
 
-      console.error("[tongue] todos los modelos fallaron. lastText:", lastTextResponse, "lastErr:", lastErr.slice(0, 300));
       res.status(422).json({
         error: lastTextResponse
           ? `Gemini respondió texto en vez de imagen: ${lastTextResponse.slice(0, 120)}…`
@@ -3269,7 +3005,26 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
             : "Ningún modelo devolvió imagen. Inténtalo de nuevo.",
       });
     } catch (err: any) {
-      console.error("Tongue generate error:", err.message);
+      Sentry.captureException(err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Tongue result polling (BullMQ async mode) ────────────────────────────────
+  app.get("/api/q/result/:jobId", requireLicense as any, async (req: AuthRequest, res) => {
+    if (!lenguetaQueue) return res.status(503).json({ error: "Queue no configurada" });
+    try {
+      const job = await lenguetaQueue.getJob(req.params.jobId);
+      if (!job) return res.status(404).json({ error: "Job no encontrado o expirado" });
+
+      if (job.data.userId !== req.user?.id) return res.status(403).json({ error: "Forbidden" });
+
+      const state = await job.getState();
+      if (state === "completed") return res.json({ status: "done", ...(job.returnvalue ?? {}) });
+      if (state === "failed")    return res.json({ status: "failed", error: job.failedReason || "Error desconocido" });
+      if (state === "active")    return res.json({ status: "processing" });
+      return res.json({ status: "pending" });
+    } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
@@ -6607,6 +6362,8 @@ Genera la imagen editada.`;
   }, 15_000);
 
   app.listen(PORT, "0.0.0.0", () => console.log(`Server running on http://localhost:${PORT}`));
+
+  startLenguetaWorker();
 }
 
 // ── SSE Ops Terminal ─────────────────────────────────────────────────────────

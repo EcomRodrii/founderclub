@@ -242,9 +242,9 @@ function UserDrawer({ user, token, onClose, onRefresh }: {
         <div className="flex-1 p-4 space-y-2">
 
           <ActionRow
-            label="Rango" value={user.rank === 'pro' ? 'Pro' : 'Normal'}
+            label="Acceso" value={user.rank === 'pro' ? '🎓 Pro · Academia' : '🔒 Normal · Solo Fantasma'}
             valueColor={user.rank === 'pro' ? 'text-yellow-400' : 'text-zinc-400'}
-            btnLabel={user.rank === 'pro' ? '→ Normal' : '→ Pro'}
+            btnLabel={user.rank === 'pro' ? '→ Quitar Pro' : '→ Dar Pro + Academia'}
             btnColor={user.rank === 'pro'
               ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
               : 'bg-yellow-500/15 hover:bg-yellow-500/25 text-yellow-400 border border-yellow-500/30'}
@@ -987,18 +987,18 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
                   <FileText className="w-4 h-4 text-violet-400" /> {brand}
                 </h3>
 
-                {/* Lengüeta */}
+                {/* RealG */}
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs text-zinc-500 font-medium uppercase tracking-wider">Prompt Lengüeta</span>
+                    <span className="text-xs text-zinc-500 font-medium uppercase tracking-wider">Prompt RealG</span>
                     <button onClick={() => savePrompt(brand)} disabled={promptSaving[brand]}
                       className="flex items-center gap-1.5 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white px-3 py-1.5 rounded-xl text-xs font-medium transition"
                     >
-                      {promptSaved[brand] ? <><Check className="w-3.5 h-3.5 text-green-300" /> Guardado</> : promptSaving[brand] ? <><RefreshCcw className="w-3.5 h-3.5 animate-spin" /> Guardando…</> : <><Save className="w-3.5 h-3.5" /> Guardar Lengüeta</>}
+                      {promptSaved[brand] ? <><Check className="w-3.5 h-3.5 text-green-300" /> Guardado</> : promptSaving[brand] ? <><RefreshCcw className="w-3.5 h-3.5 animate-spin" /> Guardando…</> : <><Save className="w-3.5 h-3.5" /> Guardar RealG</>}
                     </button>
                   </div>
                   <textarea value={prompts[brand]} onChange={e => setPrompts(prev => ({ ...prev, [brand]: e.target.value }))}
-                    rows={6} placeholder={`Prompt base para lengüeta ${brand}…`}
+                    rows={6} placeholder={`Prompt base para RealG ${brand}…`}
                     className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-violet-500 resize-y font-mono leading-relaxed"
                   />
                 </div>
@@ -1063,7 +1063,7 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
                         : 'bg-zinc-800 border-zinc-700 text-zinc-500 hover:text-white'
                     }`}
                   >
-                    {t === 'tongue' ? '👟 Lengüeta' : '📦 Etiqueta Caja'}
+                    {t === 'tongue' ? '👟 RealG' : '📦 Etiqueta Caja'}
                   </button>
                 ))}
               </div>
@@ -1133,7 +1133,7 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
                         <span className={`text-xs px-2 py-0.5 rounded-full font-medium border ${
                           r.label_type === 'tongue' ? 'bg-violet-500/10 text-violet-400 border-violet-500/30' : 'bg-acid-soft text-acid border-acid/30'
                         }`}>
-                          {r.label_type === 'tongue' ? '👟 Lengüeta' : '📦 Caja'}
+                          {r.label_type === 'tongue' ? '👟 RealG' : '📦 Caja'}
                         </span>
                       </td>
                       <td className="px-4 py-3 text-xs text-zinc-500 max-w-[160px] truncate">{r.notes || '—'}</td>

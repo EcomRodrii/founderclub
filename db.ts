@@ -19,6 +19,9 @@ function buildPoolConfig() {
       password: decodeURIComponent(u.password),
       database: u.pathname.replace(/^\//, ""),
       ssl:      { rejectUnauthorized: false },
+      max: 20,
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 2_000,
     };
   }
   // Railway interno o localhost: dejar que pg maneje la conexión normalmente
@@ -26,6 +29,9 @@ function buildPoolConfig() {
   return {
     connectionString: url,
     ssl: isProd ? { rejectUnauthorized: false } : false,
+    max: 20,
+    idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: 2_000,
   };
 }
 

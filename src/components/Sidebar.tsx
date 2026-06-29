@@ -29,7 +29,7 @@ const NAV_MAIN: { id: Page; label: string; icon: React.ReactNode }[] = [
 const NAV_TOOLS: { id: Page; label: string; icon: React.ReactNode }[] = [
   { id: 'publish', label: 'Autopublicar',  icon: <Send       className="w-[18px] h-[18px]" /> },
   { id: 'profits', label: 'Beneficios',    icon: <TrendingUp className="w-[18px] h-[18px]" /> },
-  { id: 'tongue',  label: 'Lengüeta',      icon: <Scissors   className="w-[18px] h-[18px]" /> },
+  { id: 'tongue',  label: 'RealG',          icon: <Scissors   className="w-[18px] h-[18px]" /> },
   { id: 'photos',    label: 'Fantasma',    icon: <Ghost   className="w-[18px] h-[18px]" /> },
   { id: 'alfombras', label: 'Alfombras',   icon: <Layers  className="w-[18px] h-[18px]" /> },
   { id: 'metadatos', label: 'Metadatos',   icon: <Tag     className="w-[18px] h-[18px]" /> },
@@ -137,7 +137,7 @@ const MOBILE_MAIN: { id: Page; label: string; icon: React.ReactNode }[] = [
 ];
 
 const MOBILE_MORE: { id: Page; label: string; icon: React.ReactNode }[] = [
-  { id: 'tongue',    label: 'Lengüeta',  icon: <Scissors className="w-5 h-5" /> },
+  { id: 'tongue',    label: 'RealG',     icon: <Scissors className="w-5 h-5" /> },
   { id: 'photos',    label: 'Fantasma',  icon: <Ghost    className="w-5 h-5" /> },
   { id: 'alfombras', label: 'Alfombras', icon: <Layers   className="w-5 h-5" /> },
   { id: 'metadatos', label: 'Metadatos', icon: <Tag      className="w-5 h-5" /> },

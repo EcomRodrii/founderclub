@@ -1,7 +1,22 @@
 import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
+import * as Sentry from '@sentry/react';
 import App from './App.tsx';
 import './index.css';
+
+if (import.meta.env.VITE_SENTRY_DSN) {
+  Sentry.init({
+    dsn: import.meta.env.VITE_SENTRY_DSN as string,
+    integrations: [Sentry.browserTracingIntegration()],
+    tracesSampleRate: 0.1,
+    environment: import.meta.env.PROD ? 'production' : 'development',
+    beforeSend: (event) => {
+      const val = event.exception?.values?.[0]?.value || '';
+      if (val.includes('debugger') || val.includes('DevTools')) return null;
+      return event;
+    },
+  });
+}
 
 // ── Bloquear React DevTools en producción ─────────────────────────────────────
 if (import.meta.env.PROD) {
@@ -49,12 +64,12 @@ if (import.meta.env.PROD) {
   }, 1000);
 
   // Capa 3 — Debugger trap en producción (ralentiza análisis si DevTools está pausando)
-  // new Function bypasses terser drop_debugger; solo activa si el inspector está pausing
+  // vite.config drop_debugger:false → el debugger keyword sobrevive al build de producción
   if ((import.meta as any).env?.PROD) {
-    const _dbg = new Function('debugger');
     setInterval(() => {
       const t = performance.now();
-      _dbg();
+      // eslint-disable-next-line no-debugger
+      debugger;
       if (performance.now() - t > 100) {
         _c.log('%c¡Casi crack! 😂 Pero no.', 'color:lime;font-weight:bold;font-size:18px');
       }
