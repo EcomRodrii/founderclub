@@ -278,8 +278,25 @@ function formatSize(b: number) {
   return `${(b/(1024*1024)).toFixed(2)} MB`;
 }
 
-function dl(dataUrl: string, name: string) {
-  const a = document.createElement('a'); a.href = dataUrl; a.download = name; a.click();
+const IS_IOS    = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+async function dl(dataUrl: string, name: string): Promise<void> {
+  const blob    = await fetch(dataUrl).then(r => r.blob());
+  const blobUrl = URL.createObjectURL(blob);
+  if (IS_IOS) {
+    // iOS Safari ignora a.download; abrimos en nueva pestaña → pulsación larga → "Guardar en Fotos"
+    window.open(blobUrl, '_blank');
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000);
+  } else {
+    const a = document.createElement('a');
+    a.href     = blobUrl;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 5_000);
+  }
 }
 
 async function dataUrlToFile(dataUrl: string, name: string): Promise<File> {
@@ -292,19 +309,17 @@ function canShareFiles(): boolean {
     return (
       typeof navigator.share === 'function' &&
       typeof navigator.canShare === 'function' &&
-      navigator.canShare({ files: [new File([''], 'test.jpg', { type: 'image/jpeg' })] })
+      navigator.canShare({ files: [new File(['x'], 'test.jpg', { type: 'image/jpeg' })] })
     );
   } catch { return false; }
 }
-
-const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
 async function saveOne(dataUrl: string, filename: string): Promise<void> {
   if (canShareFiles()) {
     const file = await dataUrlToFile(dataUrl, filename);
     await navigator.share({ files: [file], title: filename });
   } else {
-    dl(dataUrl, filename);
+    await dl(dataUrl, filename);
   }
 }
 
@@ -320,7 +335,7 @@ async function saveAll(
         onProgress?.(files.length);
         return;
       }
-    } catch { /* fallback */ }
+    } catch { /* fallback a una a una */ }
     for (let i = 0; i < items.length; i++) {
       try {
         const file = await dataUrlToFile(items[i].dataUrl, items[i].filename);
@@ -329,9 +344,11 @@ async function saveAll(
       } catch { /* usuario canceló */ }
     }
   } else {
-    items.forEach((item, idx) => {
-      setTimeout(() => { dl(item.dataUrl, item.filename); onProgress?.(idx + 1); }, idx * 120);
-    });
+    for (let i = 0; i < items.length; i++) {
+      await dl(items[i].dataUrl, items[i].filename);
+      onProgress?.(i + 1);
+      if (i < items.length - 1) await new Promise(r => setTimeout(r, 150));
+    }
   }
 }
 
