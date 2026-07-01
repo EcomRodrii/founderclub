@@ -425,6 +425,32 @@ async function startServer() {
     CREATE INDEX IF NOT EXISTS idx_vapl_user ON vinted_autopublish_listings(user_id);
   `).catch(() => {});
 
+  // ── Academia: verificaciones e identidad ────────────────────────────────────
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS academia_verifications (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      skool_username TEXT NOT NULL,
+      email TEXT NOT NULL,
+      phone TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      reviewed_at TIMESTAMPTZ,
+      reviewed_by TEXT
+    );
+    CREATE TABLE IF NOT EXISTS academia_questionnaires (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      verification_id UUID NOT NULL REFERENCES academia_verifications(id),
+      answers JSONB NOT NULL DEFAULT '{}',
+      score INTEGER,
+      score_details JSONB,
+      red_flags JSONB DEFAULT '[]',
+      completed BOOLEAN DEFAULT FALSE,
+      completed_at TIMESTAMPTZ,
+      whatsapp_sent BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `).catch(() => {});
+
   const app = express();
 
   // ── Seguridad + Compresión ────────────────────────────────────────────────
@@ -6360,6 +6386,189 @@ Genera la imagen editada.`;
       `);
     } catch (_) {/* swallow — no interrumpir el servidor por error del sweeper */}
   }, 15_000);
+
+  // ── Academia ──────────────────────────────────────────────────────────────────
+
+  async function scoreAcademia(answers: Record<string, string>): Promise<{ score: number; details: Record<string, number>; red_flags: string[] }> {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return { score: 50, details: {}, red_flags: [] };
+
+    const QUESTIONS: Record<string, string> = {
+      q1: "¿En qué punto estás ahora mismo con la reventa?",
+      q2: "Más o menos, ¿cuánto estás facturando al mes? Dame una media o el mejor mes que hayas hecho.",
+      q3: "¿Qué estás vendiendo ahora mismo?",
+      q4: "¿De dónde estás sacando producto y a qué precios estás comprando?",
+      q5: "¿Cómo organizas el stock? ¿Cada cuánto pides y cómo decides cuánto pedir?",
+      q6: "¿Compras stock cada semana o compras para todo el mes?",
+      q7: "¿En caso de incidencia en los envíos, sabes solucionarlo?",
+      q8: "¿Cuántas cuentas de Vinted tienes ahora mismo entre activas y las que estás dejando madurar?",
+      q9: "¿Sabes detectar una cuenta cuando está shadowbaneada?",
+      q10: "¿Sabes detectar cuando una cuenta está en lista negra?",
+      q11: "¿Aparte de Vinted haces otra cosa? (curro, otro negocio, estudios, etc.)",
+      q12: "¿Cómo estás creando las cuentas últimamente?",
+      q13: "¿Te está costando crear cuentas que aguanten o ya tienes un sistema que te funciona?",
+      q14: "Cuando una cuenta te la bloquean ya madurada y con varias valoraciones, ¿normalmente sabes interpretar por qué ha sido?",
+      q15: "¿Dirías que controlas bien el proceso de madurar cuentas o todavía estás probando cosas?",
+      q16: "¿Cómo buscas productos que puedan funcionar? Da igual el nicho.",
+      q17: "Cuando encuentras un producto que funciona, ¿cómo decides si meter más dinero o dejarlo ahí?",
+      q18: "¿Sabes qué hacer cuando 1 producto entra en revisión? (REPS)",
+      q19: "¿Qué proceso sigues desde que compras stock hasta que haces la primera venta?",
+      q20: "Cuando pruebas un producto nuevo, ¿cuántas unidades compras antes de escalar?",
+      q21: "¿Qué miras para decidir si merece seguir metiendo dinero? (rotación, competencia, margen, ventas, etc.)",
+      q22: "¿Qué margen medio te queda por producto después de todo?",
+      q23: "¿Trabajas más por volumen o por margen?",
+      q24: "¿Qué porcentaje de publicaciones se te vende durante la primera semana?",
+      q25: "¿Cuántos productos subes al día por cuenta y cómo te organizas?",
+      q26: "¿Cómo publicas normalmente? ¿Tienes alguna forma concreta de hacerlo?",
+      q27: "¿Antes de subir una rep metes antes productos normales o publicas directo?",
+      q28: "¿Qué porcentaje de stock se te queda parado más de 15 días?",
+      q29: "Cuando un producto deja de moverse, ¿qué haces normalmente?",
+      q30: "¿Cómo controlas beneficios y números? ¿Excel, Notion o vas más a ojo?",
+      q31: "Cuando te bloquean o restringen una cuenta, ¿normalmente sabes detectar el motivo?",
+      q32: "Si te toca un comprador jodido o alguien intenta estafarte, ¿sabes cómo gestionarlo para no perder dinero y producto?",
+      q33: "Ahora mismo, ¿qué dirías que es lo que peor se te da en Vinted (cuentas, producto, proveedor o bloqueos)?",
+      q34: "Si mañana te cerraran todo, ¿cómo volverías a levantar todo en 30 días?",
+      q35: "Si empezaras otra vez desde cero con lo que sabes hoy, ¿qué harías diferente?",
+      q36: "¿Cuál es tu objetivo de facturación y qué volumen necesitas mover para llegar?",
+      q37: "¿Estás utilizando la aplicación de Lamine? Si la utilizas, ¿qué es lo que más utilizas de su app?",
+      q38: "¿Cuál ha sido el error más caro que has cometido en la reventa orgánica y qué aprendiste?",
+      q39: "Cuando un producto empieza a funcionar, ¿cómo escalas sin cargarte lo que ya va bien?",
+      q40: "¿Cómo decides que una cuenta ya está madurada para subir reps? (antigüedad, interacción, ventas, señales…)",
+    };
+
+    const serverRedFlags: string[] = [];
+    const q8Answer = (answers.q8 || "").toLowerCase();
+    if (/\b(0|1|2|ninguna|una|dos)\b/.test(q8Answer)) serverRedFlags.push("q8");
+    const q27Answer = (answers.q27 || "").toLowerCase();
+    if (/directo|sin.*(normal|previo)|nada.*(antes|previo)/.test(q27Answer) && !/normal.*antes|antes.*normal/.test(q27Answer)) serverRedFlags.push("q27");
+
+    const qaLines = Object.entries(answers).filter(([k]) => QUESTIONS[k])
+      .map(([k, v]) => `${k} - ${QUESTIONS[k]}\nRespuesta: ${v}`).join("\n\n");
+
+    const prompt = `Eres un evaluador experto en reventa en Vinted y negocio de Lamine Resell. Evalúa las siguientes respuestas de un candidato para la Academia.
+
+Para cada pregunta (q1 a q40) asigna puntuación 0-3:
+- 0: No sabe, respuesta completamente vaga o vacía
+- 1: Básica, poca profundidad
+- 2: Correcta con algo de detalle
+- 3: Experta, específica y con criterio claro
+
+Puntuación total normalizada: suma / 120 * 100 (0-100).
+Aplica -10 puntos por cada red flag (q8 con menos de 3 cuentas, q27 publicando reps sin productos normales previos).
+Resultado final entre 0 y 100.
+
+RESPONDE SOLO CON JSON VÁLIDO, sin markdown:
+{"score":<0-100>,"per_question":{"q1":<0-3>,"q2":<0-3>,...},"feedback":"<2 frases en español>"}
+
+${qaLines}`;
+
+    try {
+      const resp = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.1, maxOutputTokens: 2048 } }),
+        }
+      );
+      const data: any = await resp.json();
+      const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      const m = raw.match(/\{[\s\S]*\}/);
+      if (!m) throw new Error("no json");
+      const parsed = JSON.parse(m[0]);
+      let score = Math.round(parsed.score ?? 50);
+      score -= serverRedFlags.length * 10;
+      score = Math.max(0, Math.min(100, score));
+      return { score, details: parsed.per_question || {}, red_flags: serverRedFlags };
+    } catch {
+      return { score: 50, details: {}, red_flags: serverRedFlags };
+    }
+  }
+
+  app.post("/api/academia/identify", async (req, res) => {
+    const { skool_username, email, phone } = req.body || {};
+    if (!skool_username || !email || !phone)
+      return res.status(400).json({ error: "Faltan campos obligatorios" });
+    try {
+      const r = await pool.query(
+        `INSERT INTO academia_verifications (skool_username, email, phone) VALUES ($1, $2, $3) RETURNING id`,
+        [String(skool_username).trim(), String(email).trim().toLowerCase(), String(phone).trim()]
+      );
+      res.json({ id: r.rows[0].id });
+    } catch (e: any) {
+      res.status(500).json({ error: "Error al registrar solicitud" });
+    }
+  });
+
+  app.get("/api/academia/status/:id", async (req, res) => {
+    try {
+      const r = await pool.query(`SELECT status FROM academia_verifications WHERE id = $1`, [req.params.id]);
+      if (!r.rows[0]) return res.status(404).json({ error: "No encontrado" });
+      res.json({ status: r.rows[0].status });
+    } catch { res.status(500).json({ error: "Error del servidor" }); }
+  });
+
+  app.post("/api/academia/answers/:id", async (req, res) => {
+    const { answers } = req.body || {};
+    if (!answers || typeof answers !== "object")
+      return res.status(400).json({ error: "Faltan las respuestas" });
+    try {
+      const vr = await pool.query(`SELECT id, skool_username, status FROM academia_verifications WHERE id = $1`, [req.params.id]);
+      if (!vr.rows[0]) return res.status(404).json({ error: "Solicitud no encontrada" });
+      if (vr.rows[0].status !== "approved") return res.status(403).json({ error: "Verificación no aprobada" });
+      const ex = await pool.query(`SELECT id FROM academia_questionnaires WHERE verification_id = $1 AND completed = TRUE`, [req.params.id]);
+      if (ex.rows[0]) return res.status(409).json({ error: "Ya has enviado el cuestionario" });
+
+      const { score, details, red_flags } = await scoreAcademia(answers as Record<string, string>);
+      const qr = await pool.query(
+        `INSERT INTO academia_questionnaires (verification_id, answers, score, score_details, red_flags, completed, completed_at)
+         VALUES ($1, $2, $3, $4, $5, TRUE, NOW()) RETURNING id`,
+        [req.params.id, JSON.stringify(answers), score, JSON.stringify(details), JSON.stringify(red_flags)]
+      );
+
+      const callmebotKey = process.env.CALLMEBOT_API_KEY;
+      if (callmebotKey) {
+        const name = encodeURIComponent(vr.rows[0].skool_username || "alguien");
+        fetch(`https://api.callmebot.com/whatsapp.php?phone=34640515871&text=LISTO+LAMINE,+SOY+${name}+YA+HE+RESPONDIDO+TODO&apikey=${callmebotKey}`)
+          .catch(() => {});
+        pool.query(`UPDATE academia_questionnaires SET whatsapp_sent = TRUE WHERE id = $1`, [qr.rows[0].id]).catch(() => {});
+      }
+
+      res.json({ score, score_details: details, red_flags });
+    } catch (e: any) {
+      console.error("[academia/answers]", e);
+      res.status(500).json({ error: "Error al guardar respuestas" });
+    }
+  });
+
+  app.get("/api/admin/academia/verifications", requireAdmin as any, async (_req, res) => {
+    try {
+      const r = await pool.query(`
+        SELECT v.*, q.score, q.completed, q.completed_at
+        FROM academia_verifications v
+        LEFT JOIN academia_questionnaires q ON q.verification_id = v.id
+        ORDER BY v.created_at DESC
+      `);
+      res.json(r.rows);
+    } catch { res.status(500).json({ error: "Error del servidor" }); }
+  });
+
+  app.post("/api/admin/academia/review/:id", requireAdmin as any, async (req: AuthRequest, res) => {
+    const { action } = req.body || {};
+    if (!["approve", "deny"].includes(action))
+      return res.status(400).json({ error: "Usa 'approve' o 'deny'" });
+    try {
+      const status = action === "approve" ? "approved" : "denied";
+      const r = await pool.query(
+        `UPDATE academia_verifications SET status=$1, reviewed_at=NOW(), reviewed_by=$2 WHERE id=$3 RETURNING *`,
+        [status, req.user?.email || "admin", req.params.id]
+      );
+      if (!r.rows[0]) return res.status(404).json({ error: "Solicitud no encontrada" });
+      res.json(r.rows[0]);
+    } catch { res.status(500).json({ error: "Error del servidor" }); }
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
 
   app.listen(PORT, "0.0.0.0", () => console.log(`Server running on http://localhost:${PORT}`));
 
