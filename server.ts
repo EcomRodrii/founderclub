@@ -563,7 +563,22 @@ async function startServer() {
   // ── Helper: migración lazy desde ak47 ──────────────────────────────────────
   // Si el usuario no existe en Postgres, intentamos validar contra ak47.
   // Si ak47 acepta, creamos el usuario aquí transparentemente y le damos acceso.
-  const AK47_LEGACY_URL = process.env.AK47_LEGACY_URL || 'https://ak47-worker-backend-production.up.railway.app';
+  const AK47_LEGACY_URL = (() => {
+    const raw = process.env.AK47_LEGACY_URL || 'https://ak47-worker-backend-production.up.railway.app';
+    try {
+      const u = new URL(raw);
+      if (u.protocol !== 'https:') throw new Error('AK47_LEGACY_URL debe ser HTTPS');
+      const host = u.hostname.replace(/^www\./, '');
+      if (host !== 'ak47-worker-backend-production.up.railway.app') {
+        console.error(`FATAL: AK47_LEGACY_URL apunta a dominio inesperado "${host}" — posible SSRF. Abortando.`);
+        process.exit(1);
+      }
+    } catch (e: any) {
+      console.error(`FATAL: AK47_LEGACY_URL inválida: ${e.message}`);
+      process.exit(1);
+    }
+    return raw;
+  })();
 
   async function tryLazyMigrateFromAk47(email: string, password: string): Promise<{ id: number; email: string; username: string; is_admin: boolean } | null> {
     try {
@@ -4458,7 +4473,7 @@ Genera la imagen editada.`;
                        is_active      = TRUE,
                        updated_at     = NOW()
          RETURNING id, username, domain, vinted_id`,
-        [userId, username || `user_${vid}`, vid, cookie, session_cookie || null, dom]
+        [userId, username || `user_${vid}`, vid, cookie, session_cookie ? ctrlEncrypt(session_cookie) : null, dom]
       );
       res.json({ ok: true, account: r.rows[0] });
     } catch (e: any) {
@@ -4913,7 +4928,8 @@ Genera la imagen editada.`;
       if (!acc.rows.length) return res.status(403).json({ ok: false, error: "account_not_found" });
 
       const account = acc.rows[0];
-      const { vinted_id, domain, session_cookie, cookie: bearerToken } = account;
+      const { vinted_id, domain, cookie: bearerToken } = account;
+      const session_cookie = account.session_cookie ? ctrlDecrypt(account.session_cookie) : null;
 
       if (!vinted_id) return res.status(400).json({ ok: false, error: "vinted_id_missing" });
       if (!session_cookie && !bearerToken) return res.status(400).json({ ok: false, error: "no_session_stored" });
@@ -5733,7 +5749,9 @@ Genera la imagen editada.`;
          ORDER BY updated_at DESC NULLS LAST LIMIT 1`,
         [userId]
       );
-      account = ar.rows[0];
+      const row = ar.rows[0];
+      if (row) row.session_cookie = row.session_cookie ? ctrlDecrypt(row.session_cookie) : null;
+      account = row;
     } catch { account = null; }
 
     if (!account?.session_cookie && !account?.cookie) {
