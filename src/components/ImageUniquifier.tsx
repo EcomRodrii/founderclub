@@ -278,7 +278,6 @@ function formatSize(b: number) {
   return `${(b/(1024*1024)).toFixed(2)} MB`;
 }
 
-const IS_IOS    = /iPhone|iPad|iPod/i.test(navigator.userAgent);
 const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
 // Convierte un data URL a Blob sin hacer fetch (evita bloqueo CSP connect-src)
@@ -294,71 +293,20 @@ function dataUrlToBlob(dataUrl: string): Blob {
 async function dl(dataUrl: string, name: string): Promise<void> {
   const blob    = dataUrlToBlob(dataUrl);
   const blobUrl = URL.createObjectURL(blob);
-  if (IS_IOS) {
-    // iOS Safari ignora a.download; abrimos en nueva pestaña → pulsación larga → "Guardar en Fotos"
-    window.open(blobUrl, '_blank');
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000);
-  } else {
-    const a = document.createElement('a');
-    a.href     = blobUrl;
-    a.download = name;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 5_000);
-  }
-}
-
-async function dataUrlToFile(dataUrl: string, name: string): Promise<File> {
-  const blob = dataUrlToBlob(dataUrl);
-  return new File([blob], name, { type: 'image/jpeg' });
-}
-
-function canShareFiles(): boolean {
-  try {
-    return (
-      typeof navigator.share === 'function' &&
-      typeof navigator.canShare === 'function' &&
-      navigator.canShare({ files: [new File(['x'], 'test.jpg', { type: 'image/jpeg' })] })
-    );
-  } catch { return false; }
-}
-
-async function saveOne(dataUrl: string, filename: string): Promise<void> {
-  if (canShareFiles()) {
-    const file = await dataUrlToFile(dataUrl, filename);
-    await navigator.share({ files: [file], title: filename });
-  } else {
-    await dl(dataUrl, filename);
-  }
+  const a = document.createElement('a');
+  a.href = blobUrl; a.download = name;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 5_000);
 }
 
 async function saveAll(
   items: { dataUrl: string; filename: string }[],
   onProgress?: (n: number) => void
 ): Promise<void> {
-  if (canShareFiles()) {
-    try {
-      const files = await Promise.all(items.map(i => dataUrlToFile(i.dataUrl, i.filename)));
-      if (navigator.canShare({ files })) {
-        await navigator.share({ files, title: `${files.length} fotos únicas` });
-        onProgress?.(files.length);
-        return;
-      }
-    } catch { /* fallback a una a una */ }
-    for (let i = 0; i < items.length; i++) {
-      try {
-        const file = await dataUrlToFile(items[i].dataUrl, items[i].filename);
-        await navigator.share({ files: [file], title: items[i].filename });
-        onProgress?.(i + 1);
-      } catch { /* usuario canceló */ }
-    }
-  } else {
-    for (let i = 0; i < items.length; i++) {
-      await dl(items[i].dataUrl, items[i].filename);
-      onProgress?.(i + 1);
-      if (i < items.length - 1) await new Promise(r => setTimeout(r, 150));
-    }
+  for (let i = 0; i < items.length; i++) {
+    await dl(items[i].dataUrl, items[i].filename);
+    onProgress?.(i + 1);
+    if (i < items.length - 1) await new Promise(r => setTimeout(r, 150));
   }
 }
 
@@ -455,7 +403,7 @@ export default function ImageUniquifier() {
   };
 
   const handleSaveOne = (dataUrl: string, originalName: string) => {
-    saveOne(dataUrl, originalName.replace(/\.[^.]+$/, '_unique.jpg'));
+    dl(dataUrl, originalName.replace(/\.[^.]+$/, '_unique.jpg'));
   };
 
   const remove    = (id: string) => setImages(prev => prev.filter(i => i.id !== id));

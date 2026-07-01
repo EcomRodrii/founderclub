@@ -50,21 +50,13 @@ async function fileToBase64(file: File): Promise<string> {
   });
 }
 
-function dl(dataUrl: string, name: string) {
-  const a = document.createElement('a'); a.href = dataUrl; a.download = name; a.click();
-}
-
-function dataUrlToBlob(dataUrl: string): Blob {
-  const [header, b64] = dataUrl.split(',');
-  const mime = header.match(/:(.*?);/)?.[1] ?? 'image/jpeg';
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return new Blob([bytes], { type: mime });
-}
-
-async function dataUrlToFile(dataUrl: string, name: string): Promise<File> {
-  return new File([dataUrlToBlob(dataUrl)], name, { type: 'image/jpeg' });
+async function dl(dataUrl: string, name: string): Promise<void> {
+  const blob    = await fetch(dataUrl).then(r => r.blob());
+  const blobUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = blobUrl; a.download = name;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 5_000);
 }
 
 // Gemini devuelve PNG; piexifjs solo funciona con JPEG → convertir antes de inyectar EXIF.
@@ -89,46 +81,14 @@ async function applyBatchExif(pngDataUrl: string, profile: ExifProfile): Promise
   return injectExifProfile(jpeg, profile);
 }
 
-function canShareFiles(): boolean {
-  try {
-    return (
-      typeof navigator.share === 'function' &&
-      typeof navigator.canShare === 'function' &&
-      navigator.canShare({ files: [new File([''], 'test.jpg', { type: 'image/jpeg' })] })
-    );
-  } catch { return false; }
-}
-
-async function saveOne(dataUrl: string, filename: string): Promise<void> {
-  if (canShareFiles()) {
-    const file = await dataUrlToFile(dataUrl, filename);
-    await navigator.share({ files: [file], title: filename });
-  } else { dl(dataUrl, filename); }
-}
-
 async function saveAll(
   items: { dataUrl: string; filename: string }[],
   onProgress?: (n: number) => void
 ): Promise<void> {
-  if (canShareFiles()) {
-    try {
-      const files = await Promise.all(items.map(i => dataUrlToFile(i.dataUrl, i.filename)));
-      if (navigator.canShare({ files })) {
-        await navigator.share({ files, title: `${files.length} fotos editadas` });
-        onProgress?.(files.length); return;
-      }
-    } catch { /* fallback */ }
-    for (let i = 0; i < items.length; i++) {
-      try {
-        const file = await dataUrlToFile(items[i].dataUrl, items[i].filename);
-        await navigator.share({ files: [file], title: items[i].filename });
-        onProgress?.(i + 1);
-      } catch { /* usuario canceló */ }
-    }
-  } else {
-    items.forEach((item, idx) => {
-      setTimeout(() => { dl(item.dataUrl, item.filename); onProgress?.(idx + 1); }, idx * 120);
-    });
+  for (let i = 0; i < items.length; i++) {
+    await dl(items[i].dataUrl, items[i].filename);
+    onProgress?.(i + 1);
+    if (i < items.length - 1) await new Promise(r => setTimeout(r, 150));
   }
 }
 
@@ -596,7 +556,7 @@ export default function CarpetEditor({ token, isPro = false, isAdmin = false }: 
                 <div className="flex gap-2">
                   {job.status === 'done' && job.resultUrl && (
                     <button
-                      onClick={() => saveOne(job.resultUrl!, job.originalName.replace(/\.[^.]+$/, '_alfombra.jpg'))}
+                      onClick={() => dl(job.resultUrl!, job.originalName.replace(/\.[^.]+$/, '_alfombra.jpg'))}
                       className="flex-1 flex items-center justify-center gap-1.5 bg-[#d4ff00] hover:bg-[#c8f000] text-black font-bold py-2 rounded-xl text-xs transition"
                     >
                       <Download className="w-3.5 h-3.5" />{saveLabel}
