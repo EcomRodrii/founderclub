@@ -33,7 +33,6 @@ const CARPET_PRESETS = [
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const IS_IOS    = /iPhone|iPad|iPod/i.test(navigator.userAgent);
 const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
 function formatSize(b: number) {
@@ -54,20 +53,10 @@ async function fileToBase64(file: File): Promise<string> {
 async function dl(dataUrl: string, name: string): Promise<void> {
   const blob    = await fetch(dataUrl).then(r => r.blob());
   const blobUrl = URL.createObjectURL(blob);
-  if (IS_IOS) {
-    window.open(blobUrl, '_blank');
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000);
-  } else {
-    const a = document.createElement('a');
-    a.href = blobUrl; a.download = name;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 5_000);
-  }
-}
-
-async function dataUrlToFile(dataUrl: string, name: string): Promise<File> {
-  const blob = await fetch(dataUrl).then(r => r.blob());
-  return new File([blob], name, { type: 'image/jpeg' });
+  const a = document.createElement('a');
+  a.href = blobUrl; a.download = name;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 5_000);
 }
 
 // Gemini devuelve PNG; piexifjs solo funciona con JPEG → convertir antes de inyectar EXIF.
@@ -92,48 +81,14 @@ async function applyBatchExif(pngDataUrl: string, profile: ExifProfile): Promise
   return injectExifProfile(jpeg, profile);
 }
 
-function canShareFiles(): boolean {
-  try {
-    return (
-      typeof navigator.share === 'function' &&
-      typeof navigator.canShare === 'function' &&
-      navigator.canShare({ files: [new File(['x'], 'test.jpg', { type: 'image/jpeg' })] })
-    );
-  } catch { return false; }
-}
-
-async function saveOne(dataUrl: string, filename: string): Promise<void> {
-  if (canShareFiles()) {
-    const file = await dataUrlToFile(dataUrl, filename);
-    await navigator.share({ files: [file], title: filename });
-  } else { await dl(dataUrl, filename); }
-}
-
 async function saveAll(
   items: { dataUrl: string; filename: string }[],
   onProgress?: (n: number) => void
 ): Promise<void> {
-  if (canShareFiles()) {
-    try {
-      const files = await Promise.all(items.map(i => dataUrlToFile(i.dataUrl, i.filename)));
-      if (navigator.canShare({ files })) {
-        await navigator.share({ files, title: `${files.length} fotos editadas` });
-        onProgress?.(files.length); return;
-      }
-    } catch { /* fallback a una a una */ }
-    for (let i = 0; i < items.length; i++) {
-      try {
-        const file = await dataUrlToFile(items[i].dataUrl, items[i].filename);
-        await navigator.share({ files: [file], title: items[i].filename });
-        onProgress?.(i + 1);
-      } catch { /* usuario canceló */ }
-    }
-  } else {
-    for (let i = 0; i < items.length; i++) {
-      await dl(items[i].dataUrl, items[i].filename);
-      onProgress?.(i + 1);
-      if (i < items.length - 1) await new Promise(r => setTimeout(r, 150));
-    }
+  for (let i = 0; i < items.length; i++) {
+    await dl(items[i].dataUrl, items[i].filename);
+    onProgress?.(i + 1);
+    if (i < items.length - 1) await new Promise(r => setTimeout(r, 150));
   }
 }
 
@@ -601,7 +556,7 @@ export default function CarpetEditor({ token, isPro = false, isAdmin = false }: 
                 <div className="flex gap-2">
                   {job.status === 'done' && job.resultUrl && (
                     <button
-                      onClick={() => saveOne(job.resultUrl!, job.originalName.replace(/\.[^.]+$/, '_alfombra.jpg'))}
+                      onClick={() => dl(job.resultUrl!, job.originalName.replace(/\.[^.]+$/, '_alfombra.jpg'))}
                       className="flex-1 flex items-center justify-center gap-1.5 bg-[#d4ff00] hover:bg-[#c8f000] text-black font-bold py-2 rounded-xl text-xs transition"
                     >
                       <Download className="w-3.5 h-3.5" />{saveLabel}
