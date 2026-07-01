@@ -18,6 +18,8 @@ import { pool, initDB } from "./db.js";
 import { buildTonguePrompt, jpegDimsFromBase64, pickGeminiAspect, buildTonguePreamble } from "./geminiUtils.js";
 import { lenguetaQueue } from "./queues/lenguetaQueue.js";
 import { startLenguetaWorker } from "./queues/lenguetaWorker.js";
+import * as otplib from "otplib";
+import QRCode from "qrcode";
 
 dotenv.config({ path: ".env.local" });
 
@@ -423,6 +425,12 @@ async function startServer() {
     CREATE INDEX IF NOT EXISTS idx_report_jobs_status ON report_jobs(status);
   `);
 
+  // ── MFA: columnas TOTP en users ──────────────────────────────────────────────
+  await pool.query(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret  TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+  `).catch(() => {});
+
   // ── Auto-publish: asegurar columnas vinted_id + session_cookie en vinted_accounts ──
   await pool.query(`
     ALTER TABLE vinted_accounts ADD COLUMN IF NOT EXISTS vinted_id   VARCHAR(50);
@@ -751,6 +759,11 @@ async function startServer() {
     if (!user || !(await bcrypt.compare(password, user.password_hash)))
       return res.status(401).json({ error: "Credenciales incorrectas" });
 
+    // Si el admin tiene MFA activo → emitir token temporal de 5 min y pedir código TOTP
+    if (user.is_admin && user.totp_enabled) {
+      return res.json({ mfa_required: true, mfa_token: mintMfaPendingToken(user.id) });
+    }
+
     const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip;
     const token = await mintSessionToken(user.id, "7d", ip);
     logActivity(user.id, "login", ip);
@@ -786,6 +799,74 @@ async function startServer() {
   app.post("/api/auth/logout", requireAuth as any, async (req: AuthRequest, res) => {
     await pool.query("UPDATE users SET session_token = NULL WHERE id = $1", [req.user!.id]);
     res.json({ ok: true });
+  });
+
+  // ── MFA / TOTP ───────────────────────────────────────────────────────────────
+  // Token temporal (5 min) emitido tras contraseña correcta cuando MFA está activo.
+  // Firmado con JWT_SECRET pero con claim "mfa_pending=true" para que requireAuth lo rechace.
+  function mintMfaPendingToken(userId: number): string {
+    return jwt.sign({ id: userId, mfa_pending: true }, JWT_SECRET, { algorithm: "HS256", expiresIn: "5m" });
+  }
+
+  // POST /api/auth/mfa/setup — genera secreto TOTP y devuelve QR + URI
+  app.post("/api/auth/mfa/setup", requireAdmin as any, async (req: AuthRequest, res) => {
+    const user = req.user!;
+    if ((user as any).totp_enabled) return res.status(400).json({ error: "MFA ya está activado" });
+    const secret = otplib.generateSecret({ length: 20 });
+    const otpauthUrl = otplib.generateURI({ label: user.email, issuer: "FounderClub", secret });
+    const qrDataUrl = await QRCode.toDataURL(otpauthUrl);
+    // Guarda el secreto sin activarlo hasta que el usuario verifique el primer código
+    await pool.query("UPDATE users SET totp_secret=$1 WHERE id=$2", [secret, user.id]);
+    res.json({ secret, otpauthUrl, qrDataUrl });
+  });
+
+  // POST /api/auth/mfa/enable — verifica primer código TOTP y activa MFA
+  app.post("/api/auth/mfa/enable", requireAdmin as any, async (req: AuthRequest, res) => {
+    const { code } = req.body;
+    if (!code) return res.status(400).json({ error: "Código TOTP requerido" });
+    const row = (await pool.query("SELECT totp_secret, totp_enabled FROM users WHERE id=$1", [req.user!.id])).rows[0];
+    if (!row?.totp_secret) return res.status(400).json({ error: "Llama primero a /api/auth/mfa/setup" });
+    if (row.totp_enabled) return res.status(400).json({ error: "MFA ya está activado" });
+    if (!(otplib.verifySync({ token: String(code).replace(/\s/g, ""), secret: row.totp_secret }) as any)?.valid)
+      return res.status(401).json({ error: "Código incorrecto" });
+    await pool.query("UPDATE users SET totp_enabled=TRUE WHERE id=$1", [req.user!.id]);
+    res.json({ ok: true, message: "MFA activado correctamente" });
+  });
+
+  // POST /api/auth/mfa/disable — desactiva MFA (requiere código TOTP vigente)
+  app.post("/api/auth/mfa/disable", requireAdmin as any, async (req: AuthRequest, res) => {
+    const { code } = req.body;
+    if (!code) return res.status(400).json({ error: "Código TOTP requerido" });
+    const row = (await pool.query("SELECT totp_secret, totp_enabled FROM users WHERE id=$1", [req.user!.id])).rows[0];
+    if (!row?.totp_enabled) return res.status(400).json({ error: "MFA no está activado" });
+    if (!(otplib.verifySync({ token: String(code).replace(/\s/g, ""), secret: row.totp_secret }) as any)?.valid)
+      return res.status(401).json({ error: "Código incorrecto" });
+    await pool.query("UPDATE users SET totp_enabled=FALSE, totp_secret=NULL WHERE id=$1", [req.user!.id]);
+    res.json({ ok: true, message: "MFA desactivado" });
+  });
+
+  // POST /api/auth/mfa/validate — segunda fase del login: valida código TOTP y emite sesión completa
+  app.post("/api/auth/mfa/validate", authLimiter, async (req, res) => {
+    const { mfa_token, code } = req.body;
+    if (!mfa_token || !code) return res.status(400).json({ error: "mfa_token y code son requeridos" });
+    let payload: any;
+    try {
+      payload = jwt.verify(mfa_token, JWT_SECRET, { algorithms: ["HS256"] });
+    } catch {
+      return res.status(401).json({ error: "Token MFA inválido o expirado" });
+    }
+    if (!payload.mfa_pending) return res.status(401).json({ error: "Token inválido" });
+    const row = (await pool.query("SELECT * FROM users WHERE id=$1", [payload.id])).rows[0];
+    if (!row) return res.status(401).json({ error: "Usuario no encontrado" });
+    if (!(otplib.verifySync({ token: String(code).replace(/\s/g, ""), secret: row.totp_secret }) as any)?.valid)
+      return res.status(401).json({ error: "Código TOTP incorrecto" });
+    const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip;
+    const token = await mintSessionToken(row.id, "7d", ip);
+    logActivity(row.id, "login_mfa", ip);
+    res.json({
+      token,
+      user: { id: row.id, username: row.username, email: row.email, is_admin: row.is_admin, rank: row.rank || 'normal' },
+    });
   });
 
   app.get("/api/auth/me", requireAuth as any, async (req: AuthRequest, res) => {

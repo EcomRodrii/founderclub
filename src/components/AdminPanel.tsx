@@ -16,7 +16,7 @@ interface AdminPanelProps {
   onBack?: () => void;
 }
 
-type Tab = 'stats' | 'users' | 'activity' | 'licenses' | 'sessions' | 'prompts' | 'references' | 'monitor' | 'academia';
+type Tab = 'stats' | 'users' | 'activity' | 'licenses' | 'sessions' | 'prompts' | 'references' | 'monitor' | 'academia' | 'mfa';
 
 const ACADEMIA_QUESTIONS: Record<string, string> = {
   q1:'¿En qué punto estás ahora mismo con la reventa?',q2:'Facturación mensual',q3:'¿Qué estás vendiendo?',
@@ -439,6 +439,14 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
   const [acadSummaryLoading, setAcadSummaryLoading] = useState(false);
   const [acadModalTab, setAcadModalTab] = useState<'full'|'ai'>('full');
 
+  // MFA setup
+  const [mfaSetup, setMfaSetup] = useState<{ secret: string; qrDataUrl: string; otpauthUrl: string } | null>(null);
+  const [mfaCode, setMfaCode] = useState('');
+  const [mfaStatus, setMfaStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle');
+  const [mfaMsg, setMfaMsg] = useState('');
+  const [mfaEnabled, setMfaEnabled] = useState<boolean | null>(null);
+  const [mfaDisableCode, setMfaDisableCode] = useState('');
+
   // References
   const [refs, setRefs] = useState<any[]>([]);
   const [newRefBrand, setNewRefBrand] = useState<Brand>('ADIDAS');
@@ -637,6 +645,7 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
     { id: 'prompts',    label: 'Prompts',     icon: <FileText className="w-4 h-4" /> },
     { id: 'references', label: 'Referencias', icon: <ImagePlus className="w-4 h-4" /> },
     { id: 'academia',   label: '🎓 Academia', icon: null },
+    { id: 'mfa',        label: '🔐 MFA',      icon: null },
   ];
 
   async function createUser() {
@@ -1620,6 +1629,150 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
               )}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* MFA tab */}
+      {tab === 'mfa' && (
+        <div className="max-w-md space-y-6">
+          <div>
+            <h2 className="text-lg font-semibold text-white mb-1">Autenticación de dos factores (TOTP)</h2>
+            <p className="text-sm text-zinc-400">
+              Activa MFA para tu cuenta de administrador. Necesitarás Google Authenticator, Authy u otra app compatible.
+            </p>
+          </div>
+
+          {/* Estado actual */}
+          {mfaEnabled === null && (
+            <button
+              onClick={async () => {
+                setMfaStatus('loading');
+                try {
+                  const r = await fetch('/api/auth/me', { headers: { Authorization: `Bearer ${token}` } });
+                  const d = await r.json();
+                  setMfaEnabled(d.user?.totp_enabled ?? false);
+                } catch { setMfaEnabled(false); }
+                setMfaStatus('idle');
+              }}
+              className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white text-sm rounded-lg transition"
+            >
+              {mfaStatus === 'loading' ? 'Cargando…' : 'Ver estado MFA'}
+            </button>
+          )}
+
+          {mfaEnabled === false && !mfaSetup && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-sm text-zinc-400">
+                <span className="w-2 h-2 rounded-full bg-zinc-500 inline-block" />
+                MFA desactivado
+              </div>
+              <button
+                onClick={async () => {
+                  setMfaStatus('loading');
+                  try {
+                    const r = await fetch('/api/auth/mfa/setup', { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+                    const d = await r.json();
+                    if (!r.ok) throw new Error(d.error);
+                    setMfaSetup(d);
+                    setMfaStatus('idle');
+                  } catch (e: any) { setMfaMsg(e.message); setMfaStatus('error'); }
+                }}
+                disabled={mfaStatus === 'loading'}
+                className="px-4 py-2 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-sm rounded-lg transition"
+              >
+                {mfaStatus === 'loading' ? 'Generando…' : 'Activar MFA'}
+              </button>
+            </div>
+          )}
+
+          {mfaSetup && (
+            <div className="space-y-4">
+              <p className="text-sm text-zinc-300">1. Escanea este QR con tu app autenticadora:</p>
+              <img src={mfaSetup.qrDataUrl} alt="QR TOTP" className="w-48 h-48 rounded-xl border border-zinc-700" />
+              <details className="text-xs text-zinc-500">
+                <summary className="cursor-pointer hover:text-zinc-300">Ver clave manual</summary>
+                <code className="block mt-2 break-all bg-zinc-800 rounded p-2 text-zinc-300">{mfaSetup.secret}</code>
+              </details>
+              <p className="text-sm text-zinc-300">2. Introduce el código de 6 dígitos para confirmar:</p>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={6}
+                  value={mfaCode}
+                  onChange={e => setMfaCode(e.target.value.replace(/\D/g, ''))}
+                  placeholder="123456"
+                  className="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-center text-lg font-mono tracking-widest outline-none focus:border-violet-500"
+                />
+                <button
+                  onClick={async () => {
+                    setMfaStatus('loading');
+                    try {
+                      const r = await fetch('/api/auth/mfa/enable', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                        body: JSON.stringify({ code: mfaCode }),
+                      });
+                      const d = await r.json();
+                      if (!r.ok) throw new Error(d.error);
+                      setMfaEnabled(true); setMfaSetup(null); setMfaCode('');
+                      setMfaMsg('MFA activado correctamente'); setMfaStatus('ok');
+                    } catch (e: any) { setMfaMsg(e.message); setMfaStatus('error'); setMfaCode(''); }
+                  }}
+                  disabled={mfaCode.length < 6 || mfaStatus === 'loading'}
+                  className="px-4 py-2 bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white text-sm rounded-lg transition"
+                >
+                  Confirmar
+                </button>
+              </div>
+            </div>
+          )}
+
+          {mfaEnabled === true && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 text-sm text-green-400">
+                <span className="w-2 h-2 rounded-full bg-green-400 inline-block" />
+                MFA activado — se pedirá código en cada login
+              </div>
+              <p className="text-sm text-zinc-300">Para desactivar, introduce un código TOTP válido:</p>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={6}
+                  value={mfaDisableCode}
+                  onChange={e => setMfaDisableCode(e.target.value.replace(/\D/g, ''))}
+                  placeholder="123456"
+                  className="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-center text-lg font-mono tracking-widest outline-none focus:border-red-500"
+                />
+                <button
+                  onClick={async () => {
+                    if (!confirm('¿Seguro que quieres desactivar MFA? Tu cuenta quedará menos protegida.')) return;
+                    setMfaStatus('loading');
+                    try {
+                      const r = await fetch('/api/auth/mfa/disable', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                        body: JSON.stringify({ code: mfaDisableCode }),
+                      });
+                      const d = await r.json();
+                      if (!r.ok) throw new Error(d.error);
+                      setMfaEnabled(false); setMfaDisableCode('');
+                      setMfaMsg('MFA desactivado'); setMfaStatus('ok');
+                    } catch (e: any) { setMfaMsg(e.message); setMfaStatus('error'); setMfaDisableCode(''); }
+                  }}
+                  disabled={mfaDisableCode.length < 6 || mfaStatus === 'loading'}
+                  className="px-4 py-2 bg-red-700 hover:bg-red-600 disabled:opacity-50 text-white text-sm rounded-lg transition"
+                >
+                  Desactivar
+                </button>
+              </div>
+            </div>
+          )}
+
+          {mfaMsg && (
+            <p className={`text-sm ${mfaStatus === 'ok' ? 'text-green-400' : 'text-red-400'}`}>{mfaMsg}</p>
+          )}
         </div>
       )}
 
