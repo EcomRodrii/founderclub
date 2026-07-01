@@ -2488,26 +2488,23 @@ async function startServer() {
     res.status(403).json({ error: "registration_closed" });
   });
 
-  // Helper para descifrar una fila
-  // Fila segura para el listado: nunca expone iban/vinted_pass en claro
-  function safeRow(row: any) {
+  // Descifra los campos sensibles de una fila
+  function decryptRow(row: any) {
     return {
       ...row,
-      iban:        undefined, // excluido del listado
-      vinted_pass: undefined, // excluido del listado
-      has_iban:        !!row.iban,
-      has_vinted_pass: !!row.vinted_pass,
+      vinted_pass: row.vinted_pass ? ctrlDecrypt(row.vinted_pass) : "",
+      iban:        row.iban        ? ctrlDecrypt(row.iban)        : "",
     };
   }
 
-  // GET todas las cuentas del usuario (sin datos sensibles — usar /reveal para verlos)
+  // GET todas las cuentas del usuario (con campos descifrados para compatibilidad con el panel)
   app.get("/api/control/accounts", requireAuth as any, async (req: AuthRequest, res) => {
     const r = await pool.query(
       `SELECT id, vinted_username, real_name, gmail, vinted_pass, phone, device, iban, dac7, status, notes, created_at
        FROM control_vinted_accounts WHERE owner_user_id=$1 ORDER BY created_at DESC`,
       [req.user!.id]
     );
-    res.json(r.rows.map(safeRow));
+    res.json(r.rows.map(decryptRow));
   });
 
   // GET reveal de campos sensibles de UNA cuenta (requiere ser el dueño)
@@ -2538,7 +2535,7 @@ async function startServer() {
        iban ? ctrlEncrypt(iban) : null,
        !!dac7, status||'disponible', notes||null]
     );
-    res.json(safeRow(r.rows[0]));
+    res.json(decryptRow(r.rows[0]));
   });
 
   // PUT editar cuenta (cifra IBAN y contraseña)
@@ -2557,7 +2554,7 @@ async function startServer() {
        req.params.id, req.user!.id]
     );
     if (!r.rows[0]) return res.status(404).json({ error: "Cuenta no encontrada" });
-    res.json(safeRow(r.rows[0]));
+    res.json(decryptRow(r.rows[0]));
   });
 
   // DELETE eliminar cuenta Vinted
