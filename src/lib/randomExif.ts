@@ -6,16 +6,12 @@
 // piexifjs se carga vía CDN (dynamic import) para no bundlearlo.
 // Solo se descarga si el user activa el modo EXTREMO.
 
-const PIEXIF_CDN = 'https://cdn.jsdelivr.net/npm/piexifjs@1.0.6/+esm';
+import piexifModule from 'piexifjs';
+// piexifjs puede exportarse como default o como módulo CommonJS
+const _piexif: any = (piexifModule as any).default ?? piexifModule;
 
-let piexifPromise: Promise<any> | null = null;
 async function loadPiexif(): Promise<any> {
-  if (!piexifPromise) {
-    piexifPromise = import(/* @vite-ignore */ PIEXIF_CDN)
-      .then(m => m.default || m)
-      .catch(err => { piexifPromise = null; throw err; });
-  }
-  return piexifPromise;
+  return _piexif;
 }
 
 // Pool de cámaras móviles reales — selecciona una al azar por foto.

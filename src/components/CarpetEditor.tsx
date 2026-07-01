@@ -54,9 +54,17 @@ function dl(dataUrl: string, name: string) {
   const a = document.createElement('a'); a.href = dataUrl; a.download = name; a.click();
 }
 
+function dataUrlToBlob(dataUrl: string): Blob {
+  const [header, b64] = dataUrl.split(',');
+  const mime = header.match(/:(.*?);/)?.[1] ?? 'image/jpeg';
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
 async function dataUrlToFile(dataUrl: string, name: string): Promise<File> {
-  const blob = await fetch(dataUrl).then(r => r.blob());
-  return new File([blob], name, { type: 'image/jpeg' });
+  return new File([dataUrlToBlob(dataUrl)], name, { type: 'image/jpeg' });
 }
 
 // Gemini devuelve PNG; piexifjs solo funciona con JPEG → convertir antes de inyectar EXIF.

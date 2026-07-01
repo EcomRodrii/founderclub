@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
 import { Lock, Mail, Eye, EyeOff, AlertCircle } from 'lucide-react';
 
 interface AuthPageProps {
@@ -7,8 +7,6 @@ interface AuthPageProps {
 }
 
 export default function AuthPage({ onAuth }: AuthPageProps) {
-  const [mode, setMode] = useState<'login' | 'register'>('login');
-  const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -20,12 +18,10 @@ export default function AuthPage({ onAuth }: AuthPageProps) {
     setError(null);
     setLoading(true);
     try {
-      const endpoint = mode === 'login' ? '/api/auth/login' : '/api/auth/register';
-      const body = mode === 'login' ? { email, password } : { username, email, password };
-      const res = await fetch(endpoint, {
+      const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ email, password }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Error desconocido');
@@ -59,54 +55,14 @@ export default function AuthPage({ onAuth }: AuthPageProps) {
             <div className="grid gap-2.5 mb-5">
               <p className="font-display text-[0.8rem] tracking-[0.3em] text-acid m-0">CENTRO DE CLIENTES</p>
               <h1 className="font-display m-0 text-[clamp(2.6rem,5vw,3.6rem)] leading-[0.96] tracking-[0.02em] text-[var(--color-text)]">
-                {mode === 'login' ? 'Login' : 'Register'}
+                Login
               </h1>
               <p className="text-[0.95rem] leading-[1.65] text-muted m-0">
                 Inicia sesión para gestionar tus módulos del Hub con una sola cuenta.
               </p>
             </div>
 
-            {/* Tabs login / register */}
-            <div className="flex gap-1.5 mb-5">
-              {(['login', 'register'] as const).map(tab => (
-                <button
-                  key={tab}
-                  type="button"
-                  onClick={() => { setMode(tab); setError(null); }}
-                  className={`flex-1 py-2.5 text-[0.78rem] font-bold uppercase tracking-[0.18em] rounded-full border transition ease-hub ${
-                    mode === tab
-                      ? 'bg-acid-soft border-acid text-acid'
-                      : 'bg-white/[0.03] border-white/10 text-muted-strong hover:border-acid hover:text-acid'
-                  }`}
-                >
-                  {tab === 'login' ? 'Iniciar sesión' : 'Registrarse'}
-                </button>
-              ))}
-            </div>
-
             <form onSubmit={submit} className="grid gap-3.5">
-              <AnimatePresence mode="wait">
-                {mode === 'register' && (
-                  <motion.label
-                    key="username"
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: 'auto' }}
-                    exit={{ opacity: 0, height: 0 }}
-                    className="grid gap-2 overflow-hidden"
-                  >
-                    <span className="text-[0.78rem] tracking-[0.18em] uppercase text-muted-strong font-bold">Usuario</span>
-                    <input
-                      type="text"
-                      value={username}
-                      onChange={e => setUsername(e.target.value)}
-                      placeholder="tunombre"
-                      required
-                      autoComplete="username"
-                      className="w-full min-h-[50px] rounded-[14px] border border-white/[0.16] bg-black/[0.28] text-[var(--color-text)] px-4 outline-none transition ease-hub hover:border-white/[0.22] focus:border-acid focus:bg-black/40 focus:shadow-[0_0_0_3px_rgba(77,159,255,0.12)]"
-                    />
-                  </motion.label>
-                )}
-              </AnimatePresence>
 
               <label className="grid gap-2">
                 <span className="text-[0.78rem] tracking-[0.18em] uppercase text-muted-strong font-bold">Correo</span>
@@ -164,19 +120,8 @@ export default function AuthPage({ onAuth }: AuthPageProps) {
                 disabled={loading}
                 className="min-h-[50px] rounded-full border-none bg-acid-gradient text-[#0a0d10] font-bold tracking-[0.02em] px-6 shadow-acid transition ease-hub hover:-translate-y-0.5 hover:shadow-acid-lg disabled:opacity-60 disabled:cursor-not-allowed disabled:transform-none"
               >
-                {loading ? 'Cargando…' : mode === 'login' ? 'Entrar' : 'Crear cuenta'}
+                {loading ? 'Cargando…' : 'Entrar'}
               </button>
-
-              <p className="m-0 mt-1 text-[0.92rem] text-muted">
-                {mode === 'login' ? '¿No tienes cuenta? ' : '¿Ya tienes cuenta? '}
-                <button
-                  type="button"
-                  onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(null); }}
-                  className="text-acid font-bold hover:text-[var(--color-text)] transition ease-hub bg-transparent border-0 p-0 cursor-pointer"
-                >
-                  {mode === 'login' ? 'Regístrate' : 'Inicia sesión'}
-                </button>
-              </p>
             </form>
           </div>
         </section>

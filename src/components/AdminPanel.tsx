@@ -415,6 +415,12 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
   // Selected user (opens drawer)
   const [selectedUser, setSelectedUser] = useState<any | null>(null);
 
+  // Create user form
+  const [showCreateUser, setShowCreateUser] = useState(false);
+  const [newUserForm, setNewUserForm] = useState({ username: '', email: '', password: '' });
+  const [newUserLoading, setNewUserLoading] = useState(false);
+  const [newUserError, setNewUserError] = useState<string | null>(null);
+
   // Monitor data
   const [monitor, setMonitor] = useState<any>(null);
 
@@ -633,6 +639,22 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
     { id: 'academia',   label: '🎓 Academia', icon: null },
   ];
 
+  async function createUser() {
+    const { username, email, password } = newUserForm;
+    if (!username || !email || !password) { setNewUserError('Todos los campos son obligatorios'); return; }
+    setNewUserLoading(true); setNewUserError(null);
+    try {
+      await client.post('/api/admin/users', { username, email, password });
+      setShowCreateUser(false);
+      setNewUserForm({ username: '', email: '', password: '' });
+      loadTab('users');
+    } catch (e: any) {
+      setNewUserError(e.message || 'Error al crear usuario');
+    } finally {
+      setNewUserLoading(false);
+    }
+  }
+
   function actionLabel(a: string): { label: string; color: string } {
     if (a === 'login') return { label: '🔑 Login', color: 'text-blue-400' };
     if (a.startsWith('lengueta:scan'))     return { label: `📷 Escaneo ${a.split(':')[2] || ''}`, color: 'text-acid' };
@@ -707,6 +729,47 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
         {/* Users */}
         {tab === 'users' && (
           <div className="space-y-3">
+            {/* Toolbar: search + create */}
+            <div className="flex gap-2">
+              <button
+                onClick={() => { setShowCreateUser(v => !v); setNewUserError(null); }}
+                className="shrink-0 px-3 py-2 bg-violet-600 hover:bg-violet-500 rounded-xl text-xs text-white font-semibold transition flex items-center gap-1.5"
+              >
+                <span className="text-base leading-none">+</span> Crear usuario
+              </button>
+            </div>
+
+            {/* Create user form */}
+            {showCreateUser && (
+              <div className="bg-zinc-900 border border-violet-500/30 rounded-2xl p-4 space-y-3">
+                <p className="text-sm font-semibold text-violet-300">Nuevo usuario</p>
+                {newUserError && <p className="text-xs text-red-400">{newUserError}</p>}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  {[
+                    { key: 'username', ph: 'Usuario', type: 'text' },
+                    { key: 'email',    ph: 'Email',   type: 'email' },
+                    { key: 'password', ph: 'Contraseña (mín 8)', type: 'password' },
+                  ].map(f => (
+                    <input
+                      key={f.key}
+                      type={f.type}
+                      placeholder={f.ph}
+                      value={(newUserForm as any)[f.key]}
+                      onChange={e => setNewUserForm(prev => ({ ...prev, [f.key]: e.target.value }))}
+                      className="px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-xl text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-violet-500"
+                    />
+                  ))}
+                </div>
+                <button
+                  onClick={createUser}
+                  disabled={newUserLoading}
+                  className="px-4 py-2 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 rounded-xl text-xs text-white font-semibold transition"
+                >
+                  {newUserLoading ? 'Creando…' : 'Crear cuenta'}
+                </button>
+              </div>
+            )}
+
             {/* Search bar */}
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />

@@ -281,8 +281,18 @@ function formatSize(b: number) {
 const IS_IOS    = /iPhone|iPad|iPod/i.test(navigator.userAgent);
 const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
+// Convierte un data URL a Blob sin hacer fetch (evita bloqueo CSP connect-src)
+function dataUrlToBlob(dataUrl: string): Blob {
+  const [header, b64] = dataUrl.split(',');
+  const mime = header.match(/:(.*?);/)?.[1] ?? 'image/jpeg';
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
 async function dl(dataUrl: string, name: string): Promise<void> {
-  const blob    = await fetch(dataUrl).then(r => r.blob());
+  const blob    = dataUrlToBlob(dataUrl);
   const blobUrl = URL.createObjectURL(blob);
   if (IS_IOS) {
     // iOS Safari ignora a.download; abrimos en nueva pestaña → pulsación larga → "Guardar en Fotos"
@@ -300,7 +310,7 @@ async function dl(dataUrl: string, name: string): Promise<void> {
 }
 
 async function dataUrlToFile(dataUrl: string, name: string): Promise<File> {
-  const blob = await fetch(dataUrl).then(r => r.blob());
+  const blob = dataUrlToBlob(dataUrl);
   return new File([blob], name, { type: 'image/jpeg' });
 }
 

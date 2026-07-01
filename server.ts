@@ -37,7 +37,7 @@ if (!process.env.JWT_SECRET) {
 const JWT_SECRET = process.env.JWT_SECRET || "";
 
 // ── Genera un session_token único, lo persiste en la BD y devuelve el JWT ──────
-async function mintSessionToken(userId: number, expiresIn = "30d", ip?: string): Promise<string> {
+async function mintSessionToken(userId: number, expiresIn = "7d", ip?: string): Promise<string> {
   const sid = randomUUID();
   await pool.query(
     "UPDATE users SET session_token=$1, last_login_at=NOW(), last_seen_at=NOW(), last_ip=$2 WHERE id=$3",
@@ -78,11 +78,7 @@ function ctrlDecrypt(text: string): string {
   } catch { return ""; }
 }
 
-// Código de invitación para registrarse en el panel de control
-if (!process.env.CONTROL_INVITE_CODE) {
-  console.error("WARNING: CONTROL_INVITE_CODE no configurada. Establécela en Railway.");
-}
-const CONTROL_INVITE_CODE = process.env.CONTROL_INVITE_CODE || "";
+// Registro público deshabilitado — CONTROL_INVITE_CODE eliminado, cuentas solo por admin.
 
 // ─── Auth Middleware ──────────────────────────────────────────────────────────
 
@@ -294,6 +290,15 @@ async function deductTokens(licenseId: number | undefined, amount: number): Prom
   ).catch(() => {});
 }
 
+// ─── Helper: mensajes de error seguros ───────────────────────────────────────
+// En producción nunca exponemos e.message (puede revelar rutas, SQL, stack traces).
+// En desarrollo sí se muestra para facilitar depuración.
+function safeErr(err: any, isAdmin = false): string {
+  if (process.env.NODE_ENV !== 'production') return err?.message || 'Error interno';
+  if (isAdmin) return err?.message || 'Error interno'; // admins ven el detalle
+  return 'Error interno';
+}
+
 // ─── Helper: generate license key ────────────────────────────────────────────
 
 function generateLicenseKey(): string {
@@ -461,8 +466,8 @@ async function startServer() {
         scriptSrc:  ["'self'"],
         styleSrc:   ["'self'", "'unsafe-inline'"],  // Tailwind genera atributos style en runtime
         imgSrc:     ["'self'", "data:", "blob:", "https:"], // data: para imágenes generadas por Gemini
-        connectSrc: ["'self'"],
-        fontSrc:    ["'self'"],
+        connectSrc: ["'self'", "data:"],
+        fontSrc:    ["'self'", "data:"],
         objectSrc:  ["'none'"],
         mediaSrc:   ["'self'", "blob:"],
         frameSrc:   ["'none'"],
@@ -530,6 +535,13 @@ async function startServer() {
     message: { error: "Máximo 5 generaciones por minuto. Espera un momento." }
   });
 
+  // Rate limit para endpoints públicos de academia — 5 solicitudes por IP cada hora
+  const academiaLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    max: 5,
+    message: { error: "Demasiadas solicitudes. Espera una hora e inténtalo de nuevo." }
+  });
+
   // Limit global: 5MB cubre base64 de imágenes JPEG (~3.5MB) + overhead JSON.
   // Endpoints que no necesitan imágenes no pueden ser abusados con payloads masivos.
   app.use(express.json({ limit: "5mb" }));
@@ -538,33 +550,9 @@ async function startServer() {
   // ── Auth Routes ─────────────────────────────────────────────────────────────
 
   // ── Compat aliases para la extensión Chrome (formato antiguo del servidor) ───
-  // La extensión llama a /auth/login y /auth/register (sin /api/) y espera:
-  //   { ok: true, token, user: { email, role }, license: { status } }
-  // Estos aliases adaptan el nuevo servidor al formato que espera login.js
-  app.post("/auth/register", authLimiter, async (req, res) => {
-    const { email, password, hwid, device } = req.body;
-    if (!email || !password)
-      return res.status(400).json({ ok: false, error: "email_and_password_required" });
-    if (password.length < 8)
-      return res.status(400).json({ ok: false, error: "password_too_short" });
-    try {
-      const username = email.split("@")[0].replace(/[^a-zA-Z0-9_]/g, "").slice(0, 20) || "user";
-      const hash = await bcrypt.hash(password, 12);
-      const result = await pool.query(
-        "INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING id, username, email, is_admin",
-        [username, email.trim().toLowerCase(), hash]
-      );
-      const user = result.rows[0];
-      const token = await mintSessionToken(user.id);
-      res.json({
-        ok: true, token,
-        user: { id: user.id, email: user.email, role: user.is_admin ? "admin" : "user", is_admin: user.is_admin, rank: 'normal' },
-        license: { status: "inactive" },
-      });
-    } catch (err: any) {
-      if (err.code === "23505") return res.status(409).json({ ok: false, error: "email_already_registered" });
-      res.status(500).json({ ok: false, error: "server_error" });
-    }
+  // Registro público deshabilitado — solo el admin puede crear cuentas.
+  app.post("/auth/register", authLimiter, (_req, res) => {
+    res.status(403).json({ ok: false, error: "registration_closed" });
   });
 
   // ── Helper: migración lazy desde ak47 ──────────────────────────────────────
@@ -627,7 +615,7 @@ async function startServer() {
       if (!userRow) {
         userRow = await tryLazyMigrateFromAk47(email.trim().toLowerCase(), password) as any;
         if (!userRow) return res.status(401).json({ ok: false, error: "invalid_credentials" });
-        const token = await mintSessionToken(userRow.id, "30d", ip);
+        const token = await mintSessionToken(userRow.id, "7d", ip);
         logActivity(userRow.id, "login", ip);
         const licRes = await pool.query(
           "SELECT type, expires_at, features FROM licenses WHERE user_id=$1 AND is_active=TRUE AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1",
@@ -644,7 +632,7 @@ async function startServer() {
       if (!(await bcrypt.compare(password, userRow.password_hash)))
         return res.status(401).json({ ok: false, error: "invalid_credentials" });
 
-      const token = await mintSessionToken(userRow.id, "30d", ip);
+      const token = await mintSessionToken(userRow.id, "7d", ip);
       logActivity(userRow.id, "login", ip);
       const licRes = await pool.query(
         "SELECT type, expires_at FROM licenses WHERE user_id=$1 AND is_active=TRUE AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1",
@@ -662,29 +650,9 @@ async function startServer() {
     }
   });
 
-  app.post("/api/auth/register", authLimiter, async (req, res) => {
-    const { username, email, password } = req.body;
-    if (!username || !email || !password)
-      return res.status(400).json({ error: "Todos los campos son obligatorios" });
-    if (password.length < 6)
-      return res.status(400).json({ error: "La contraseña debe tener al menos 6 caracteres" });
-
-    try {
-      const hash = await bcrypt.hash(password, 12);
-      const result = await pool.query(
-        "INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING id, username, email, is_admin",
-        [username.trim(), email.trim().toLowerCase(), hash]
-      );
-      const user = result.rows[0];
-      const token = await mintSessionToken(user.id);
-      res.json({ token, user });
-    } catch (err: any) {
-      if (err.code === "23505") {
-        const field = err.detail?.includes("email") ? "email" : "usuario";
-        return res.status(409).json({ error: `Ese ${field} ya está en uso` });
-      }
-      res.status(500).json({ error: "Error al registrar" });
-    }
+  // Registro público deshabilitado — solo el admin puede crear cuentas.
+  app.post("/api/auth/register", authLimiter, (_req, res) => {
+    res.status(403).json({ error: "registration_closed" });
   });
 
   app.post("/api/auth/login", authLimiter, async (req, res) => {
@@ -697,7 +665,7 @@ async function startServer() {
       return res.status(401).json({ error: "Credenciales incorrectas" });
 
     const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip;
-    const token = await mintSessionToken(user.id, "30d", ip);
+    const token = await mintSessionToken(user.id, "7d", ip);
     logActivity(user.id, "login", ip);
     res.json({
       token,
@@ -800,6 +768,29 @@ async function startServer() {
       active_licenses: parseInt(licenses.rows[0].count),
       sessions_24h: parseInt(sessions.rows[0].count),
     });
+  });
+
+  // ── Crear usuario (solo admin) ───────────────────────────────────────────────
+  app.post("/api/admin/users", requireAdmin as any, async (req, res) => {
+    const { username, email, password } = req.body;
+    if (!username || !email || !password)
+      return res.status(400).json({ error: "username, email y password son obligatorios" });
+    if (password.length < 8)
+      return res.status(400).json({ error: "La contraseña debe tener al menos 8 caracteres" });
+    try {
+      const hash = await bcrypt.hash(password, 12);
+      const result = await pool.query(
+        "INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING id, username, email, is_admin",
+        [username.trim().slice(0, 30), email.trim().toLowerCase(), hash]
+      );
+      res.status(201).json({ ok: true, user: result.rows[0] });
+    } catch (err: any) {
+      if (err.code === "23505") {
+        const field = err.detail?.includes("email") ? "email" : "usuario";
+        return res.status(409).json({ error: `Ese ${field} ya está en uso` });
+      }
+      res.status(500).json({ error: "Error al crear usuario" });
+    }
   });
 
   app.get("/api/admin/users", requireAdmin as any, async (req, res) => {
@@ -1161,7 +1152,7 @@ async function startServer() {
         checked_at:      new Date().toISOString(),
       });
     } catch (err: any) {
-      res.status(500).json({ status: "error", error: err.message });
+      res.status(500).json({ status: "error", error: safeErr(err) });
     }
   });
 
@@ -2509,7 +2500,7 @@ IMPORTANTE: queremos el TOTAL del lote y el TOTAL de unidades, NO el precio unit
       res.status(422).json({ error: "Gemini no devolvió JSON parseable: " + lastError });
     } catch (err: any) {
       console.error("OCR invoice error:", err.message);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: safeErr(err) });
     }
   });
 
@@ -2918,7 +2909,7 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
       });
     } catch (err: any) {
       console.error("[OCR] Analyze error:", err.message);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: safeErr(err) });
     }
 
   });
@@ -3032,7 +3023,7 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
       });
     } catch (err: any) {
       Sentry.captureException(err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: safeErr(err) });
     }
   });
 
@@ -3051,7 +3042,7 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
       if (state === "active")    return res.json({ status: "processing" });
       return res.json({ status: "pending" });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: safeErr(err) });
     }
   });
 
@@ -3062,7 +3053,7 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
       const result = await pool.query("SELECT brand, prompt, updated_at FROM tongue_prompts ORDER BY brand");
       res.json(result.rows);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: safeErr(err) });
     }
   });
 
@@ -3081,7 +3072,7 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
       );
       res.json(result.rows[0]);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: safeErr(err) });
     }
   });
 
@@ -3099,7 +3090,7 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
       sql += " ORDER BY brand, size_us";
       const result = await pool.query(sql, params);
       res.json(result.rows);
-    } catch (err: any) { res.status(500).json({ error: err.message }); }
+    } catch (err: any) { res.status(500).json({ error: safeErr(err) }); }
   });
 
   app.post("/api/admin/label-references", requireAdmin as any, async (req: any, res) => {
@@ -3120,14 +3111,14 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
         [brand, size_us || null, label_type, imageBase64 || null, JSON.stringify(codes || {}), notes || null]
       );
       res.json(result.rows[0]);
-    } catch (err: any) { res.status(500).json({ error: err.message }); }
+    } catch (err: any) { res.status(500).json({ error: safeErr(err) }); }
   });
 
   app.delete("/api/admin/label-references/:id", requireAdmin as any, async (req: any, res) => {
     try {
       await pool.query("DELETE FROM label_references WHERE id = $1", [req.params.id]);
       res.json({ ok: true });
-    } catch (err: any) { res.status(500).json({ error: err.message }); }
+    } catch (err: any) { res.status(500).json({ error: safeErr(err) }); }
   });
 
   // Lookup: return the best reference image for a given brand+size (public, for client)
@@ -3146,7 +3137,7 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
       );
       if (!result.rows[0]) return res.json({ found: false });
       res.json({ found: true, ...result.rows[0] });
-    } catch (err: any) { res.status(500).json({ error: err.message }); }
+    } catch (err: any) { res.status(500).json({ error: safeErr(err) }); }
   });
 
   // ── Box Prompts (admin manage / auth read) ────────────────────────────────
@@ -3155,7 +3146,7 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
     try {
       const result = await pool.query("SELECT brand, prompt, updated_at FROM box_prompts ORDER BY brand");
       res.json(result.rows);
-    } catch (err: any) { res.status(500).json({ error: err.message }); }
+    } catch (err: any) { res.status(500).json({ error: safeErr(err) }); }
   });
 
   app.post("/api/admin/box/prompts", requireAdmin as any, async (req: any, res) => {
@@ -3172,7 +3163,7 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
         [brand, prompt ?? ""]
       );
       res.json(result.rows[0]);
-    } catch (err: any) { res.status(500).json({ error: err.message }); }
+    } catch (err: any) { res.status(500).json({ error: safeErr(err) }); }
   });
 
   // ── Box Label Generation ──────────────────────────────────────────────────
@@ -4416,7 +4407,7 @@ Genera la imagen editada.`;
       if (!itemId) return res.status(400).json({ ok: false, error: 'itemId required' });
       res.json({ ok: true, queued: true, itemId });
     } catch (e: any) {
-      res.status(500).json({ ok: false, error: e.message });
+      res.status(500).json({ ok: false, error: safeErr(e) });
     }
   });
 
@@ -4432,7 +4423,7 @@ Genera la imagen editada.`;
       );
       res.json({ ok: true });
     } catch (e: any) {
-      res.status(500).json({ ok: false, error: e.message });
+      res.status(500).json({ ok: false, error: safeErr(e) });
     }
   });
 
@@ -4474,7 +4465,7 @@ Genera la imagen editada.`;
       res.json({ ok: true, account: r.rows[0] });
     } catch (e: any) {
       console.error('[sync-vinted-session] DB error:', e.message);
-      res.status(500).json({ ok: false, error: e.message });
+      res.status(500).json({ ok: false, error: safeErr(e) });
     }
   });
 
@@ -4655,7 +4646,7 @@ Genera la imagen editada.`;
       );
       res.json({ data: rows[0] });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      res.status(500).json({ error: safeErr(e) });
     }
   });
 
@@ -4705,7 +4696,7 @@ Genera la imagen editada.`;
       if (!rows[0]) return res.status(204).end();
       res.json({ data: rows[0] });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      res.status(500).json({ error: safeErr(e) });
     }
   });
 
@@ -4756,7 +4747,7 @@ Genera la imagen editada.`;
       );
       res.json({ ok: true, job: rows[0] ?? null });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      res.status(500).json({ error: safeErr(e) });
     }
   });
 
@@ -4780,7 +4771,7 @@ Genera la imagen editada.`;
       );
       res.status(201).json({ data: rows[0] });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      res.status(500).json({ error: safeErr(e) });
     }
   });
 
@@ -4802,7 +4793,7 @@ Genera la imagen editada.`;
       ]);
       res.json({ data: { workers: wRes.rows, queue: qRes.rows } });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      res.status(500).json({ error: safeErr(e) });
     }
   });
 
@@ -4823,7 +4814,7 @@ Genera la imagen editada.`;
       );
       res.json({ data: rows });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      res.status(500).json({ error: safeErr(e) });
     }
   });
 
@@ -4838,7 +4829,7 @@ Genera la imagen editada.`;
       );
       res.json({ ok: (rowCount ?? 0) > 0 });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      res.status(500).json({ error: safeErr(e) });
     }
   });
 
@@ -4853,7 +4844,7 @@ Genera la imagen editada.`;
       );
       res.json({ ok: (rowCount ?? 0) > 0 });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      res.status(500).json({ error: safeErr(e) });
     }
   });
 
@@ -4869,7 +4860,7 @@ Genera la imagen editada.`;
       );
       res.json({ ok: (rowCount ?? 0) > 0 });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      res.status(500).json({ error: safeErr(e) });
     }
   });
 
@@ -4885,7 +4876,7 @@ Genera la imagen editada.`;
       );
       res.json({ ok: (rowCount ?? 0) > 0 });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      res.status(500).json({ error: safeErr(e) });
     }
   });
 
@@ -4903,7 +4894,7 @@ Genera la imagen editada.`;
       );
       res.json({ ok: (rowCount ?? 0) > 0 });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      res.status(500).json({ error: safeErr(e) });
     }
   });
 
@@ -5004,7 +4995,7 @@ Genera la imagen editada.`;
       res.json({ ok: true, upserted, total: allItems.length });
     } catch (e: any) {
       console.error("[fetch-inventory] error:", e.message);
-      res.status(500).json({ ok: false, error: e.message });
+      res.status(500).json({ ok: false, error: safeErr(e) });
     }
   });
 
@@ -5050,7 +5041,7 @@ Genera la imagen editada.`;
         })),
       });
     } catch (e: any) {
-      res.status(500).json({ ok: false, error: e.message });
+      res.status(500).json({ ok: false, error: safeErr(e) });
     }
   });
 
@@ -5093,7 +5084,7 @@ Genera la imagen editada.`;
       );
       res.json({ ok: true, upserted });
     } catch (e: any) {
-      res.status(500).json({ ok: false, error: e.message });
+      res.status(500).json({ ok: false, error: safeErr(e) });
     }
   });
 
@@ -5636,7 +5627,7 @@ Genera la imagen editada.`;
       );
       res.json({ ok: true, accounts: r.rows });
     } catch (e: any) {
-      res.status(500).json({ ok: false, error: e.message });
+      res.status(500).json({ ok: false, error: safeErr(e) });
     }
   });
 
@@ -5653,7 +5644,7 @@ Genera la imagen editada.`;
       );
       res.json({ ok: true, listings: r.rows });
     } catch (e: any) {
-      res.status(500).json({ ok: false, error: e.message });
+      res.status(500).json({ ok: false, error: safeErr(e) });
     }
   });
 
@@ -5676,7 +5667,7 @@ Genera la imagen editada.`;
       );
       res.json({ ok: true, listing: r.rows[0] });
     } catch (e: any) {
-      res.status(500).json({ ok: false, error: e.message });
+      res.status(500).json({ ok: false, error: safeErr(e) });
     }
   });
 
@@ -5699,7 +5690,7 @@ Genera la imagen editada.`;
       );
       res.json({ ok: true });
     } catch (e: any) {
-      res.status(500).json({ ok: false, error: e.message });
+      res.status(500).json({ ok: false, error: safeErr(e) });
     }
   });
 
@@ -5712,7 +5703,7 @@ Genera la imagen editada.`;
       );
       res.json({ ok: true });
     } catch (e: any) {
-      res.status(500).json({ ok: false, error: e.message });
+      res.status(500).json({ ok: false, error: safeErr(e) });
     }
   });
 
@@ -5731,7 +5722,7 @@ Genera la imagen editada.`;
       if (!lr.rows[0]) return res.status(404).json({ ok: false, error: "Anuncio no encontrado" });
       listing = lr.rows[0];
     } catch (e: any) {
-      return res.status(500).json({ ok: false, error: e.message });
+      return res.status(500).json({ ok: false, error: safeErr(e) });
     }
 
     // Load stored session (most recently updated account)
@@ -5914,7 +5905,7 @@ Genera la imagen editada.`;
       }
       res.json({ ok: true, saved });
     } catch (e: any) {
-      res.status(500).json({ ok: false, error: e.message });
+      res.status(500).json({ ok: false, error: safeErr(e) });
     }
   });
 
@@ -5943,7 +5934,7 @@ Genera la imagen editada.`;
       }
       res.status(404).json({ ok: false, error: "no_pdf" });
     } catch (e: any) {
-      res.status(500).json({ ok: false, error: e.message });
+      res.status(500).json({ ok: false, error: safeErr(e) });
     }
   });
 
@@ -5958,7 +5949,7 @@ Genera la imagen editada.`;
       );
       res.json({ ok: true, accounts: r.rows });
     } catch (e: any) {
-      res.status(500).json({ ok: false, error: e.message });
+      res.status(500).json({ ok: false, error: safeErr(e) });
     }
   });
 
@@ -5987,7 +5978,7 @@ Genera la imagen editada.`;
       ).catch(() => ({ rows: [] }));
       res.json({ ok: true, items: r.rows });
     } catch (e: any) {
-      res.status(500).json({ ok: false, error: e.message });
+      res.status(500).json({ ok: false, error: safeErr(e) });
     }
   });
 
@@ -6026,7 +6017,7 @@ Genera la imagen editada.`;
       );
       res.json({ success: true, account: result.rows[0] });
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      res.status(500).json({ success: false, error: safeErr(e) });
     }
   });
 
@@ -6109,7 +6100,7 @@ Genera la imagen editada.`;
         },
       });
     } catch (e: any) {
-      res.status(500).json({ ok: false, error: e.message });
+      res.status(500).json({ ok: false, error: safeErr(e) });
     }
   });
 
@@ -6175,7 +6166,7 @@ Genera la imagen editada.`;
         },
       });
     } catch (e: any) {
-      res.status(500).json({ ok: false, error: e.message });
+      res.status(500).json({ ok: false, error: safeErr(e) });
     }
   });
 
@@ -6232,7 +6223,7 @@ Genera la imagen editada.`;
         },
       });
     } catch (e: any) {
-      res.status(500).json({ ok: false, error: e.message });
+      res.status(500).json({ ok: false, error: safeErr(e) });
     }
   });
 
@@ -6334,7 +6325,7 @@ ${qaLines}`;
     }
   }
 
-  app.post("/api/academia/identify", async (req, res) => {
+  app.post("/api/academia/identify", academiaLimiter, async (req, res) => {
     const { skool_username, email, phone } = req.body || {};
     if (!skool_username || !email || !phone)
       return res.status(400).json({ error: "Faltan campos obligatorios" });
@@ -6357,7 +6348,7 @@ ${qaLines}`;
     } catch { res.status(500).json({ error: "Error del servidor" }); }
   });
 
-  app.post("/api/academia/answers/:id", async (req, res) => {
+  app.post("/api/academia/answers/:id", academiaLimiter, async (req, res) => {
     const { answers } = req.body || {};
     if (!answers || typeof answers !== "object")
       return res.status(400).json({ error: "Faltan las respuestas" });
