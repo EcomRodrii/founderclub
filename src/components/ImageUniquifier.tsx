@@ -317,6 +317,7 @@ interface ProcessedImage {
   originalName: string;
   originalUrl: string;
   processedUrl: string | null;
+  blobUrl: string | null;
   originalSize: number;
   processedSize: number;
   status: 'processing' | 'done' | 'error';
@@ -341,6 +342,7 @@ export default function ImageUniquifier() {
       originalName: f.name,
       originalUrl: URL.createObjectURL(f),
       processedUrl: null,
+      blobUrl: null,
       originalSize: f.size,
       processedSize: 0,
       status: 'processing',
@@ -352,9 +354,11 @@ export default function ImageUniquifier() {
       const entry = entries[i];
       try {
         const res = await uniquifyImage(arr[i]);
+        const pBlob = await fetch(res.dataUrl).then(r => r.blob());
+        const blobUrl = URL.createObjectURL(pBlob);
         setImages(prev => prev.map(img =>
           img.id === entry.id
-            ? { ...img, processedUrl: res.dataUrl, processedSize: res.size, status: 'done', dimChange: res.dimChange }
+            ? { ...img, processedUrl: res.dataUrl, blobUrl, processedSize: res.size, status: 'done', dimChange: res.dimChange }
             : img
         ));
       } catch (e) {
@@ -375,14 +379,17 @@ export default function ImageUniquifier() {
 
   const reprocess = async (id: string) => {
     const entry = images.find(img => img.id === id); if (!entry) return;
-    setImages(prev => prev.map(img => img.id === id ? { ...img, status: 'processing', processedUrl: null } : img));
+    if (entry.blobUrl) URL.revokeObjectURL(entry.blobUrl);
+    setImages(prev => prev.map(img => img.id === id ? { ...img, status: 'processing', processedUrl: null, blobUrl: null } : img));
     try {
       const blob = await fetch(entry.originalUrl).then(r => r.blob());
       const file = new File([blob], entry.originalName, { type: 'image/jpeg' });
-      const res  = await uniquifyImage(file);
+      const res = await uniquifyImage(file);
+      const pBlob2 = await fetch(res.dataUrl).then(r => r.blob());
+      const blobUrl2 = URL.createObjectURL(pBlob2);
       setImages(prev => prev.map(img =>
         img.id === id
-          ? { ...img, processedUrl: res.dataUrl, processedSize: res.size, status: 'done', dimChange: res.dimChange }
+          ? { ...img, processedUrl: res.dataUrl, blobUrl: blobUrl2, processedSize: res.size, status: 'done', dimChange: res.dimChange }
           : img
       ));
     } catch {
@@ -391,23 +398,30 @@ export default function ImageUniquifier() {
   };
 
   const handleSaveAll = async () => {
-    const done = images.filter(i => i.status === 'done' && i.processedUrl);
+    const done = images.filter(i => i.status === 'done' && i.blobUrl);
     if (!done.length) return;
     setSavingAll(true); setSavedCount(0);
-    const items = done.map((img, idx) => ({
-      dataUrl: img.processedUrl!,
-      filename: `${img.originalName.replace(/\.[^.]+$/, '')}_unique_${idx + 1}.jpg`,
-    }));
-    try { await saveAll(items, (n) => setSavedCount(n)); }
-    finally { setSavingAll(false); }
+    try {
+      for (let i = 0; i < done.length; i++) {
+        const a = document.createElement('a');
+        a.href = done[i].blobUrl!;
+        a.download = `${done[i].originalName.replace(/\.[^.]+$/, '')}_unique_${i + 1}.jpg`;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setSavedCount(i + 1);
+        if (i < done.length - 1) await new Promise(r => setTimeout(r, 200));
+      }
+    } finally { setSavingAll(false); }
   };
 
-  const handleSaveOne = (dataUrl: string, originalName: string) => {
-    dl(dataUrl, originalName.replace(/\.[^.]+$/, '_unique.jpg'));
+  const remove = (id: string) => {
+    const img = images.find(i => i.id === id);
+    if (img?.blobUrl) URL.revokeObjectURL(img.blobUrl);
+    setImages(prev => prev.filter(i => i.id !== id));
   };
-
-  const remove    = (id: string) => setImages(prev => prev.filter(i => i.id !== id));
-  const clearAll  = () => setImages([]);
+  const clearAll = () => {
+    images.forEach(i => { if (i.blobUrl) URL.revokeObjectURL(i.blobUrl); });
+    setImages([]);
+  };
   const doneCount = images.filter(i => i.status === 'done').length;
 
   const saveLabel    = IS_MOBILE ? 'Guardar' : 'Descargar';
@@ -525,13 +539,14 @@ export default function ImageUniquifier() {
                   </div>
                 )}
                 <div className="flex gap-2">
-                  {img.status === 'done' && img.processedUrl && (
-                    <button
-                      onClick={() => handleSaveOne(img.processedUrl!, img.originalName)}
-                      className="flex-1 flex items-center justify-center gap-1.5 bg-acid hover:bg-acid text-black font-bold py-2 rounded-xl text-xs transition"
+                  {img.status === 'done' && img.blobUrl && (
+                    <a
+                      href={img.blobUrl}
+                      download={img.originalName.replace(/\.[^.]+$/, '_unique.jpg')}
+                      className="flex-1 flex items-center justify-center gap-1.5 bg-acid text-black font-bold py-2 rounded-xl text-xs"
                     >
                       <Download className="w-3.5 h-3.5" />{saveLabel}
-                    </button>
+                    </a>
                   )}
                   {(img.status === 'done' || img.status === 'error') && (
                     <button onClick={() => reprocess(img.id)} title="Regenerar versión diferente"

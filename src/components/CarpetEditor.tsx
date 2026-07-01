@@ -14,6 +14,7 @@ interface CarpetJob {
   originalName: string;
   originalUrl: string;
   resultUrl: string | null;
+  blobUrl: string | null;
   originalSize: number;
   status: 'pending' | 'processing' | 'done' | 'error';
   errorMsg?: string;
@@ -176,6 +177,7 @@ export default function CarpetEditor({ token, isPro = false, isAdmin = false }: 
       originalName: f.name,
       originalUrl: URL.createObjectURL(f),
       resultUrl: null,
+      blobUrl: null,
       originalSize: f.size,
       status: 'pending' as const,
     }));
@@ -207,9 +209,11 @@ export default function CarpetEditor({ token, isPro = false, isAdmin = false }: 
 
         // Convertir PNG→JPEG e inyectar el mismo perfil EXIF del lote
         const resultUrl = await applyBatchExif(data.image, batchProfile);
+        const rBlob = await fetch(resultUrl).then(r => r.blob());
+        const blobUrl = URL.createObjectURL(rBlob);
 
         setJobs(prev => prev.map(j =>
-          j.id === job.id ? { ...j, status: 'done', resultUrl } : j
+          j.id === job.id ? { ...j, status: 'done', resultUrl, blobUrl } : j
         ));
       } catch (err: any) {
         setJobs(prev => prev.map(j =>
@@ -233,7 +237,8 @@ export default function CarpetEditor({ token, isPro = false, isAdmin = false }: 
 
   const reprocess = async (id: string) => {
     const job = jobs.find(j => j.id === id); if (!job) return;
-    setJobs(prev => prev.map(j => j.id === id ? { ...j, status: 'processing', resultUrl: null, startedAt: Date.now() } : j));
+    if (job.blobUrl) URL.revokeObjectURL(job.blobUrl);
+    setJobs(prev => prev.map(j => j.id === id ? { ...j, status: 'processing', resultUrl: null, blobUrl: null, startedAt: Date.now() } : j));
     try {
       const res = await fetch(job.originalUrl);
       const blob = await res.blob();
@@ -249,27 +254,40 @@ export default function CarpetEditor({ token, isPro = false, isAdmin = false }: 
       const data = await r.json();
       if (!r.ok) throw new Error(data?.error || `Error ${r.status}`);
       const resultUrl = await applyBatchExif(data.image, generateExifProfile());
-      setJobs(prev => prev.map(j => j.id === id ? { ...j, status: 'done', resultUrl } : j));
+      const rBlob2 = await fetch(resultUrl).then(r2 => r2.blob());
+      const blobUrl2 = URL.createObjectURL(rBlob2);
+      setJobs(prev => prev.map(j => j.id === id ? { ...j, status: 'done', resultUrl, blobUrl: blobUrl2 } : j));
     } catch (err: any) {
       setJobs(prev => prev.map(j => j.id === id ? { ...j, status: 'error', errorMsg: err.message } : j));
     }
   };
 
-  const remove   = (id: string) => setJobs(prev => prev.filter(j => j.id !== id));
-  const clearAll = () => setJobs([]);
+  const remove = (id: string) => {
+    const job = jobs.find(j => j.id === id);
+    if (job?.blobUrl) URL.revokeObjectURL(job.blobUrl);
+    setJobs(prev => prev.filter(j => j.id !== id));
+  };
+  const clearAll = () => {
+    jobs.forEach(j => { if (j.blobUrl) URL.revokeObjectURL(j.blobUrl); });
+    setJobs([]);
+  };
 
-  const doneJobs  = jobs.filter(j => j.status === 'done' && j.resultUrl);
+  const doneJobs  = jobs.filter(j => j.status === 'done' && j.blobUrl);
   const doneCount = doneJobs.length;
 
   const handleSaveAll = async () => {
     if (!doneJobs.length) return;
     setSavingAll(true); setSavedCount(0);
-    const items = doneJobs.map((j, idx) => ({
-      dataUrl: j.resultUrl!,
-      filename: `${j.originalName.replace(/\.[^.]+$/, '')}_alfombra_${idx + 1}.jpg`,
-    }));
-    try { await saveAll(items, n => setSavedCount(n)); }
-    finally { setSavingAll(false); }
+    try {
+      for (let i = 0; i < doneJobs.length; i++) {
+        const a = document.createElement('a');
+        a.href = doneJobs[i].blobUrl!;
+        a.download = `${doneJobs[i].originalName.replace(/\.[^.]+$/, '')}_alfombra_${i + 1}.jpg`;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setSavedCount(i + 1);
+        if (i < doneJobs.length - 1) await new Promise(r => setTimeout(r, 200));
+      }
+    } finally { setSavingAll(false); }
   };
 
   const saveLabel    = IS_MOBILE ? 'Guardar' : 'Descargar';
@@ -554,13 +572,14 @@ export default function CarpetEditor({ token, isPro = false, isAdmin = false }: 
                   </div>
                 )}
                 <div className="flex gap-2">
-                  {job.status === 'done' && job.resultUrl && (
-                    <button
-                      onClick={() => dl(job.resultUrl!, job.originalName.replace(/\.[^.]+$/, '_alfombra.jpg'))}
-                      className="flex-1 flex items-center justify-center gap-1.5 bg-[#d4ff00] hover:bg-[#c8f000] text-black font-bold py-2 rounded-xl text-xs transition"
+                  {job.status === 'done' && job.blobUrl && (
+                    <a
+                      href={job.blobUrl}
+                      download={job.originalName.replace(/\.[^.]+$/, '_alfombra.jpg')}
+                      className="flex-1 flex items-center justify-center gap-1.5 bg-[#d4ff00] text-black font-bold py-2 rounded-xl text-xs"
                     >
                       <Download className="w-3.5 h-3.5" />{saveLabel}
-                    </button>
+                    </a>
                   )}
                   {(job.status === 'done' || job.status === 'error') && (
                     <button
