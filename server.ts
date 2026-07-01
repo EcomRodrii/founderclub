@@ -31,10 +31,11 @@ if (process.env.SENTRY_DSN) {
   process.on("unhandledRejection", (err) => Sentry.captureException(err));
 }
 
-if (!process.env.JWT_SECRET) {
-  console.error("CRITICAL: JWT_SECRET no configurada. Cualquiera con el código puede firmar tokens de admin. Establécela en Railway.");
+if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
+  console.error("FATAL: JWT_SECRET no configurada o demasiado corta (mín 32 chars). Genera una con: openssl rand -hex 32");
+  process.exit(1);
 }
-const JWT_SECRET = process.env.JWT_SECRET || "";
+const JWT_SECRET = process.env.JWT_SECRET;
 
 // ── Genera un session_token único, lo persiste en la BD y devuelve el JWT ──────
 async function mintSessionToken(userId: number, expiresIn = "7d", ip?: string): Promise<string> {
@@ -53,10 +54,11 @@ function logActivity(userId: number, action: string, ip?: string) {
 }
 
 // ── Control Panel: cifrado AES-256 para IBAN y contraseñas Vinted ─────────────
-if (!process.env.CONTROL_ENCRYPTION_KEY) {
-  console.error("CRITICAL: CONTROL_ENCRYPTION_KEY no está configurada en las variables de entorno. Establécela en Railway antes del próximo deploy.");
+if (!process.env.CONTROL_ENCRYPTION_KEY || process.env.CONTROL_ENCRYPTION_KEY.length < 32) {
+  console.error("FATAL: CONTROL_ENCRYPTION_KEY no configurada o demasiado corta (mín 32 chars). Genera una con: openssl rand -hex 32");
+  process.exit(1);
 }
-const CTRL_KEY = (process.env.CONTROL_ENCRYPTION_KEY || "").slice(0, 32).padEnd(32, "0");
+const CTRL_KEY = process.env.CONTROL_ENCRYPTION_KEY.slice(0, 32);
 
 function ctrlEncrypt(text: string): string {
   if (!text) return "";
@@ -90,7 +92,7 @@ async function requireAuth(req: AuthRequest, res: Response, next: NextFunction) 
   const token = req.headers.authorization?.replace("Bearer ", "");
   if (!token) return res.status(401).json({ error: "No autenticado" });
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as any;
+    const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ["HS256"] }) as any;
 
     // ── Standard user JWT ──
     if (decoded.id) {
@@ -703,9 +705,10 @@ async function startServer() {
       [user.id]
     );
     const lic = licResult.rows[0] || null;
-    // Admins tienen acceso total
     if (lic && user.is_admin) lic.features = ['all'];
-    res.json({ user, license: lic });
+    // Nunca exponer session_token ni password_hash al cliente
+    const { session_token: _st, password_hash: _ph, ...safeUser } = user as any;
+    res.json({ user: safeUser, license: lic });
   });
 
   // ── Token de generación ──────────────────────────────────────────────────────
@@ -2309,22 +2312,9 @@ async function startServer() {
   // CONTROL PANEL — Gestión de cuentas Vinted
   // ══════════════════════════════════════════════
 
-  // Registro exclusivo con código de invitación
-  app.post("/api/control/register", authLimiter, async (req, res) => {
-    const { username, email, password } = req.body;
-    if (!username || !email || !password)
-      return res.status(400).json({ error: "Faltan campos obligatorios" });
-    if (password.length < 8)
-      return res.status(400).json({ error: "Contraseña mínimo 8 caracteres" });
-    const exists = await pool.query("SELECT id FROM users WHERE email=$1", [email]);
-    if (exists.rows[0]) return res.status(409).json({ error: "Email ya registrado" });
-    const hash = await bcrypt.hash(password, 12);
-    const r = await pool.query(
-      "INSERT INTO users (username, email, password_hash) VALUES ($1,$2,$3) RETURNING id, username, email",
-      [username, email, hash]
-    );
-    const token = jwt.sign({ id: r.rows[0].id }, JWT_SECRET, { expiresIn: "7d" });
-    res.json({ token, user: r.rows[0] });
+  // Registro del Control Panel deshabilitado — solo admin puede crear cuentas.
+  app.post("/api/control/register", authLimiter, (_req, res) => {
+    res.status(403).json({ error: "registration_closed" });
   });
 
   // Helper para descifrar una fila
@@ -3524,7 +3514,7 @@ Genera la imagen editada.`;
     if (!token) return res.status(401).end();
     let userId: string;
     try {
-      const decoded = jwt.verify(token, JWT_SECRET) as any;
+      const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ["HS256"] }) as any;
       const r = await pool.query("SELECT id FROM users WHERE id=$1", [decoded.id]);
       if (!r.rows[0]) return res.status(401).end();
       userId = String(r.rows[0].id);
@@ -3690,7 +3680,7 @@ Genera la imagen editada.`;
     // 1. Verificar JWT
     let decoded: any;
     try {
-      decoded = jwt.verify(token, JWT_SECRET) as any;
+      decoded = jwt.verify(token, JWT_SECRET, { algorithms: ["HS256"] }) as any;
     } catch {
       return res.status(401).json({ ok: false, error: "invalid_token" });
     }
@@ -3757,7 +3747,7 @@ Genera la imagen editada.`;
     if (!token) return res.status(400).json({ ok: false, error: "token_required" });
 
     try {
-      const decoded = jwt.verify(token, JWT_SECRET) as any;
+      const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ["HS256"] }) as any;
       if (decoded?.sid) {
         await pool.query(
           "UPDATE extension_sessions SET revoked = TRUE WHERE id = $1",
@@ -3788,7 +3778,7 @@ Genera la imagen editada.`;
     // Verificar JWT
     let decoded: any;
     try {
-      decoded = jwt.verify(token, JWT_SECRET) as any;
+      decoded = jwt.verify(token, JWT_SECRET, { algorithms: ["HS256"] }) as any;
     } catch {
       return res.status(401).json({ ok: false, valid: false, allowed: false, error: "invalid_token" });
     }
@@ -3912,7 +3902,7 @@ Genera la imagen editada.`;
     const bearerToken = req.headers.authorization?.replace("Bearer ", "");
     if (bearerToken) {
       try {
-        const decoded = jwt.verify(bearerToken, JWT_SECRET) as any;
+        const decoded = jwt.verify(bearerToken, JWT_SECRET, { algorithms: ["HS256"] }) as any;
         const result = await pool.query("SELECT id, username, email, is_admin FROM users WHERE id = $1", [decoded.id]);
         if (result.rows[0]) {
           const user = result.rows[0];
@@ -3934,7 +3924,7 @@ Genera la imagen editada.`;
     // Si parece JWT, verificarlo como Bearer
     if (keyStr.startsWith("ey") && keyStr.includes(".")) {
       try {
-        const decoded = jwt.verify(keyStr, JWT_SECRET) as any;
+        const decoded = jwt.verify(keyStr, JWT_SECRET, { algorithms: ["HS256"] }) as any;
         const result = await pool.query("SELECT id, username, email, is_admin FROM users WHERE id = $1", [decoded.id]);
         if (result.rows[0]) {
           const user = result.rows[0];
@@ -3979,7 +3969,7 @@ Genera la imagen editada.`;
     const key = req.body?.key || req.body?.license_key || req.headers["x-license-key"] || (req.query as any)?.key || "";
     if (token) {
       try {
-        const decoded = jwt.verify(token, JWT_SECRET) as any;
+        const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ["HS256"] }) as any;
         const u = await pool.query("SELECT is_blocked FROM users WHERE id=$1", [decoded.id]);
         if (!u.rows[0] || u.rows[0].is_blocked) return false;
         return true;
@@ -5886,8 +5876,24 @@ Genera la imagen editada.`;
       }
       let saved = 0;
       for (const e of etiquetas.slice(0, 50)) {
-        const { transaccion_externa, pdf_base64, label_url, carrier } = e;
+        let { transaccion_externa, pdf_base64, label_url, carrier } = e;
         if (!transaccion_externa) continue;
+
+        // Si no viene pdf_base64 pero sí label_url, descargamos el PDF server-side
+        // para no depender de URLs firmadas de Vinted que expiran en 1-24h.
+        if (!pdf_base64 && label_url) {
+          try {
+            const pdfRes = await fetch(String(label_url), {
+              headers: { 'Accept': 'application/pdf,*/*' },
+              signal: AbortSignal.timeout(10_000),
+            });
+            if (pdfRes.ok) {
+              const buf = Buffer.from(await pdfRes.arrayBuffer());
+              pdf_base64 = buf.toString('base64');
+            }
+          } catch (_) {}
+        }
+
         await pool.query(
           `INSERT INTO order_labels
              (user_id, transaction_id, label_url, label_carrier, carrier, pdf_data, status, found_at)
@@ -5929,10 +5935,24 @@ Genera la imagen editada.`;
         return res.send(buf);
       }
       if (row.label_url) {
-        // Redirect to original URL as fallback
-        return res.redirect(302, row.label_url);
+        // Validar dominio antes del redirect para evitar open redirect
+        const ALLOWED_LABEL_DOMAINS = new Set([
+          'vinted.es', 'vinted.fr', 'vinted.de', 'vinted.com', 'vinted.pl',
+          'colissimo.fr', 'chronopost.fr', 'laposte.fr',
+          'inpost.pl', 'dpd.com', 'dhl.com', 'ups.com',
+        ]);
+        try {
+          const urlObj = new URL(row.label_url);
+          const host = urlObj.hostname.replace(/^www\./, '');
+          if (!ALLOWED_LABEL_DOMAINS.has(host)) {
+            return res.status(400).json({ ok: false, error: "invalid_label_domain" });
+          }
+          return res.redirect(302, row.label_url);
+        } catch {
+          return res.status(400).json({ ok: false, error: "invalid_label_url" });
+        }
       }
-      res.status(404).json({ ok: false, error: "no_pdf" });
+      res.status(410).json({ ok: false, error: "pdf_expired" });
     } catch (e: any) {
       res.status(500).json({ ok: false, error: safeErr(e) });
     }
