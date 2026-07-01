@@ -16,7 +16,7 @@ interface AdminPanelProps {
   onBack?: () => void;
 }
 
-type Tab = 'stats' | 'users' | 'activity' | 'licenses' | 'sessions' | 'prompts' | 'references' | 'monitor' | 'academia' | 'mfa';
+type Tab = 'panel' | 'users' | 'academia' | 'actividad' | 'licenses' | 'contenido' | 'sistema';
 
 const ACADEMIA_QUESTIONS: Record<string, string> = {
   q1:'¿En qué punto estás ahora mismo con la reventa?',q2:'Facturación mensual',q3:'¿Qué estás vendiendo?',
@@ -378,13 +378,15 @@ function UserDrawer({ user, token, onClose, onRefresh }: {
 // ─── AdminPanel ───────────────────────────────────────────────────────────────
 
 export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps) {
-  const [tab, setTab] = useState<Tab>('stats');
+  const [tab, setTab] = useState<Tab>('panel');
   const [stats, setStats] = useState<any>(null);
   const [users, setUsers] = useState<any[]>([]);
   const [activity, setActivity] = useState<any[]>([]);
   const [licenses, setLicenses] = useState<any[]>([]);
   const [sessions, setSessions] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [activTab, setActivTab] = useState<'activity' | 'sessions'>('activity');
+  const [contentTab, setContentTab] = useState<'prompts' | 'references'>('prompts');
 
   // Generate form
   const [genType, setGenType] = useState('monthly');
@@ -462,17 +464,29 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
   const loadTab = useCallback(async (t: Tab, search?: string) => {
     setLoading(true);
     try {
-      if (t === 'stats') setStats(await client.get('/api/admin/stats'));
+      if (t === 'panel') {
+        const [statsData, monitorData] = await Promise.all([
+          client.get('/api/admin/stats'),
+          client.get('/api/admin/monitor'),
+        ]);
+        setStats(statsData);
+        setMonitor(monitorData);
+      }
       else if (t === 'users') {
         const q = search !== undefined ? search : userSearch;
         const url = q ? `/api/admin/users?search=${encodeURIComponent(q)}` : '/api/admin/users';
         setUsers(await client.get(url));
       }
-      else if (t === 'activity') setActivity(await client.get('/api/admin/activity'));
-      else if (t === 'monitor') setMonitor(await client.get('/api/admin/monitor'));
+      else if (t === 'actividad') {
+        const [actData, sessData] = await Promise.all([
+          client.get('/api/admin/activity'),
+          client.get('/api/admin/sessions'),
+        ]);
+        setActivity(actData);
+        setSessions(sessData);
+      }
       else if (t === 'licenses') setLicenses(await client.get('/api/admin/licenses'));
-      else if (t === 'sessions') setSessions(await client.get('/api/admin/sessions'));
-      else if (t === 'prompts') {
+      else if (t === 'contenido') {
         const [tongueRows, boxRows]: [any[], any[]] = await Promise.all([
           client.get(E.TP),
           client.get(E.BP),
@@ -483,8 +497,6 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
         boxRows.forEach((r: any) => { if (BRANDS.includes(r.brand as Brand)) bm[r.brand as Brand] = r.prompt; });
         setPrompts(prev => ({ ...prev, ...tm }));
         setBoxPrompts(prev => ({ ...prev, ...bm }));
-      }
-      else if (t === 'references') {
         setRefs(await client.get('/api/admin/label-references'));
       }
       else if (t === 'academia') {
@@ -571,7 +583,7 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
       setNewRefImage(null);
       setNewRefSize('');
       setNewRefNotes('');
-      await loadTab('references');
+      await loadTab('contenido');
     } finally {
       setRefUploading(false);
     }
@@ -635,18 +647,6 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
     finally { setAcadSummaryLoading(false); }
   };
 
-  const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
-    { id: 'monitor',    label: 'Monitor',     icon: <BarChart3 className="w-4 h-4" /> },
-    { id: 'stats',      label: 'Stats',       icon: <Activity className="w-4 h-4" /> },
-    { id: 'users',      label: 'Usuarios',    icon: <Users className="w-4 h-4" /> },
-    { id: 'activity',   label: 'Actividad',   icon: <Clock className="w-4 h-4" /> },
-    { id: 'licenses',   label: 'Licencias',   icon: <Key className="w-4 h-4" /> },
-    { id: 'sessions',   label: 'Sesiones',    icon: <Globe className="w-4 h-4" /> },
-    { id: 'prompts',    label: 'Prompts',     icon: <FileText className="w-4 h-4" /> },
-    { id: 'references', label: 'Referencias', icon: <ImagePlus className="w-4 h-4" /> },
-    { id: 'academia',   label: '🎓 Academia', icon: null },
-    { id: 'mfa',        label: '🔐 MFA',      icon: null },
-  ];
 
   async function createUser() {
     const { username, email, password } = newUserForm;
@@ -695,43 +695,168 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
       </div>
 
       <div className="max-w-6xl mx-auto p-6">
-        {/* Tabs */}
-        <div className="flex gap-2 mb-6 overflow-x-auto pb-1">
-          {tabs.map(t => (
-            <button
-              key={t.id}
-              onClick={() => setTab(t.id)}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition ${
-                tab === t.id ? 'bg-violet-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-700'
-              }`}
-            >
-              {t.icon} {t.label}
-            </button>
+        {/* Navegación agrupada */}
+        <div className="mb-6 bg-zinc-900 border border-zinc-800 rounded-2xl p-4 space-y-3">
+          {([
+            { group: 'Resumen', items: [
+              { id: 'panel' as Tab, label: 'Panel', icon: <BarChart3 className="w-3.5 h-3.5" /> },
+            ]},
+            { group: 'Comunidad', items: [
+              { id: 'users' as Tab, label: 'Usuarios', icon: <Users className="w-3.5 h-3.5" /> },
+              { id: 'academia' as Tab, label: 'Academia', icon: <Crown className="w-3.5 h-3.5" /> },
+              { id: 'actividad' as Tab, label: 'Actividad', icon: <Activity className="w-3.5 h-3.5" /> },
+            ]},
+            { group: 'Gestión', items: [
+              { id: 'licenses' as Tab, label: 'Licencias', icon: <Key className="w-3.5 h-3.5" /> },
+              { id: 'contenido' as Tab, label: 'Contenido', icon: <FileText className="w-3.5 h-3.5" /> },
+            ]},
+            { group: 'Sistema', items: [
+              { id: 'sistema' as Tab, label: 'Sistema', icon: <Shield className="w-3.5 h-3.5" /> },
+            ]},
+          ] as { group: string; items: { id: Tab; label: string; icon: React.ReactNode }[] }[]).map(({ group, items }) => (
+            <div key={group} className="flex items-center gap-3">
+              <span className="text-[9px] font-bold text-zinc-600 uppercase tracking-widest shrink-0 w-16 text-right">{group}</span>
+              <div className="h-px bg-zinc-800 hidden sm:block" style={{ width: 1, alignSelf: 'stretch', flexShrink: 0 }} />
+              <div className="flex gap-1.5 flex-wrap flex-1">
+                {items.map(t => (
+                  <button
+                    key={t.id}
+                    onClick={() => setTab(t.id)}
+                    className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-sm font-medium transition ${
+                      tab === t.id
+                        ? 'bg-violet-600 text-white shadow-sm'
+                        : 'bg-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-700'
+                    }`}
+                  >
+                    {t.icon} {t.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           ))}
-          <button
-            onClick={() => loadTab(tab)}
-            className="ml-auto flex items-center gap-2 px-3 py-2 rounded-xl text-sm text-zinc-400 hover:text-white bg-zinc-800 hover:bg-zinc-700 transition"
-          >
-            <RefreshCcw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-          </button>
+          <div className="flex justify-end border-t border-zinc-800 pt-2.5">
+            <button
+              onClick={() => loadTab(tab)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs text-zinc-400 hover:text-white bg-zinc-800 hover:bg-zinc-700 transition"
+            >
+              <RefreshCcw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+              {loading ? 'Cargando…' : 'Actualizar'}
+            </button>
+          </div>
         </div>
 
-        {/* Stats */}
-        {tab === 'stats' && stats && (
-          <div className="grid grid-cols-3 gap-4">
-            {[
-              { label: 'Usuarios totales', value: stats.total_users, icon: <Users className="w-5 h-5 text-violet-400" /> },
-              { label: 'Licencias activas', value: stats.active_licenses, icon: <Key className="w-5 h-5 text-acid" /> },
-              { label: 'Sesiones (24h)', value: stats.sessions_24h, icon: <Activity className="w-5 h-5 text-blue-400" /> },
-            ].map(s => (
-              <div key={s.label} className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6">
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-sm text-zinc-400">{s.label}</span>
-                  {s.icon}
-                </div>
-                <p className="text-3xl font-bold">{s.value}</p>
+        {/* Panel = Stats + Monitor */}
+        {tab === 'panel' && (
+          <div className="space-y-5">
+            {/* Métricas clave */}
+            {stats && (
+              <div className="grid grid-cols-3 gap-3">
+                {[
+                  { label: 'Usuarios totales', value: stats.total_users, icon: <Users className="w-5 h-5 text-violet-400" /> },
+                  { label: 'Licencias activas', value: stats.active_licenses, icon: <Key className="w-5 h-5 text-acid" /> },
+                  { label: 'Sesiones (24h)', value: stats.sessions_24h, icon: <Activity className="w-5 h-5 text-blue-400" /> },
+                ].map(s => (
+                  <div key={s.label} className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs text-zinc-400">{s.label}</span>
+                      {s.icon}
+                    </div>
+                    <p className="text-3xl font-bold">{s.value ?? '—'}</p>
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
+            {/* Estado del servidor */}
+            {monitor ? (
+              <>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className={`bg-zinc-900 border rounded-2xl p-4 flex flex-col gap-1 ${monitor.status === 'ok' ? 'border-green-500/30' : 'border-red-500/30'}`}>
+                    <span className="text-xs text-zinc-500 uppercase tracking-wider">Estado</span>
+                    <span className={`text-lg font-bold ${monitor.status === 'ok' ? 'text-green-400' : 'text-red-400'}`}>
+                      {monitor.status === 'ok' ? '✅ ONLINE' : '❌ ERROR'}
+                    </span>
+                    <span className="text-xs text-zinc-500">DB {monitor.db_latency_ms}ms</span>
+                  </div>
+                  <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 flex flex-col gap-1">
+                    <span className="text-xs text-zinc-500 uppercase tracking-wider">Uptime</span>
+                    <span className="text-lg font-bold text-white font-mono">
+                      {(() => {
+                        const s = monitor.uptime_s || 0;
+                        const h = Math.floor(s / 3600);
+                        const m = Math.floor((s % 3600) / 60);
+                        return h > 0 ? `${h}h ${m}m` : `${m}m`;
+                      })()}
+                    </span>
+                    <span className="text-xs text-zinc-500">Node {monitor.node_version}</span>
+                  </div>
+                  <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 flex flex-col gap-1">
+                    <span className="text-xs text-zinc-500 uppercase tracking-wider flex items-center gap-1"><Cpu className="w-3.5 h-3.5" /> RAM</span>
+                    <span className="text-lg font-bold text-white font-mono">{monitor.mem_mb?.rss} MB</span>
+                    <span className="text-xs text-zinc-500">Heap {monitor.mem_mb?.heapUsed}/{monitor.mem_mb?.heapTotal} MB</span>
+                  </div>
+                  <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 flex flex-col gap-1">
+                    <span className="text-xs text-zinc-500 uppercase tracking-wider flex items-center gap-1"><Database className="w-3.5 h-3.5" /> DB Latencia</span>
+                    <span className={`text-lg font-bold font-mono ${Number(monitor.db_latency_ms) < 50 ? 'text-green-400' : Number(monitor.db_latency_ms) < 200 ? 'text-yellow-400' : 'text-red-400'}`}>
+                      {monitor.db_latency_ms}ms
+                    </span>
+                    <span className="text-xs text-zinc-500">PostgreSQL</span>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                  {[
+                    { label: 'Usuarios totales', value: monitor.metrics?.total_users, icon: <Users className="w-4 h-4 text-violet-400" /> },
+                    { label: 'Activos (24h)', value: monitor.metrics?.active_users_24h, icon: <Activity className="w-4 h-4 text-green-400" /> },
+                    { label: 'Nuevos hoy', value: monitor.metrics?.new_users_today, icon: <TrendingUp className="w-4 h-4 text-blue-400" /> },
+                    { label: 'Generaciones hoy', value: monitor.metrics?.generations_today, icon: <Zap className="w-4 h-4 text-acid" /> },
+                    { label: 'Generaciones total', value: monitor.metrics?.generations_total, icon: <BarChart3 className="w-4 h-4 text-zinc-400" /> },
+                    { label: 'Errores proxy (24h)', value: monitor.metrics?.errors_proxy_24h, icon: <AlertTriangle className="w-4 h-4 text-orange-400" /> },
+                  ].map(m => (
+                    <div key={m.label} className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-xl bg-zinc-800 flex items-center justify-center shrink-0">{m.icon}</div>
+                      <div>
+                        <p className="text-xs text-zinc-500">{m.label}</p>
+                        <p className="text-xl font-bold text-white">{m.value ?? '—'}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {monitor.top_users_today?.length > 0 && (
+                  <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden">
+                    <div className="px-5 py-3 border-b border-zinc-800 flex items-center gap-2">
+                      <TrendingUp className="w-4 h-4 text-acid" />
+                      <h3 className="text-sm font-semibold">Top usuarios hoy</h3>
+                    </div>
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-zinc-800">
+                          <th className="text-left text-xs text-zinc-500 px-5 py-2">#</th>
+                          <th className="text-left text-xs text-zinc-500 px-4 py-2">Usuario</th>
+                          <th className="text-right text-xs text-zinc-500 px-5 py-2">Generaciones</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {monitor.top_users_today.map((u: any, i: number) => (
+                          <tr key={u.user_id} className="border-b border-zinc-800/60 hover:bg-zinc-800/20">
+                            <td className="px-5 py-2 text-zinc-500 text-xs font-mono">{i + 1}</td>
+                            <td className="px-4 py-2 font-medium">{u.username || `ID ${u.user_id}`}</td>
+                            <td className="px-5 py-2 text-right">
+                              <span className="font-mono font-bold text-acid">{u.count}</span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                <p className="text-xs text-zinc-600 text-right">
+                  Actualizado: {new Date(monitor.checked_at).toLocaleTimeString('es-ES')}
+                </p>
+              </>
+            ) : loading ? (
+              <div className="flex justify-center py-8 text-zinc-500 text-sm gap-2">
+                <RefreshCcw className="w-4 h-4 animate-spin" /> Cargando métricas…
+              </div>
+            ) : null}
           </div>
         )}
 
@@ -859,27 +984,81 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
           </div>
         )}
 
-        {/* Activity feed */}
-        {tab === 'activity' && (
-          <div className="space-y-2">
-            <p className="text-xs text-zinc-500 mb-3">Últimas 300 acciones · se actualiza al recargar</p>
-            <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden">
-              {activity.length === 0 && !loading && (
-                <p className="text-center text-zinc-600 py-8 text-sm">Sin actividad todavía. Se registra a partir del próximo login.</p>
-              )}
-              {activity.map(a => {
-                const { label, color } = actionLabel(a.action);
-                return (
-                  <div key={a.id} className="flex items-center gap-4 px-5 py-3 border-b border-zinc-800/60 hover:bg-zinc-800/20 transition text-sm">
-                    <span className="text-zinc-600 text-xs w-32 shrink-0">{timeAgo(a.created_at)}</span>
-                    <span className="font-medium text-white w-28 shrink-0 truncate">{a.username}</span>
-                    <span className="text-zinc-500 text-xs w-36 shrink-0 truncate">{a.email}</span>
-                    <span className={`font-medium shrink-0 ${color}`}>{label}</span>
-                    <span className="text-zinc-600 text-xs ml-auto font-mono">{a.ip || '—'}</span>
-                  </div>
-                );
-              })}
+        {/* Actividad = Feed de acciones + Sesiones */}
+        {tab === 'actividad' && (
+          <div className="space-y-4">
+            {/* Inner tabs */}
+            <div className="flex gap-2">
+              {([
+                { id: 'activity' as const, label: 'Feed de acciones', icon: <Activity className="w-3.5 h-3.5" /> },
+                { id: 'sessions' as const, label: 'Sesiones activas', icon: <Globe className="w-3.5 h-3.5" /> },
+              ]).map(t => (
+                <button
+                  key={t.id}
+                  onClick={() => setActivTab(t.id)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                    activTab === t.id
+                      ? 'bg-zinc-700 text-white'
+                      : 'bg-zinc-800/60 text-zinc-500 hover:text-zinc-300'
+                  }`}
+                >
+                  {t.icon} {t.label}
+                </button>
+              ))}
             </div>
+            {activTab === 'activity' && (
+              <div className="space-y-2">
+                <p className="text-xs text-zinc-500">Últimas 300 acciones · se actualiza al recargar</p>
+                <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden">
+                  {activity.length === 0 && !loading && (
+                    <p className="text-center text-zinc-600 py-8 text-sm">Sin actividad todavía. Se registra a partir del próximo login.</p>
+                  )}
+                  {activity.map(a => {
+                    const { label, color } = actionLabel(a.action);
+                    return (
+                      <div key={a.id} className="flex items-center gap-4 px-5 py-3 border-b border-zinc-800/60 hover:bg-zinc-800/20 transition text-sm">
+                        <span className="text-zinc-600 text-xs w-32 shrink-0">{timeAgo(a.created_at)}</span>
+                        <span className="font-medium text-white w-28 shrink-0 truncate">{a.username}</span>
+                        <span className="text-zinc-500 text-xs w-36 shrink-0 truncate">{a.email}</span>
+                        <span className={`font-medium shrink-0 ${color}`}>{label}</span>
+                        <span className="text-zinc-600 text-xs ml-auto font-mono">{a.ip || '—'}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            {activTab === 'sessions' && (
+              <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-x-auto">
+                <table className="w-full text-sm min-w-[600px]">
+                  <thead>
+                    <tr className="border-b border-zinc-800">
+                      {['Usuario', 'IP', 'HWID', 'Creada', 'Última actividad'].map(h => (
+                        <th key={h} className="text-left text-xs text-zinc-500 font-medium px-4 py-3">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sessions.map(s => (
+                      <tr key={s.id} className="border-b border-zinc-800/60 hover:bg-zinc-800/30 transition">
+                        <td className="px-4 py-3 font-medium text-sm">{s.username || '—'}</td>
+                        <td className="px-4 py-3 text-xs text-zinc-400 font-mono">{s.ip || '—'}</td>
+                        <td className="px-4 py-3 text-xs text-zinc-500 max-w-[120px] truncate" title={s.hwid || ''}>
+                          <Fingerprint className="inline w-3 h-3 mr-1" />{truncate(s.hwid, 12)}
+                        </td>
+                        <td className="px-4 py-3 text-xs text-zinc-400">{formatDate(s.created_at)}</td>
+                        <td className="px-4 py-3 text-xs text-zinc-400 flex items-center gap-1">
+                          <Clock className="w-3 h-3" />{formatDate(s.last_seen)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {sessions.length === 0 && !loading && (
+                  <p className="text-center text-zinc-600 py-8 text-sm">Sin sesiones registradas</p>
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -1057,22 +1236,6 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
                       </td>
 
                       <td className="px-4 py-3">
-                        <button
-                          onClick={async () => {
-                            const newFeatures = hasAcademia ? ['photos'] : ['photos', 'academia'];
-                            await client.patch(`/api/admin/licenses/${l.id}/features`, { features: newFeatures });
-                            loadTab('licenses');
-                          }}
-                          className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-all ${
-                            hasAcademia
-                              ? 'bg-amber-500/10 border-amber-500/30 text-amber-400 hover:bg-amber-500/20'
-                              : 'bg-zinc-800 border-zinc-700 text-zinc-500 hover:border-zinc-500 hover:text-zinc-300'
-                          }`}
-                        >
-                          {hasAcademia ? '🎓 Academia' : '👻 Solo Fantasma'}
-                        </button>
-                      </td>
-                      <td className="px-4 py-3">
                         <span className={`text-xs font-medium ${l.is_active ? 'text-acid' : 'text-red-400'}`}>
                           {l.is_active ? 'Sí' : 'No'}
                         </span>
@@ -1114,9 +1277,30 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
           </div>
         )}
 
-        {/* Prompts */}
-        {tab === 'prompts' && (
+        {/* Contenido = Prompts + Referencias */}
+        {tab === 'contenido' && (
           <div className="space-y-4">
+            {/* Inner tabs */}
+            <div className="flex gap-2">
+              {([
+                { id: 'prompts' as const, label: 'Prompts IA', icon: <FileText className="w-3.5 h-3.5" /> },
+                { id: 'references' as const, label: 'Referencias', icon: <ImagePlus className="w-3.5 h-3.5" /> },
+              ]).map(t => (
+                <button
+                  key={t.id}
+                  onClick={() => setContentTab(t.id)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                    contentTab === t.id
+                      ? 'bg-zinc-700 text-white'
+                      : 'bg-zinc-800/60 text-zinc-500 hover:text-zinc-300'
+                  }`}
+                >
+                  {t.icon} {t.label}
+                </button>
+              ))}
+            </div>
+            {contentTab === 'prompts' && (
+            <div className="space-y-4">
             <p className="text-sm text-zinc-400">
               Prompts personalizados por marca. Se aplican automáticamente a todos los usuarios al generar.
             </p>
@@ -1165,12 +1349,10 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
                 </div>
               </motion.div>
             ))}
-          </div>
-        )}
-
-        {/* References */}
-        {tab === 'references' && (
-          <div className="space-y-6">
+            </div>
+            )}
+            {contentTab === 'references' && (
+            <div className="space-y-6">
             {/* Upload form */}
             <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 space-y-4">
               <h3 className="font-semibold text-sm flex items-center gap-2">
@@ -1253,7 +1435,7 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
             <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-x-auto">
               <div className="px-5 py-3 border-b border-zinc-800 flex items-center justify-between">
                 <h3 className="text-sm font-semibold flex items-center gap-2"><Hash className="w-4 h-4 text-zinc-500" /> Referencias almacenadas ({refs.length})</h3>
-                <button onClick={() => loadTab('references')} className="text-zinc-500 hover:text-zinc-300 transition">
+                <button onClick={() => loadTab('contenido')} className="text-zinc-500 hover:text-zinc-300 transition">
                   <RefreshCcw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
                 </button>
               </div>
@@ -1292,156 +1474,11 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
                 </tbody>
               </table>
             </div>
-          </div>
-        )}
-
-        {/* Monitor */}
-        {tab === 'monitor' && (
-          <div className="space-y-4">
-            {!monitor && !loading && (
-              <div className="flex justify-center py-12">
-                <button onClick={() => loadTab('monitor')} className="flex items-center gap-2 px-5 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl text-sm transition">
-                  <RefreshCcw className="w-4 h-4" /> Cargar métricas
-                </button>
-              </div>
-            )}
-            {loading && (
-              <div className="flex justify-center py-12 text-zinc-500 text-sm gap-2">
-                <RefreshCcw className="w-4 h-4 animate-spin" /> Obteniendo métricas…
-              </div>
-            )}
-            {monitor && (
-              <>
-                {/* Status + Uptime row */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  <div className={`bg-zinc-900 border rounded-2xl p-4 flex flex-col gap-1 ${monitor.status === 'ok' ? 'border-green-500/30' : 'border-red-500/30'}`}>
-                    <span className="text-xs text-zinc-500 uppercase tracking-wider">Estado</span>
-                    <span className={`text-lg font-bold ${monitor.status === 'ok' ? 'text-green-400' : 'text-red-400'}`}>
-                      {monitor.status === 'ok' ? '✅ ONLINE' : '❌ ERROR'}
-                    </span>
-                    <span className="text-xs text-zinc-500">DB {monitor.db_latency_ms}ms</span>
-                  </div>
-                  <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 flex flex-col gap-1">
-                    <span className="text-xs text-zinc-500 uppercase tracking-wider">Uptime</span>
-                    <span className="text-lg font-bold text-white font-mono">
-                      {(() => {
-                        const s = monitor.uptime_s || 0;
-                        const h = Math.floor(s / 3600);
-                        const m = Math.floor((s % 3600) / 60);
-                        return h > 0 ? `${h}h ${m}m` : `${m}m`;
-                      })()}
-                    </span>
-                    <span className="text-xs text-zinc-500">Node {monitor.node_version}</span>
-                  </div>
-                  <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 flex flex-col gap-1">
-                    <span className="text-xs text-zinc-500 uppercase tracking-wider flex items-center gap-1"><Cpu className="w-3.5 h-3.5" /> RAM Usada</span>
-                    <span className="text-lg font-bold text-white font-mono">{monitor.mem_mb?.rss} MB</span>
-                    <span className="text-xs text-zinc-500">Heap {monitor.mem_mb?.heapUsed}/{monitor.mem_mb?.heapTotal} MB</span>
-                  </div>
-                  <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 flex flex-col gap-1">
-                    <span className="text-xs text-zinc-500 uppercase tracking-wider flex items-center gap-1"><Database className="w-3.5 h-3.5" /> DB Latencia</span>
-                    <span className={`text-lg font-bold font-mono ${Number(monitor.db_latency_ms) < 50 ? 'text-green-400' : Number(monitor.db_latency_ms) < 200 ? 'text-yellow-400' : 'text-red-400'}`}>
-                      {monitor.db_latency_ms}ms
-                    </span>
-                    <span className="text-xs text-zinc-500">PostgreSQL</span>
-                  </div>
-                </div>
-
-                {/* Metrics grid */}
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                  {[
-                    { label: 'Usuarios totales', value: monitor.metrics?.total_users, icon: <Users className="w-4 h-4 text-violet-400" /> },
-                    { label: 'Activos (24h)', value: monitor.metrics?.active_users_24h, icon: <Activity className="w-4 h-4 text-green-400" /> },
-                    { label: 'Nuevos hoy', value: monitor.metrics?.new_users_today, icon: <TrendingUp className="w-4 h-4 text-blue-400" /> },
-                    { label: 'Generaciones hoy', value: monitor.metrics?.generations_today, icon: <Zap className="w-4 h-4 text-acid" /> },
-                    { label: 'Generaciones total', value: monitor.metrics?.generations_total, icon: <BarChart3 className="w-4 h-4 text-zinc-400" /> },
-                    { label: 'Licencias activas', value: monitor.metrics?.active_licenses, icon: <Key className="w-4 h-4 text-yellow-400" /> },
-                    { label: 'Usuarios bloqueados', value: monitor.metrics?.blocked_users, icon: <Ban className="w-4 h-4 text-red-400" /> },
-                    { label: 'Errores proxy (24h)', value: monitor.metrics?.errors_proxy_24h, icon: <AlertTriangle className="w-4 h-4 text-orange-400" /> },
-                  ].map(m => (
-                    <div key={m.label} className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-xl bg-zinc-800 flex items-center justify-center shrink-0">{m.icon}</div>
-                      <div>
-                        <p className="text-xs text-zinc-500">{m.label}</p>
-                        <p className="text-xl font-bold text-white">{m.value ?? '—'}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Top users today */}
-                {monitor.top_users_today?.length > 0 && (
-                  <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden">
-                    <div className="px-5 py-3 border-b border-zinc-800 flex items-center gap-2">
-                      <TrendingUp className="w-4 h-4 text-acid" />
-                      <h3 className="text-sm font-semibold">Top usuarios hoy</h3>
-                    </div>
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-zinc-800">
-                          <th className="text-left text-xs text-zinc-500 px-5 py-2">#</th>
-                          <th className="text-left text-xs text-zinc-500 px-4 py-2">Usuario</th>
-                          <th className="text-right text-xs text-zinc-500 px-5 py-2">Generaciones</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {monitor.top_users_today.map((u: any, i: number) => (
-                          <tr key={u.user_id} className="border-b border-zinc-800/60 hover:bg-zinc-800/20">
-                            <td className="px-5 py-2 text-zinc-500 text-xs font-mono">{i + 1}</td>
-                            <td className="px-4 py-2 font-medium">{u.username || `ID ${u.user_id}`}</td>
-                            <td className="px-5 py-2 text-right">
-                              <span className="font-mono font-bold text-acid">{u.count}</span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-
-                <p className="text-xs text-zinc-600 text-right">
-                  Actualizado: {new Date(monitor.checked_at).toLocaleTimeString('es-ES')}
-                  <button onClick={() => loadTab('monitor')} className="ml-3 text-zinc-500 hover:text-zinc-300 transition inline-flex items-center gap-1">
-                    <RefreshCcw className="w-3 h-3" /> Refresh
-                  </button>
-                </p>
-              </>
+            </div>
             )}
           </div>
         )}
 
-        {/* Sessions */}
-        {tab === 'sessions' && (
-          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-x-auto">
-            <table className="w-full text-sm min-w-[600px]">
-              <thead>
-                <tr className="border-b border-zinc-800">
-                  {['Usuario', 'IP', 'HWID', 'Creada', 'Última actividad'].map(h => (
-                    <th key={h} className="text-left text-xs text-zinc-500 font-medium px-4 py-3">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {sessions.map(s => (
-                  <tr key={s.id} className="border-b border-zinc-800/60 hover:bg-zinc-800/30 transition">
-                    <td className="px-4 py-3 font-medium text-sm">{s.username || '—'}</td>
-                    <td className="px-4 py-3 text-xs text-zinc-400 font-mono">{s.ip || '—'}</td>
-                    <td className="px-4 py-3 text-xs text-zinc-500 max-w-[120px] truncate" title={s.hwid || ''}>
-                      <Fingerprint className="inline w-3 h-3 mr-1" />{truncate(s.hwid, 12)}
-                    </td>
-                    <td className="px-4 py-3 text-xs text-zinc-400">{formatDate(s.created_at)}</td>
-                    <td className="px-4 py-3 text-xs text-zinc-400 flex items-center gap-1">
-                      <Clock className="w-3 h-3" />{formatDate(s.last_seen)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {sessions.length === 0 && !loading && (
-              <p className="text-center text-zinc-600 py-8 text-sm">Sin sesiones registradas</p>
-            )}
-          </div>
-        )}
         {/* Academia */}
         {tab === 'academia' && (
           <div className="space-y-4">
@@ -1526,6 +1563,137 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
                 <p className="text-center text-zinc-600 py-8 text-sm">No hay solicitudes</p>
               )}
             </div>
+          </div>
+        )}
+
+        {/* Sistema = MFA */}
+        {tab === 'sistema' && (
+          <div className="max-w-md space-y-6">
+            <div>
+              <h2 className="text-lg font-semibold text-white mb-1">Autenticación de dos factores (TOTP)</h2>
+              <p className="text-sm text-zinc-400">
+                Activa MFA para tu cuenta de administrador. Necesitarás Google Authenticator, Authy u otra app compatible.
+              </p>
+            </div>
+
+            {mfaEnabled === null && (
+              <button
+                onClick={async () => {
+                  setMfaStatus('loading');
+                  try {
+                    const r = await fetch('/api/auth/me', { headers: { Authorization: `Bearer ${token}` } });
+                    const d = await r.json();
+                    setMfaEnabled(d.user?.totp_enabled ?? false);
+                  } catch { setMfaEnabled(false); }
+                  setMfaStatus('idle');
+                }}
+                className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white text-sm rounded-lg transition"
+              >
+                {mfaStatus === 'loading' ? 'Cargando…' : 'Ver estado MFA'}
+              </button>
+            )}
+
+            {mfaEnabled === false && !mfaSetup && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 text-sm text-zinc-400">
+                  <span className="w-2 h-2 rounded-full bg-zinc-500 inline-block" />
+                  MFA desactivado
+                </div>
+                <button
+                  onClick={async () => {
+                    setMfaStatus('loading');
+                    try {
+                      const r = await fetch('/api/auth/mfa/setup', { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+                      const d = await r.json();
+                      if (!r.ok) throw new Error(d.error);
+                      setMfaSetup(d);
+                      setMfaStatus('idle');
+                    } catch (e: any) { setMfaMsg(e.message); setMfaStatus('error'); }
+                  }}
+                  disabled={mfaStatus === 'loading'}
+                  className="px-4 py-2 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-sm rounded-lg transition"
+                >
+                  {mfaStatus === 'loading' ? 'Generando…' : 'Activar MFA'}
+                </button>
+              </div>
+            )}
+
+            {mfaSetup && (
+              <div className="space-y-4">
+                <p className="text-sm text-zinc-300">1. Escanea este QR con tu app autenticadora:</p>
+                <img src={mfaSetup.qrDataUrl} alt="QR TOTP" className="w-48 h-48 rounded-xl border border-zinc-700" />
+                <details className="text-xs text-zinc-500">
+                  <summary className="cursor-pointer hover:text-zinc-300">Ver clave manual</summary>
+                  <code className="block mt-2 break-all bg-zinc-800 rounded p-2 text-zinc-300">{mfaSetup.secret}</code>
+                </details>
+                <p className="text-sm text-zinc-300">2. Introduce el código de 6 dígitos para confirmar:</p>
+                <div className="flex gap-2">
+                  <input type="text" inputMode="numeric" maxLength={6} value={mfaCode}
+                    onChange={e => setMfaCode(e.target.value.replace(/\D/g, ''))}
+                    placeholder="123456"
+                    className="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-center text-lg font-mono tracking-widest outline-none focus:border-violet-500"
+                  />
+                  <button
+                    onClick={async () => {
+                      setMfaStatus('loading');
+                      try {
+                        const r = await fetch('/api/auth/mfa/enable', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                          body: JSON.stringify({ code: mfaCode }),
+                        });
+                        const d = await r.json();
+                        if (!r.ok) throw new Error(d.error);
+                        setMfaEnabled(true); setMfaSetup(null); setMfaCode('');
+                        setMfaMsg('MFA activado correctamente'); setMfaStatus('ok');
+                      } catch (e: any) { setMfaMsg(e.message); setMfaStatus('error'); setMfaCode(''); }
+                    }}
+                    disabled={mfaCode.length < 6 || mfaStatus === 'loading'}
+                    className="px-4 py-2 bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white text-sm rounded-lg transition"
+                  >Confirmar</button>
+                </div>
+              </div>
+            )}
+
+            {mfaEnabled === true && (
+              <div className="space-y-4">
+                <div className="flex items-center gap-2 text-sm text-green-400">
+                  <span className="w-2 h-2 rounded-full bg-green-400 inline-block" />
+                  MFA activado — se pedirá código en cada login
+                </div>
+                <p className="text-sm text-zinc-300">Para desactivar, introduce un código TOTP válido:</p>
+                <div className="flex gap-2">
+                  <input type="text" inputMode="numeric" maxLength={6} value={mfaDisableCode}
+                    onChange={e => setMfaDisableCode(e.target.value.replace(/\D/g, ''))}
+                    placeholder="123456"
+                    className="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-center text-lg font-mono tracking-widest outline-none focus:border-red-500"
+                  />
+                  <button
+                    onClick={async () => {
+                      if (!confirm('¿Seguro que quieres desactivar MFA? Tu cuenta quedará menos protegida.')) return;
+                      setMfaStatus('loading');
+                      try {
+                        const r = await fetch('/api/auth/mfa/disable', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                          body: JSON.stringify({ code: mfaDisableCode }),
+                        });
+                        const d = await r.json();
+                        if (!r.ok) throw new Error(d.error);
+                        setMfaEnabled(false); setMfaDisableCode('');
+                        setMfaMsg('MFA desactivado'); setMfaStatus('ok');
+                      } catch (e: any) { setMfaMsg(e.message); setMfaStatus('error'); setMfaDisableCode(''); }
+                    }}
+                    disabled={mfaDisableCode.length < 6 || mfaStatus === 'loading'}
+                    className="px-4 py-2 bg-red-700 hover:bg-red-600 disabled:opacity-50 text-white text-sm rounded-lg transition"
+                  >Desactivar</button>
+                </div>
+              </div>
+            )}
+
+            {mfaMsg && (
+              <p className={`text-sm ${mfaStatus === 'ok' ? 'text-green-400' : 'text-red-400'}`}>{mfaMsg}</p>
+            )}
           </div>
         )}
       </div>
@@ -1629,150 +1797,6 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
               )}
             </div>
           </div>
-        </div>
-      )}
-
-      {/* MFA tab */}
-      {tab === 'mfa' && (
-        <div className="max-w-md space-y-6">
-          <div>
-            <h2 className="text-lg font-semibold text-white mb-1">Autenticación de dos factores (TOTP)</h2>
-            <p className="text-sm text-zinc-400">
-              Activa MFA para tu cuenta de administrador. Necesitarás Google Authenticator, Authy u otra app compatible.
-            </p>
-          </div>
-
-          {/* Estado actual */}
-          {mfaEnabled === null && (
-            <button
-              onClick={async () => {
-                setMfaStatus('loading');
-                try {
-                  const r = await fetch('/api/auth/me', { headers: { Authorization: `Bearer ${token}` } });
-                  const d = await r.json();
-                  setMfaEnabled(d.user?.totp_enabled ?? false);
-                } catch { setMfaEnabled(false); }
-                setMfaStatus('idle');
-              }}
-              className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white text-sm rounded-lg transition"
-            >
-              {mfaStatus === 'loading' ? 'Cargando…' : 'Ver estado MFA'}
-            </button>
-          )}
-
-          {mfaEnabled === false && !mfaSetup && (
-            <div className="space-y-3">
-              <div className="flex items-center gap-2 text-sm text-zinc-400">
-                <span className="w-2 h-2 rounded-full bg-zinc-500 inline-block" />
-                MFA desactivado
-              </div>
-              <button
-                onClick={async () => {
-                  setMfaStatus('loading');
-                  try {
-                    const r = await fetch('/api/auth/mfa/setup', { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
-                    const d = await r.json();
-                    if (!r.ok) throw new Error(d.error);
-                    setMfaSetup(d);
-                    setMfaStatus('idle');
-                  } catch (e: any) { setMfaMsg(e.message); setMfaStatus('error'); }
-                }}
-                disabled={mfaStatus === 'loading'}
-                className="px-4 py-2 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-sm rounded-lg transition"
-              >
-                {mfaStatus === 'loading' ? 'Generando…' : 'Activar MFA'}
-              </button>
-            </div>
-          )}
-
-          {mfaSetup && (
-            <div className="space-y-4">
-              <p className="text-sm text-zinc-300">1. Escanea este QR con tu app autenticadora:</p>
-              <img src={mfaSetup.qrDataUrl} alt="QR TOTP" className="w-48 h-48 rounded-xl border border-zinc-700" />
-              <details className="text-xs text-zinc-500">
-                <summary className="cursor-pointer hover:text-zinc-300">Ver clave manual</summary>
-                <code className="block mt-2 break-all bg-zinc-800 rounded p-2 text-zinc-300">{mfaSetup.secret}</code>
-              </details>
-              <p className="text-sm text-zinc-300">2. Introduce el código de 6 dígitos para confirmar:</p>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  maxLength={6}
-                  value={mfaCode}
-                  onChange={e => setMfaCode(e.target.value.replace(/\D/g, ''))}
-                  placeholder="123456"
-                  className="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-center text-lg font-mono tracking-widest outline-none focus:border-violet-500"
-                />
-                <button
-                  onClick={async () => {
-                    setMfaStatus('loading');
-                    try {
-                      const r = await fetch('/api/auth/mfa/enable', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                        body: JSON.stringify({ code: mfaCode }),
-                      });
-                      const d = await r.json();
-                      if (!r.ok) throw new Error(d.error);
-                      setMfaEnabled(true); setMfaSetup(null); setMfaCode('');
-                      setMfaMsg('MFA activado correctamente'); setMfaStatus('ok');
-                    } catch (e: any) { setMfaMsg(e.message); setMfaStatus('error'); setMfaCode(''); }
-                  }}
-                  disabled={mfaCode.length < 6 || mfaStatus === 'loading'}
-                  className="px-4 py-2 bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white text-sm rounded-lg transition"
-                >
-                  Confirmar
-                </button>
-              </div>
-            </div>
-          )}
-
-          {mfaEnabled === true && (
-            <div className="space-y-4">
-              <div className="flex items-center gap-2 text-sm text-green-400">
-                <span className="w-2 h-2 rounded-full bg-green-400 inline-block" />
-                MFA activado — se pedirá código en cada login
-              </div>
-              <p className="text-sm text-zinc-300">Para desactivar, introduce un código TOTP válido:</p>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  maxLength={6}
-                  value={mfaDisableCode}
-                  onChange={e => setMfaDisableCode(e.target.value.replace(/\D/g, ''))}
-                  placeholder="123456"
-                  className="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-center text-lg font-mono tracking-widest outline-none focus:border-red-500"
-                />
-                <button
-                  onClick={async () => {
-                    if (!confirm('¿Seguro que quieres desactivar MFA? Tu cuenta quedará menos protegida.')) return;
-                    setMfaStatus('loading');
-                    try {
-                      const r = await fetch('/api/auth/mfa/disable', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                        body: JSON.stringify({ code: mfaDisableCode }),
-                      });
-                      const d = await r.json();
-                      if (!r.ok) throw new Error(d.error);
-                      setMfaEnabled(false); setMfaDisableCode('');
-                      setMfaMsg('MFA desactivado'); setMfaStatus('ok');
-                    } catch (e: any) { setMfaMsg(e.message); setMfaStatus('error'); setMfaDisableCode(''); }
-                  }}
-                  disabled={mfaDisableCode.length < 6 || mfaStatus === 'loading'}
-                  className="px-4 py-2 bg-red-700 hover:bg-red-600 disabled:opacity-50 text-white text-sm rounded-lg transition"
-                >
-                  Desactivar
-                </button>
-              </div>
-            </div>
-          )}
-
-          {mfaMsg && (
-            <p className={`text-sm ${mfaStatus === 'ok' ? 'text-green-400' : 'text-red-400'}`}>{mfaMsg}</p>
-          )}
         </div>
       )}
 
