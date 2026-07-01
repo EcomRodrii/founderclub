@@ -16,7 +16,24 @@ interface AdminPanelProps {
   onBack?: () => void;
 }
 
-type Tab = 'stats' | 'users' | 'activity' | 'licenses' | 'sessions' | 'prompts' | 'references' | 'monitor';
+type Tab = 'stats' | 'users' | 'activity' | 'licenses' | 'sessions' | 'prompts' | 'references' | 'monitor' | 'academia';
+
+const ACADEMIA_QUESTIONS: Record<string, string> = {
+  q1:'¿En qué punto estás ahora mismo con la reventa?',q2:'Facturación mensual',q3:'¿Qué estás vendiendo?',
+  q4:'Proveedores y precios',q5:'Organización del stock',q6:'¿Compras stock por semana o mes?',
+  q7:'¿Sabes gestionar incidencias en envíos?',q8:'Número de cuentas de Vinted activas',
+  q9:'¿Sabes detectar shadowban?',q10:'¿Sabes detectar lista negra?',q11:'Actividad fuera de Vinted',
+  q12:'Método de creación de cuentas',q13:'Estabilidad de cuentas',q14:'Interpretación de bloqueos',
+  q15:'Control del proceso de maduración',q16:'Búsqueda de productos',q17:'Decisión de escalar producto',
+  q18:'Gestión de productos en revisión (REPS)',q19:'Proceso desde compra hasta venta',q20:'Testeo de producto nuevo',
+  q21:'Criterios para invertir más',q22:'Margen medio por producto',q23:'Volumen vs margen',
+  q24:'% vendido en primera semana',q25:'Publicaciones por cuenta al día',q26:'Método de publicación',
+  q27:'Estrategia con reps (¿mete normales antes?)',q28:'% stock parado más de 15 días',
+  q29:'Acción con producto estancado',q30:'Control de beneficios y números',q31:'Diagnóstico de bloqueos',
+  q32:'Gestión de compradores difíciles',q33:'Punto de mejora principal',q34:'Plan de recuperación desde cero',
+  q35:'Qué haría diferente empezando hoy',q36:'Objetivo de facturación',q37:'Uso de la app de Lamine',
+  q38:'Error más caro cometido',q39:'Escalado sin romper lo que funciona',q40:'Criterios para madurar una cuenta',
+};
 
 const BRANDS = ['ADIDAS', 'NEW BALANCE', 'ASICS', 'ONITSUKA'] as const;
 type Brand = typeof BRANDS[number];
@@ -407,6 +424,15 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
   // Expiry editing per license (licenseId → draft date string "YYYY-MM-DD" or "")
   const [editingExpiry, setEditingExpiry] = useState<Record<number, string>>({});
 
+  // Academia
+  const [acadList, setAcadList] = useState<any[]>([]);
+  const [acadFilter, setAcadFilter] = useState<'all'|'pending'|'approved'|'denied'>('all');
+  const [acadModal, setAcadModal] = useState<{ id: string; username: string; tab: 'full'|'ai' } | null>(null);
+  const [acadAnswers, setAcadAnswers] = useState<Record<string, any>>({});
+  const [acadSummary, setAcadSummary] = useState<Record<string, string>>({});
+  const [acadSummaryLoading, setAcadSummaryLoading] = useState(false);
+  const [acadModalTab, setAcadModalTab] = useState<'full'|'ai'>('full');
+
   // References
   const [refs, setRefs] = useState<any[]>([]);
   const [newRefBrand, setNewRefBrand] = useState<Brand>('ADIDAS');
@@ -446,6 +472,9 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
       }
       else if (t === 'references') {
         setRefs(await client.get('/api/admin/label-references'));
+      }
+      else if (t === 'academia') {
+        setAcadList(await client.get('/api/admin/academia/verifications'));
       }
     } finally {
       setLoading(false);
@@ -553,6 +582,45 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
     setGenLoading(false);
   };
 
+  const reviewAcad = async (id: string, action: 'approve' | 'deny') => {
+    const label = action === 'approve' ? 'aprobar' : 'denegar';
+    if (!confirm(`¿Seguro que quieres ${label} esta solicitud?`)) return;
+    try {
+      const r = await fetch(`/api/admin/academia/review/${id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action }),
+      });
+      if (r.ok) setAcadList(await client.get('/api/admin/academia/verifications'));
+      else { const d = await r.json(); alert('Error: ' + (d.error || 'desconocido')); }
+    } catch { alert('Error de conexión'); }
+  };
+
+  const openAcadAnswers = async (id: string, username: string, tab: 'full' | 'ai') => {
+    setAcadModal({ id, username, tab });
+    setAcadModalTab(tab);
+    if (!acadAnswers[id]) {
+      try {
+        const d = await client.get(`/api/admin/academia/answers/${id}`);
+        setAcadAnswers(prev => ({ ...prev, [id]: d }));
+      } catch {}
+    }
+  };
+
+  const generateAcadSummary = async (id: string) => {
+    setAcadSummaryLoading(true);
+    try {
+      const r = await fetch(`/api/admin/academia/summarize/${id}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      });
+      const d = await r.json();
+      if (d.summary) setAcadSummary(prev => ({ ...prev, [id]: d.summary }));
+      else alert('Error al generar resumen: ' + (d.error || 'desconocido'));
+    } catch { alert('Error de conexión'); }
+    finally { setAcadSummaryLoading(false); }
+  };
+
   const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
     { id: 'monitor',    label: 'Monitor',     icon: <BarChart3 className="w-4 h-4" /> },
     { id: 'stats',      label: 'Stats',       icon: <Activity className="w-4 h-4" /> },
@@ -562,6 +630,7 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
     { id: 'sessions',   label: 'Sesiones',    icon: <Globe className="w-4 h-4" /> },
     { id: 'prompts',    label: 'Prompts',     icon: <FileText className="w-4 h-4" /> },
     { id: 'references', label: 'Referencias', icon: <ImagePlus className="w-4 h-4" /> },
+    { id: 'academia',   label: '🎓 Academia', icon: null },
   ];
 
   function actionLabel(a: string): { label: string; color: string } {
@@ -1301,7 +1370,195 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
             )}
           </div>
         )}
+        {/* Academia */}
+        {tab === 'academia' && (
+          <div className="space-y-4">
+            {/* Filtros */}
+            <div className="flex gap-2 flex-wrap">
+              {(['all','pending','approved','denied'] as const).map(f => (
+                <button
+                  key={f}
+                  onClick={() => setAcadFilter(f)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                    acadFilter === f
+                      ? 'bg-amber-500/20 border border-amber-500/40 text-amber-400'
+                      : 'bg-zinc-800 border border-zinc-700 text-zinc-400 hover:text-white'
+                  }`}
+                >
+                  {{ all:'Todas', pending:'Pendientes', approved:'Aprobadas', denied:'Denegadas' }[f]}
+                </button>
+              ))}
+            </div>
+
+            <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-x-auto">
+              <table className="w-full text-sm min-w-[700px]">
+                <thead>
+                  <tr className="border-b border-zinc-800">
+                    {['Usuario Skool','Email','Teléfono','Fecha','Estado','Cuestionario','Acciones'].map(h => (
+                      <th key={h} className="text-left text-xs text-zinc-500 font-medium px-4 py-3">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(acadFilter === 'all' ? acadList : acadList.filter(v => v.status === acadFilter)).map(v => (
+                    <tr key={v.id} className="border-b border-zinc-800/60 hover:bg-zinc-800/20 transition">
+                      <td className="px-4 py-3 font-semibold text-sm">{v.skool_username || '—'}</td>
+                      <td className="px-4 py-3 text-xs text-zinc-400">{v.email || '—'}</td>
+                      <td className="px-4 py-3 text-xs text-zinc-400">{v.phone || '—'}</td>
+                      <td className="px-4 py-3 text-xs text-zinc-500">{timeAgo(v.created_at)}</td>
+                      <td className="px-4 py-3">
+                        <span className={`text-xs px-2 py-0.5 rounded-full border font-semibold ${
+                          v.status === 'pending'  ? 'bg-yellow-500/10 text-yellow-400 border-yellow-500/25' :
+                          v.status === 'approved' ? 'bg-green-500/10 text-green-400 border-green-500/25' :
+                                                    'bg-red-500/10 text-red-400 border-red-500/25'
+                        }`}>
+                          {{ pending:'Pendiente', approved:'Aprobada', denied:'Denegada' }[v.status as string] ?? v.status}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        {v.completed ? (
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-bold text-green-400">{v.score}/100</span>
+                            <button
+                              onClick={() => openAcadAnswers(v.id, v.skool_username, 'full')}
+                              className="text-xs px-2 py-1 rounded-lg bg-amber-500/10 border border-amber-500/25 text-amber-400 hover:bg-amber-500/20 transition"
+                            >📄 Leer</button>
+                            <button
+                              onClick={() => openAcadAnswers(v.id, v.skool_username, 'ai')}
+                              className="text-xs px-2 py-1 rounded-lg bg-violet-500/10 border border-violet-500/25 text-violet-400 hover:bg-violet-500/20 transition"
+                            >✨ IA</button>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-zinc-600">Sin enviar</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        {v.status === 'pending' ? (
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => reviewAcad(v.id, 'approve')}
+                              className="text-xs px-2 py-1 rounded-lg bg-green-500/10 border border-green-500/25 text-green-400 hover:bg-green-500/20 transition font-semibold"
+                            >✓ Verificar</button>
+                            <button
+                              onClick={() => reviewAcad(v.id, 'deny')}
+                              className="text-xs px-2 py-1 rounded-lg bg-red-500/10 border border-red-500/25 text-red-400 hover:bg-red-500/20 transition font-semibold"
+                            >✗ Denegar</button>
+                          </div>
+                        ) : <span className="text-xs text-zinc-700">—</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {acadList.length === 0 && !loading && (
+                <p className="text-center text-zinc-600 py-8 text-sm">No hay solicitudes</p>
+              )}
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* Modal respuestas academia */}
+      {acadModal && (
+        <div
+          className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={e => { if (e.target === e.currentTarget) setAcadModal(null); }}
+        >
+          <div className="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-2xl max-h-[88vh] flex flex-col">
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800 flex-shrink-0">
+              <div>
+                <p className="font-bold text-sm">{acadModal.username} · Respuestas del cuestionario</p>
+                {acadAnswers[acadModal.id]?.completed_at && (
+                  <p className="text-xs text-zinc-500 mt-0.5">
+                    Enviado el {new Date(acadAnswers[acadModal.id].completed_at).toLocaleDateString('es-ES')}
+                  </p>
+                )}
+              </div>
+              <button onClick={() => setAcadModal(null)} className="text-zinc-500 hover:text-white transition text-lg leading-none">✕</button>
+            </div>
+            {/* Tabs */}
+            <div className="flex border-b border-zinc-800 flex-shrink-0">
+              {(['full','ai'] as const).map(t => (
+                <button
+                  key={t}
+                  onClick={() => setAcadModalTab(t)}
+                  className={`px-5 py-3 text-sm font-semibold transition border-b-2 -mb-px ${
+                    acadModalTab === t
+                      ? 'text-amber-400 border-amber-400'
+                      : 'text-zinc-500 border-transparent hover:text-white'
+                  }`}
+                >
+                  {t === 'full' ? '📄 Leer completo' : '✨ Resumir con IA'}
+                </button>
+              ))}
+            </div>
+            {/* Body */}
+            <div className="overflow-y-auto flex-1 p-5">
+              {acadModalTab === 'full' && (
+                <div className="space-y-5">
+                  {acadAnswers[acadModal.id] ? (
+                    Object.entries(ACADEMIA_QUESTIONS).map(([key, question]) => {
+                      const answer = acadAnswers[acadModal.id]?.answers?.[key] ?? '—';
+                      const score = acadAnswers[acadModal.id]?.score_details?.[key];
+                      const isRf = (acadAnswers[acadModal.id]?.red_flags ?? []).includes(key);
+                      return (
+                        <div key={key} className={`pb-5 border-b border-zinc-800 last:border-0 last:pb-0 ${isRf ? 'rounded-xl bg-red-500/5 border border-red-500/15 p-3' : ''}`}>
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="text-xs font-semibold text-amber-500/80 uppercase tracking-wider">
+                              {key.toUpperCase()} {isRf ? '⚠' : ''}
+                            </span>
+                            {score !== undefined && (
+                              <span className={`text-xs font-bold ${
+                                score === 3 ? 'text-green-400' : score === 2 ? 'text-yellow-400' : score === 1 ? 'text-orange-400' : 'text-red-400'
+                              }`}>{score}/3</span>
+                            )}
+                          </div>
+                          <p className="text-xs text-zinc-400 font-medium mb-2">{question}</p>
+                          <p className={`text-sm leading-relaxed whitespace-pre-wrap ${isRf ? 'text-red-300' : 'text-zinc-300'}`}>{answer}</p>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <p className="text-center text-zinc-600 py-8 text-sm">Cargando…</p>
+                  )}
+                </div>
+              )}
+              {acadModalTab === 'ai' && (
+                <div>
+                  {!acadSummary[acadModal.id] && !acadSummaryLoading && (
+                    <div className="text-center py-8 space-y-4">
+                      <p className="text-sm text-zinc-400">Pulsa para que la IA analice las 40 respuestas y genere un resumen ejecutivo.</p>
+                      <button
+                        onClick={() => generateAcadSummary(acadModal!.id)}
+                        className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-sm font-semibold transition"
+                      >✨ Generar resumen con IA</button>
+                    </div>
+                  )}
+                  {acadSummaryLoading && (
+                    <div className="flex items-center gap-3 py-8 justify-center text-zinc-400 text-sm">
+                      <RefreshCcw className="w-4 h-4 animate-spin" /> Analizando respuestas…
+                    </div>
+                  )}
+                  {acadSummary[acadModal.id] && (
+                    <div className="space-y-4">
+                      <div className="text-sm leading-relaxed text-zinc-200 whitespace-pre-wrap">
+                        {acadSummary[acadModal.id].split(/\*\*(.+?)\*\*/g).map((part, i) =>
+                          i % 2 === 1 ? <strong key={i} className="text-white font-semibold">{part}</strong> : part
+                        )}
+                      </div>
+                      <button
+                        onClick={() => { setAcadSummary(p => { const n={...p}; delete n[acadModal!.id]; return n; }); generateAcadSummary(acadModal!.id); }}
+                        className="text-xs text-zinc-500 hover:text-zinc-300 transition"
+                      >↺ Regenerar</button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* User drawer */}
       {selectedUser && (
