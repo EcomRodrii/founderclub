@@ -3297,23 +3297,33 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
     globalDeadline: number, attemptTimeout: number, apiKey: string,
     referenceBase64: string | null = null   // imagen de referencia del admin (opcional)
   ): Promise<{ image: string; model: string } | null> {
-    // Modelos GA de generación de imagen (desde 28 may 2026; -preview deprecados)
+    // Flash primero (rápido, menos timeouts), pro como refuerzo, preview como último recurso
     const IMG_MODELS = [
-      "gemini-3-pro-image",
       "gemini-3.1-flash-image",
       "gemini-2.5-flash-image",
+      "gemini-3-pro-image",
+      "gemini-2.0-flash-preview-image-generation",
     ];
     const MAX_RETRIES = 2;
+
+    // Extraer MIME type real del data URL — evita error 400 al enviar PNG/HEIC como "image/jpeg"
+    function extractMime(dataUrl: string): string {
+      const m = dataUrl.match(/^data:([^;,]+)/);
+      const t = m?.[1] || "image/jpeg";
+      // Gemini soporta: jpeg, png, webp, heic, heif. Todo lo demás → jpeg como fallback.
+      return ["image/jpeg","image/png","image/webp","image/heic","image/heif"].includes(t) ? t : "image/jpeg";
+    }
+
     const parts: any[] = [];
     // Orden: [referencia (si existe), foto a editar, texto del prompt]
     // Gemini procesa los inputs en orden — la referencia primero maximiza su influencia
     if (referenceBase64) {
       const refB64 = referenceBase64.includes(",") ? referenceBase64.split(",")[1] : referenceBase64;
-      parts.push({ inlineData: { mimeType: "image/jpeg", data: refB64 } });
+      parts.push({ inlineData: { mimeType: extractMime(referenceBase64), data: refB64 } });
     }
     if (imageBase64) {
       const b64 = imageBase64.includes(",") ? imageBase64.split(",")[1] : imageBase64;
-      parts.push({ inlineData: { mimeType: "image/jpeg", data: b64 } });
+      parts.push({ inlineData: { mimeType: extractMime(imageBase64), data: b64 } });
     }
     parts.push({ text: prompt });
     for (const model of IMG_MODELS) {
@@ -3323,7 +3333,7 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
           contents: [{ parts }],
           generationConfig: {
             responseModalities: ["TEXT", "IMAGE"],
-            temperature: 0.35 + (attempt - 1) * 0.1,
+            temperature: 0.1 + (attempt - 1) * 0.1,
           },
         };
         if (aspectRatio) body.generationConfig.imageConfig = { aspectRatio };
@@ -3485,21 +3495,14 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
 
     const colorDesc = (carpetColor || "beige claro").trim();
 
-    const prompt = `Eres un editor profesional de fotografía de producto para e-commerce.
+    const prompt = `Edita esta foto de producto para e-commerce: cambia únicamente la alfombra del fondo por una de ${colorDesc}.${referenceBase64 ? " Usa la primera imagen como referencia del color y textura de alfombra." : ""}
 
-TAREA: Cambia ÚNICAMENTE el fondo de la imagen (la alfombra) al nuevo color/estilo: "${colorDesc}".
-
-REGLAS ABSOLUTAS — no las incumplas bajo ningún concepto:
-1. El producto (zapatilla, ropa u objeto) debe quedar EXACTAMENTE IGUAL: mismos colores, forma, textura, logotipos, costuras, suela y todos los detalles. CERO modificaciones.
-2. Conserva EXACTAMENTE las proporciones y perspectiva original del producto.
-3. Cambia el fondo sustituyendo la alfombra existente por una alfombra de color "${colorDesc}".
-4. La iluminación debe ser uniforme, natural y coherente con el producto. Las sombras bajo el producto deben ser realistas.
-5. Si aparece una mano u otra parte del cuerpo, consérvala exactamente como está, sin alteraciones.
-6. NO añadas objetos, textos, marcas de agua, elementos decorativos ni reflejos extra.
-7. La imagen resultante debe tener exactamente el mismo encuadre y composición que la original.
-8. Calidad fotográfica profesional de catálogo e-commerce.${referenceBase64 ? "\n9. Usa la primera imagen como referencia del estilo, textura y tono de alfombra objetivo." : ""}
-
-Genera la imagen editada.`;
+El producto (zapatilla, ropa u objeto) debe quedar idéntico al original: mismos colores, forma, textura, logotipos, costuras y todos los detalles. No lo modifiques en absoluto.
+Conserva el mismo encuadre, perspectiva y composición de la foto original.
+La alfombra nueva debe tener iluminación uniforme y natural, con sombras realistas bajo el producto.
+Si hay alguna mano u otra parte del cuerpo, consérvala exactamente como está.
+No añadas textos, marcas de agua ni elementos extra.
+Devuelve la imagen editada con calidad de catálogo profesional.`;
 
     // Calcular aspect ratio desde la imagen de entrada
     let aspectRatio: string | null = null;
@@ -3513,8 +3516,8 @@ Genera la imagen editada.`;
       prompt,
       imageBase64,
       aspectRatio,
-      Date.now() + 90_000,
-      40_000,
+      Date.now() + 120_000,
+      45_000,
       apiKey,
       referenceBase64 || null
     );

@@ -33,6 +33,7 @@ const CARPET_PRESETS = [
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+const IS_IOS    = /iPhone|iPad|iPod/i.test(navigator.userAgent);
 const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
 function formatSize(b: number) {
@@ -50,8 +51,18 @@ async function fileToBase64(file: File): Promise<string> {
   });
 }
 
-function dl(dataUrl: string, name: string) {
-  const a = document.createElement('a'); a.href = dataUrl; a.download = name; a.click();
+async function dl(dataUrl: string, name: string): Promise<void> {
+  const blob    = await fetch(dataUrl).then(r => r.blob());
+  const blobUrl = URL.createObjectURL(blob);
+  if (IS_IOS) {
+    window.open(blobUrl, '_blank');
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000);
+  } else {
+    const a = document.createElement('a');
+    a.href = blobUrl; a.download = name;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 5_000);
+  }
 }
 
 async function dataUrlToFile(dataUrl: string, name: string): Promise<File> {
@@ -86,7 +97,7 @@ function canShareFiles(): boolean {
     return (
       typeof navigator.share === 'function' &&
       typeof navigator.canShare === 'function' &&
-      navigator.canShare({ files: [new File([''], 'test.jpg', { type: 'image/jpeg' })] })
+      navigator.canShare({ files: [new File(['x'], 'test.jpg', { type: 'image/jpeg' })] })
     );
   } catch { return false; }
 }
@@ -95,7 +106,7 @@ async function saveOne(dataUrl: string, filename: string): Promise<void> {
   if (canShareFiles()) {
     const file = await dataUrlToFile(dataUrl, filename);
     await navigator.share({ files: [file], title: filename });
-  } else { dl(dataUrl, filename); }
+  } else { await dl(dataUrl, filename); }
 }
 
 async function saveAll(
@@ -109,7 +120,7 @@ async function saveAll(
         await navigator.share({ files, title: `${files.length} fotos editadas` });
         onProgress?.(files.length); return;
       }
-    } catch { /* fallback */ }
+    } catch { /* fallback a una a una */ }
     for (let i = 0; i < items.length; i++) {
       try {
         const file = await dataUrlToFile(items[i].dataUrl, items[i].filename);
@@ -118,9 +129,11 @@ async function saveAll(
       } catch { /* usuario canceló */ }
     }
   } else {
-    items.forEach((item, idx) => {
-      setTimeout(() => { dl(item.dataUrl, item.filename); onProgress?.(idx + 1); }, idx * 120);
-    });
+    for (let i = 0; i < items.length; i++) {
+      await dl(items[i].dataUrl, items[i].filename);
+      onProgress?.(i + 1);
+      if (i < items.length - 1) await new Promise(r => setTimeout(r, 150));
+    }
   }
 }
 
