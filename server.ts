@@ -6417,6 +6417,86 @@ ${qaLines}`;
     } catch { res.status(500).json({ error: "Error del servidor" }); }
   });
 
+  app.get("/api/admin/academia/answers/:id", requireAdmin as any, async (req, res) => {
+    try {
+      const r = await pool.query(
+        `SELECT q.answers, q.score, q.score_details, q.red_flags, q.completed_at, v.skool_username
+         FROM academia_questionnaires q
+         JOIN academia_verifications v ON v.id = q.verification_id
+         WHERE q.verification_id = $1 AND q.completed = TRUE`,
+        [req.params.id]
+      );
+      if (!r.rows[0]) return res.status(404).json({ error: "Cuestionario no encontrado" });
+      res.json(r.rows[0]);
+    } catch { res.status(500).json({ error: "Error del servidor" }); }
+  });
+
+  app.post("/api/admin/academia/summarize/:id", requireAdmin as any, async (req, res) => {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return res.status(503).json({ error: "GEMINI_API_KEY no configurada" });
+    try {
+      const r = await pool.query(
+        `SELECT q.answers, q.score, q.red_flags, v.skool_username
+         FROM academia_questionnaires q
+         JOIN academia_verifications v ON v.id = q.verification_id
+         WHERE q.verification_id = $1 AND q.completed = TRUE`,
+        [req.params.id]
+      );
+      if (!r.rows[0]) return res.status(404).json({ error: "Cuestionario no encontrado" });
+      const { answers, score, red_flags, skool_username } = r.rows[0];
+
+      const QUESTIONS: Record<string, string> = {
+        q1:"¿En qué punto estás ahora mismo con la reventa?",q2:"Facturación mensual",q3:"¿Qué estás vendiendo?",
+        q4:"Proveedores y precios",q5:"Organización del stock",q6:"¿Compras stock por semana o mes?",
+        q7:"¿Sabes gestionar incidencias en envíos?",q8:"Número de cuentas de Vinted activas",
+        q9:"¿Sabes detectar shadowban?",q10:"¿Sabes detectar lista negra?",q11:"Actividad fuera de Vinted",
+        q12:"Método de creación de cuentas",q13:"Estabilidad de cuentas",q14:"Interpretación de bloqueos",
+        q15:"Control del proceso de maduración",q16:"Búsqueda de productos",q17:"Decisión de escalar producto",
+        q18:"Gestión de productos en revisión (REPS)",q19:"Proceso desde compra hasta venta",q20:"Testeo de producto nuevo",
+        q21:"Criterios para invertir más",q22:"Margen medio por producto",q23:"Volumen vs margen",
+        q24:"% vendido en primera semana",q25:"Publicaciones por cuenta al día",q26:"Método de publicación",
+        q27:"Estrategia con reps (¿mete normales antes?)",q28:"% stock parado más de 15 días",
+        q29:"Acción con producto estancado",q30:"Control de beneficios y números",q31:"Diagnóstico de bloqueos",
+        q32:"Gestión de compradores difíciles",q33:"Punto de mejora principal",q34:"Plan de recuperación desde cero",
+        q35:"Qué haría diferente empezando hoy",q36:"Objetivo de facturación",q37:"Uso de la app de Lamine",
+        q38:"Error más caro cometido",q39:"Escalado sin romper lo que funciona",q40:"Criterios para madurar una cuenta",
+      };
+
+      const qaLines = Object.entries(answers as Record<string,string>)
+        .filter(([k]) => QUESTIONS[k])
+        .map(([k, v]) => `**${QUESTIONS[k]}**\n${v}`)
+        .join("\n\n");
+
+      const prompt = `Eres el asistente de Lamine Resell y tienes que hacer un resumen ejecutivo de las respuestas de ${skool_username} al cuestionario de acceso a la Academia. Su puntuación final es ${score}/100${(red_flags as string[]).length > 0 ? ` (con alertas en: ${(red_flags as string[]).join(', ')})` : ''}.
+
+RESPUESTAS:
+${qaLines}
+
+Escribe un resumen en español, bien estructurado, con estos apartados:
+1. **Perfil rápido** (2-3 frases): quién es, en qué punto está, qué vende
+2. **Puntos fuertes** (bullet points)
+3. **Áreas de mejora** (bullet points)
+4. **Valoración final** (1 párrafo): si está preparado para la academia o qué le falta
+
+Sé directo y concreto, no uses relleno. Máximo 400 palabras.`;
+
+      const resp = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.2, maxOutputTokens: 1024 } }),
+        }
+      );
+      const data: any = await resp.json();
+      const summary = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      if (!summary) return res.status(500).json({ error: "Gemini no devolvió respuesta" });
+      res.json({ summary });
+    } catch (e: any) {
+      res.status(500).json({ error: "Error al generar resumen" });
+    }
+  });
+
   // ── Vite / Static ───────────────────────────────────────────────────────────
 
   if (process.env.NODE_ENV !== "production") {
