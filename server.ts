@@ -37,6 +37,9 @@ if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
 }
 const JWT_SECRET = process.env.JWT_SECRET;
 
+// CHROME_EXTENSION_ID: si no está configurada, cualquier chrome-extension:// se bloquea
+const CHROME_EXTENSION_ID = process.env.CHROME_EXTENSION_ID || "";
+
 // ── Genera un session_token único, lo persiste en la BD y devuelve el JWT ──────
 async function mintSessionToken(userId: number, expiresIn = "7d", ip?: string): Promise<string> {
   const sid = randomUUID();
@@ -484,7 +487,7 @@ async function startServer() {
   app.use((req: Request, res: Response, next: NextFunction) => {
     const origin = req.headers.origin || "";
     const allowed =
-      /^chrome-extension:\/\//.test(origin) ||
+      (CHROME_EXTENSION_ID && origin === `chrome-extension://${CHROME_EXTENSION_ID}`) ||
       /^https?:\/\/localhost/.test(origin) ||
       /^https?:\/\/founderclub-production\.up\.railway\.app/.test(origin) ||
       /^https?:\/\/bylamineresell\.app/.test(origin) ||
@@ -696,6 +699,11 @@ async function startServer() {
       user:    { id: user.id, username: user.username, email: user.email, is_admin: user.is_admin, rank: user.rank || 'normal' },
       license: lic ? { type: lic.type, expires_at: lic.expires_at } : { type: 'admin', expires_at: null },
     });
+  });
+
+  app.post("/api/auth/logout", requireAuth as any, async (req: AuthRequest, res) => {
+    await pool.query("UPDATE users SET session_token = NULL WHERE id = $1", [req.user!.id]);
+    res.json({ ok: true });
   });
 
   app.get("/api/auth/me", requireAuth as any, async (req: AuthRequest, res) => {

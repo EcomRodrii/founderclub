@@ -196,6 +196,13 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    const token = localStorage.getItem('fc_token');
+    if (token) {
+      fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      }).catch(() => {});
+    }
     localStorage.removeItem('fc_token');
     setAuthToken(null);
     setAuthUser(null);
