@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   Upload, Download, RefreshCcw, Trash2, Shuffle,
   ImageIcon, ZapOff, Images, CheckCircle2, X,
-  Sparkles, Palette, Crown, MessageCircle,
+  Sparkles, Palette, Crown, Copy, Lock,
 } from 'lucide-react';
 import { generateExifProfile, injectExifProfile, type ExifProfile } from '../lib/randomExif';
 
@@ -106,7 +106,20 @@ function ElapsedTimer({ startedAt }: { startedAt: number }) {
 
 // ─── Locked screen ────────────────────────────────────────────────────────────
 
+const SKOOL_MSG = "Lamine, estoy en el FounderClub necesito el plan PRO.";
+
 function LockedPro() {
+  const [copied, setCopied] = React.useState(false);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(SKOOL_MSG).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    }).catch(() => {
+      // fallback: seleccionar el texto manualmente
+    });
+  };
+
   return (
     <div className="flex flex-col items-center justify-center min-h-[65vh] gap-6 text-center px-4">
       <div className="w-16 h-16 rounded-2xl bg-yellow-500/10 border border-yellow-500/20 flex items-center justify-center">
@@ -117,22 +130,40 @@ function LockedPro() {
         <p className="text-[#888880] mt-2 max-w-xs leading-relaxed">
           La herramienta de <span className="text-yellow-400 font-semibold">Alfombras</span> solo está disponible para miembros <span className="text-yellow-400 font-semibold">Pro</span>.
         </p>
-        <p className="text-[#888880] mt-1 text-sm">8,99€/mes · escríbeme para activarla</p>
+        <p className="text-[#888880] mt-1 text-sm">18,99€/mes</p>
       </div>
-      <a
-        href="https://wa.me/message/XXXXXXXXX"
-        target="_blank"
-        rel="noopener noreferrer"
-        className="inline-flex items-center gap-2 bg-[#25D366] hover:bg-[#1eb857] text-white font-bold px-6 py-3 rounded-xl transition shadow-[0_12px_32px_-8px_rgba(37,211,102,0.35)]"
-      >
-        <MessageCircle className="w-4 h-4" />
-        Escribir al WhatsApp
-      </a>
+
+      <div className="w-full max-w-sm space-y-3 text-left">
+        <p className="text-center text-[0.8rem] text-[#888880]">
+          Envíame este mensaje en <span className="text-white font-semibold">Skool</span>:
+        </p>
+        <div className="bg-[#1a1a1a] border border-white/[0.1] rounded-xl px-4 py-3">
+          <p className="text-[0.88rem] text-[#f2f2ef] leading-relaxed select-all">{SKOOL_MSG}</p>
+        </div>
+        <button
+          onClick={handleCopy}
+          className={`w-full flex items-center justify-center gap-2 font-bold px-6 py-3 rounded-xl transition-all ${
+            copied
+              ? 'bg-green-500/20 border border-green-500/40 text-green-400'
+              : 'bg-[#d4ff00] hover:bg-[#c8f000] text-black'
+          }`}
+        >
+          {copied
+            ? <><CheckCircle2 className="w-4 h-4" />¡Copiado!</>
+            : <><Copy className="w-4 h-4" />Copiar mensaje</>
+          }
+        </button>
+        <p className="text-center text-[0.72rem] text-[#555550]">
+          Pégalo en los mensajes de Skool → te activo el plan en minutos
+        </p>
+      </div>
     </div>
   );
 }
 
 // ─── Componente ───────────────────────────────────────────────────────────────
+
+const CARPET_LIMIT = 35;
 
 export default function CarpetEditor({ token, isPro = false, isAdmin = false }: { token: string; isPro?: boolean; isAdmin?: boolean }) {
   const [jobs, setJobs]               = useState<CarpetJob[]>([]);
@@ -145,6 +176,16 @@ export default function CarpetEditor({ token, isPro = false, isAdmin = false }: 
   const [savingAll, setSavingAll]     = useState(false);
   const [savedCount, setSavedCount]   = useState(0);
   const [isRunning, setIsRunning]     = useState(false);
+  const [usage, setUsage]             = useState<{ used: number; remaining: number } | null>(null);
+
+  // Cargar uso actual al montar
+  React.useEffect(() => {
+    if (!isPro && !isAdmin) return;
+    fetch('/api/carpet/usage', { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.json())
+      .then(d => setUsage({ used: d.used ?? 0, remaining: d.remaining ?? CARPET_LIMIT }))
+      .catch(() => {});
+  }, [token, isPro, isAdmin]);
 
   const productInputRef = useRef<HTMLInputElement>(null);
   const refInputRef     = useRef<HTMLInputElement>(null);
@@ -152,6 +193,8 @@ export default function CarpetEditor({ token, isPro = false, isAdmin = false }: 
   const effectiveColor = useCustom && customColor.trim()
     ? customColor.trim()
     : carpetColor;
+
+  const limitReached = !isAdmin && usage !== null && usage.remaining <= 0;
 
   // ── Subir referencia de alfombra ────────────────────────────────────────────
   const handleRefInput = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -201,6 +244,9 @@ export default function CarpetEditor({ token, isPro = false, isAdmin = false }: 
         const data = await res.json();
 
         if (!res.ok) {
+          if (data?.limit_reached) {
+            setUsage({ used: data.used ?? CARPET_LIMIT, remaining: 0 });
+          }
           setJobs(prev => prev.map(j =>
             j.id === job.id ? { ...j, status: 'error', errorMsg: data?.error || `Error ${res.status}` } : j
           ));
@@ -215,6 +261,14 @@ export default function CarpetEditor({ token, isPro = false, isAdmin = false }: 
         setJobs(prev => prev.map(j =>
           j.id === job.id ? { ...j, status: 'done', resultUrl, blobUrl } : j
         ));
+
+        // Actualizar contador local de uso
+        if (!isAdmin) {
+          setUsage(prev => prev
+            ? { used: prev.used + 1, remaining: Math.max(0, prev.remaining - 1) }
+            : null
+          );
+        }
       } catch (err: any) {
         setJobs(prev => prev.map(j =>
           j.id === job.id ? { ...j, status: 'error', errorMsg: err.message || 'Error desconocido' } : j
@@ -300,12 +354,28 @@ export default function CarpetEditor({ token, isPro = false, isAdmin = false }: 
     <div className="space-y-6 pb-24 lg:pb-6">
 
       {/* ── Header ─────────────────────────────────────────────────────────── */}
-      <div>
-        <p className="font-display text-[0.75rem] tracking-[0.3em] text-[#d4ff00]">EDICIÓN IA</p>
-        <h1 className="font-display text-[2.4rem] leading-none tracking-[0.02em] text-[#f2f2ef] mt-1">Alfombras</h1>
-        <p className="text-[0.82rem] text-[#888880] mt-2">
-          Cambia el fondo de alfombra de tus fotos de producto. El artículo queda intacto.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="font-display text-[0.75rem] tracking-[0.3em] text-[#d4ff00]">EDICIÓN IA</p>
+          <h1 className="font-display text-[2.4rem] leading-none tracking-[0.02em] text-[#f2f2ef] mt-1">Alfombras</h1>
+          <p className="text-[0.82rem] text-[#888880] mt-2">
+            Cambia el fondo de alfombra de tus fotos de producto. El artículo queda intacto.
+          </p>
+        </div>
+        {usage !== null && !isAdmin && (
+          <div className={`shrink-0 text-right mt-1 px-3 py-2 rounded-xl border ${
+            usage.remaining === 0
+              ? 'bg-red-500/10 border-red-500/30'
+              : usage.remaining <= 5
+              ? 'bg-yellow-500/10 border-yellow-500/30'
+              : 'bg-white/[0.04] border-white/[0.08]'
+          }`}>
+            <p className={`text-[1.1rem] font-bold tabular-nums leading-none ${
+              usage.remaining === 0 ? 'text-red-400' : usage.remaining <= 5 ? 'text-yellow-400' : 'text-[#f2f2ef]'
+            }`}>{usage.used}<span className="text-[0.7rem] font-normal text-[#555550]">/{CARPET_LIMIT}</span></p>
+            <p className="text-[0.65rem] text-[#555550] mt-0.5">generaciones</p>
+          </div>
+        )}
       </div>
 
       {/* ── Selección de color de alfombra ──────────────────────────────────── */}
@@ -401,52 +471,69 @@ export default function CarpetEditor({ token, isPro = false, isAdmin = false }: 
       </div>
 
       {/* ── Drop zone ───────────────────────────────────────────────────────── */}
-      <div
-        onDragOver={e => { e.preventDefault(); setDragging(true); }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={handleDrop}
-        onClick={() => !isRunning && productInputRef.current?.click()}
-        className={`relative border-2 border-dashed rounded-3xl p-10 text-center transition-all ${
-          isRunning ? 'cursor-not-allowed opacity-60' :
-          dragging   ? 'border-[#d4ff00] bg-[#d4ff00]/[0.05] scale-[1.01] cursor-copy' :
-          'border-white/10 hover:border-white/20 hover:bg-white/[0.02] cursor-pointer'
-        }`}
-      >
-        <input
-          ref={productInputRef}
-          type="file"
-          accept="image/*,.heic,.HEIC"
-          multiple
-          className="hidden"
-          onChange={handleFileInput}
-          disabled={isRunning}
-        />
-        <div className="flex flex-col items-center gap-3">
-          <div className={`w-16 h-16 rounded-2xl flex items-center justify-center border transition-all ${
-            dragging ? 'bg-[#d4ff00]/10 border-[#d4ff00]' : 'bg-white/5 border-white/10'
-          }`}>
-            {isRunning
-              ? <RefreshCcw className="w-7 h-7 text-[#d4ff00] animate-spin" />
-              : <Upload className={`w-7 h-7 ${dragging ? 'text-[#d4ff00]' : 'text-white/40'}`} />
-            }
-          </div>
-          <div>
-            <p className="text-[#f2f2ef] font-semibold">
-              {isRunning ? 'Procesando fotos…' : 'Arrastra las fotos del producto aquí'}
-            </p>
-            <p className="text-white/40 text-sm mt-1">
-              {isRunning
-                ? 'Cada imagen tarda ~15–30 segundos'
-                : 'Puedes adjuntar varias fotos a la vez'}
-            </p>
-            {!isRunning && (
-              <p className="text-white/25 text-xs mt-0.5">
-                Alfombra: {useCustom && customColor.trim() ? customColor.trim() : CARPET_PRESETS.find(p => p.value === carpetColor)?.label || carpetColor}
-              </p>
-            )}
+      {limitReached ? (
+        <div className="border-2 border-dashed border-red-500/30 rounded-3xl p-10 text-center bg-red-500/[0.03]">
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-16 h-16 rounded-2xl flex items-center justify-center border bg-red-500/10 border-red-500/20">
+              <Lock className="w-7 h-7 text-red-400" />
+            </div>
+            <div>
+              <p className="text-[#f2f2ef] font-semibold">Límite de {CARPET_LIMIT} generaciones alcanzado</p>
+              <p className="text-[#888880] text-sm mt-1">Escríbeme en Skool para ampliar tu plan</p>
+              <div className="mt-3 inline-block bg-[#1a1a1a] border border-white/[0.08] rounded-xl px-4 py-2">
+                <p className="text-[0.82rem] text-[#f2f2ef] select-all">{SKOOL_MSG}</p>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
+      ) : (
+        <div
+          onDragOver={e => { e.preventDefault(); setDragging(true); }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={handleDrop}
+          onClick={() => !isRunning && productInputRef.current?.click()}
+          className={`relative border-2 border-dashed rounded-3xl p-10 text-center transition-all ${
+            isRunning ? 'cursor-not-allowed opacity-60' :
+            dragging   ? 'border-[#d4ff00] bg-[#d4ff00]/[0.05] scale-[1.01] cursor-copy' :
+            'border-white/10 hover:border-white/20 hover:bg-white/[0.02] cursor-pointer'
+          }`}
+        >
+          <input
+            ref={productInputRef}
+            type="file"
+            accept="image/*,.heic,.HEIC"
+            multiple
+            className="hidden"
+            onChange={handleFileInput}
+            disabled={isRunning}
+          />
+          <div className="flex flex-col items-center gap-3">
+            <div className={`w-16 h-16 rounded-2xl flex items-center justify-center border transition-all ${
+              dragging ? 'bg-[#d4ff00]/10 border-[#d4ff00]' : 'bg-white/5 border-white/10'
+            }`}>
+              {isRunning
+                ? <RefreshCcw className="w-7 h-7 text-[#d4ff00] animate-spin" />
+                : <Upload className={`w-7 h-7 ${dragging ? 'text-[#d4ff00]' : 'text-white/40'}`} />
+              }
+            </div>
+            <div>
+              <p className="text-[#f2f2ef] font-semibold">
+                {isRunning ? 'Procesando fotos…' : 'Arrastra las fotos del producto aquí'}
+              </p>
+              <p className="text-white/40 text-sm mt-1">
+                {isRunning
+                  ? 'Cada imagen tarda ~15–30 segundos'
+                  : 'Puedes adjuntar varias fotos a la vez'}
+              </p>
+              {!isRunning && (
+                <p className="text-white/25 text-xs mt-0.5">
+                  Alfombra: {useCustom && customColor.trim() ? customColor.trim() : CARPET_PRESETS.find(p => p.value === carpetColor)?.label || carpetColor}
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Barra de acciones ───────────────────────────────────────────────── */}
       {jobs.length > 0 && (

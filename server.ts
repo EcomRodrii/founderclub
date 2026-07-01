@@ -431,6 +431,11 @@ async function startServer() {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_enabled BOOLEAN NOT NULL DEFAULT FALSE;
   `).catch(() => {});
 
+  // ── Alfombras: contador de usos de generación por usuario ───────────────────
+  await pool.query(`
+    ALTER TABLE licenses ADD COLUMN IF NOT EXISTS carpet_uses INTEGER DEFAULT 0;
+  `).catch(() => {});
+
   // ── Auto-publish: asegurar columnas vinted_id + session_cookie en vinted_accounts ──
   await pool.query(`
     ALTER TABLE vinted_accounts ADD COLUMN IF NOT EXISTS vinted_id   VARCHAR(50);
@@ -3657,16 +3662,50 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
     });
   });
 
+  // ── Alfombras: uso actual del usuario ───────────────────────────────────────
+  app.get("/api/carpet/usage", requireLicense as any, async (req: AuthRequest, res) => {
+    const CARPET_LIMIT = 35;
+    try {
+      const row = await pool.query(
+        "SELECT carpet_uses FROM licenses WHERE user_id=$1 AND is_active=TRUE AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1",
+        [req.user!.id]
+      );
+      const used = row.rows[0]?.carpet_uses ?? 0;
+      res.json({ used, limit: CARPET_LIMIT, remaining: Math.max(0, CARPET_LIMIT - used) });
+    } catch {
+      res.status(500).json({ error: "Error al obtener uso" });
+    }
+  });
+
   // ── Alfombras: edición de fondo por IA ──────────────────────────────────────
   // Recibe foto(s) de producto + referencia de alfombra opcional + color deseado.
   // Devuelve la imagen editada con la alfombra cambiada, producto intacto.
   app.post("/api/carpet/generate", geminiLimiter, requireLicense as any, checkDailyLimit as any, async (req: AuthRequest, res) => {
+    const CARPET_LIMIT = 35;
+
     // ── Gate: solo admins y usuarios Pro ───────────────────────────────────────
     if (!req.user?.is_admin && req.user?.rank !== 'pro') {
       return res.status(403).json({
-        error: "Esta función es exclusiva para usuarios Pro.\n\nEscríbeme al WhatsApp para activarla — 8,99€/mes.",
+        error: "Esta función es exclusiva para usuarios Pro.\n\nEnvíame un mensaje en Skool para activarla — 18,99€/mes.",
         pro_required: true,
       });
+    }
+
+    // ── Gate: límite de 35 generaciones ────────────────────────────────────────
+    if (!req.user?.is_admin) {
+      const usageRow = await pool.query(
+        "SELECT carpet_uses FROM licenses WHERE user_id=$1 AND is_active=TRUE AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1",
+        [req.user!.id]
+      );
+      const currentUses = usageRow.rows[0]?.carpet_uses ?? 0;
+      if (currentUses >= CARPET_LIMIT) {
+        return res.status(429).json({
+          error: `Has alcanzado el límite de ${CARPET_LIMIT} generaciones del plan Pro. Escríbeme en Skool para ampliar tu plan.`,
+          limit_reached: true,
+          used: currentUses,
+          limit: CARPET_LIMIT,
+        });
+      }
     }
 
     const parsed = validate(ZCarpetGenerate, req, res);
@@ -3711,6 +3750,13 @@ Devuelve la imagen editada con calidad de catálogo profesional.`;
     if (!result) return res.status(503).json({ error: "No se pudo generar la imagen. Inténtalo de nuevo." });
 
     deductTokens(tokenCheck.licenseId, 1);
+    // Incrementar contador de usos (sin bloquear la respuesta)
+    if (!req.user?.is_admin) {
+      pool.query(
+        "UPDATE licenses SET carpet_uses = carpet_uses + 1 WHERE user_id=$1 AND is_active=TRUE",
+        [req.user!.id]
+      ).catch(() => {});
+    }
     res.json(result);
   });
 
