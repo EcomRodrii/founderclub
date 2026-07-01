@@ -63,24 +63,47 @@ if (!process.env.CONTROL_ENCRYPTION_KEY || process.env.CONTROL_ENCRYPTION_KEY.le
 }
 const CTRL_KEY = process.env.CONTROL_ENCRYPTION_KEY.slice(0, 32);
 
+// AES-256-GCM (autenticado) — formato: "gcm:<ivHex>:<authTagHex>:<cipherHex>"
 function ctrlEncrypt(text: string): string {
   if (!text) return "";
-  const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipheriv("aes-256-cbc", Buffer.from(CTRL_KEY), iv);
+  const iv = crypto.randomBytes(12); // 96-bit IV estándar para GCM
+  const cipher = crypto.createCipheriv("aes-256-gcm", Buffer.from(CTRL_KEY), iv);
   let enc = cipher.update(text, "utf8", "hex");
   enc += cipher.final("hex");
-  return iv.toString("hex") + ":" + enc;
+  const authTag = (cipher as any).getAuthTag().toString("hex");
+  return `gcm:${iv.toString("hex")}:${authTag}:${enc}`;
 }
 
 function ctrlDecrypt(text: string): string {
-  if (!text || !text.includes(":")) return text;
-  try {
-    const [ivHex, enc] = text.split(":");
-    const decipher = crypto.createDecipheriv("aes-256-cbc", Buffer.from(CTRL_KEY), Buffer.from(ivHex, "hex"));
-    let dec = decipher.update(enc, "hex", "utf8");
-    dec += decipher.final("utf8");
-    return dec;
-  } catch { return ""; }
+  if (!text) return text;
+  if (text.startsWith("gcm:")) {
+    // Formato AES-256-GCM: "gcm:<ivHex>:<authTagHex>:<cipherHex>"
+    const parts = text.split(":");
+    if (parts.length < 4) return "";
+    try {
+      const iv      = Buffer.from(parts[1], "hex");
+      const authTag = Buffer.from(parts[2], "hex");
+      const enc     = parts[3];
+      const decipher = crypto.createDecipheriv("aes-256-gcm", Buffer.from(CTRL_KEY), iv);
+      (decipher as any).setAuthTag(authTag);
+      let dec = decipher.update(enc, "hex", "utf8");
+      dec += decipher.final("utf8");
+      return dec;
+    } catch { return ""; }
+  }
+  // Formato legado AES-256-CBC: "<ivHex>:<cipherHex>"
+  if (text.includes(":")) {
+    try {
+      const colonIdx = text.indexOf(":");
+      const ivHex = text.slice(0, colonIdx);
+      const enc   = text.slice(colonIdx + 1);
+      const decipher = crypto.createDecipheriv("aes-256-cbc", Buffer.from(CTRL_KEY), Buffer.from(ivHex, "hex"));
+      let dec = decipher.update(enc, "hex", "utf8");
+      dec += decipher.final("utf8");
+      return dec;
+    } catch { return ""; }
+  }
+  return text; // texto plano (sin cifrar — compatibilidad session_cookie antiguas)
 }
 
 // Registro público deshabilitado — CONTROL_INVITE_CODE eliminado, cuentas solo por admin.
@@ -460,6 +483,50 @@ async function startServer() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
   `).catch(() => {});
+
+  // ── Migración AES-CBC → AES-GCM (one-time, idempotente) ─────────────────────
+  // Re-cifra IBANs, contraseñas Vinted y session_cookies que aún estén en formato CBC.
+  // Los registros ya en GCM (prefijo "gcm:") se saltan. Seguro ejecutar en cada arranque.
+  (async () => {
+    try {
+      let migrated = 0;
+
+      // control_vinted_accounts: iban + vinted_pass
+      const cva = await pool.query(
+        "SELECT id, iban, vinted_pass FROM control_vinted_accounts WHERE iban IS NOT NULL OR vinted_pass IS NOT NULL"
+      );
+      for (const row of cva.rows) {
+        const isCbcIban  = row.iban       && !row.iban.startsWith("gcm:")       && row.iban.includes(":");
+        const isCbcPass  = row.vinted_pass && !row.vinted_pass.startsWith("gcm:") && row.vinted_pass.includes(":");
+        if (!isCbcIban && !isCbcPass) continue;
+        const newIban  = isCbcIban  ? ctrlEncrypt(ctrlDecrypt(row.iban))       : row.iban;
+        const newPass  = isCbcPass  ? ctrlEncrypt(ctrlDecrypt(row.vinted_pass)) : row.vinted_pass;
+        await pool.query(
+          "UPDATE control_vinted_accounts SET iban=$1, vinted_pass=$2 WHERE id=$3",
+          [newIban, newPass, row.id]
+        );
+        migrated++;
+      }
+
+      // vinted_accounts: session_cookie
+      const va = await pool.query(
+        "SELECT id, session_cookie FROM vinted_accounts WHERE session_cookie IS NOT NULL"
+      );
+      for (const row of va.rows) {
+        const isCbc = row.session_cookie && !row.session_cookie.startsWith("gcm:") && row.session_cookie.includes(":");
+        if (!isCbc) continue;
+        await pool.query(
+          "UPDATE vinted_accounts SET session_cookie=$1 WHERE id=$2",
+          [ctrlEncrypt(ctrlDecrypt(row.session_cookie)), row.id]
+        );
+        migrated++;
+      }
+
+      if (migrated > 0) console.log(`[crypto-migration] ${migrated} registros migrados de AES-CBC a AES-GCM`);
+    } catch (e: any) {
+      console.error("[crypto-migration] Error durante migración CBC→GCM:", e.message);
+    }
+  })();
 
   const app = express();
 
