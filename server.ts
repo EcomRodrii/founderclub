@@ -1041,6 +1041,26 @@ async function startServer() {
     res.json({ ok: true, username: result.rows[0].username });
   });
 
+  // ── Asignar licencia directamente a un usuario (sin necesitar token de usuario) ──
+  app.post("/api/admin/users/:id/assign-license", requireAdmin as any, async (req, res) => {
+    const userId = parseInt(req.params.id);
+    const { type = "monthly" } = req.body;
+    const userRes = await pool.query("SELECT id FROM users WHERE id=$1", [userId]);
+    if (!userRes.rows[0]) return res.status(404).json({ error: "Usuario no encontrado" });
+
+    let expires_at: Date | null = null;
+    if (type === "trial") expires_at = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+    else if (type === "monthly") expires_at = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
+    const licFeatures = ["all", "academia", "photos"];
+    const key = generateLicenseKey();
+    await pool.query(
+      "INSERT INTO licenses (key, type, expires_at, features, user_id, activated_at) VALUES ($1,$2,$3,$4,$5,NOW())",
+      [key, type, expires_at, licFeatures, userId]
+    );
+    res.json({ ok: true, key, type, expires_at });
+  });
+
   // ── Cambiar rango de usuario (admin) ──────────────────────────────────────────
   app.patch("/api/admin/users/:id/rank", requireAdmin as any, async (req, res) => {
     const { rank } = req.body; // 'normal' | 'pro'
