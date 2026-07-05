@@ -497,6 +497,18 @@ async function startServer() {
     );
   `).catch(() => {});
 
+  // ── Lista de espera (cierre Skool) ──────────────────────────────────────────
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS waitlist (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT NOT NULL,
+      phone TEXT NOT NULL UNIQUE,
+      source TEXT DEFAULT 'lista-de-espera',
+      user_agent TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `).catch(() => {});
+
   // ── Migración AES-CBC → AES-GCM (one-time, idempotente) ─────────────────────
   // Re-cifra IBANs, contraseñas Vinted y session_cookies que aún estén en formato CBC.
   // Los registros ya en GCM (prefijo "gcm:") se saltan. Seguro ejecutar en cada arranque.
@@ -625,6 +637,13 @@ async function startServer() {
     windowMs: 60 * 60 * 1000,
     max: 5,
     message: { error: "Demasiadas solicitudes. Espera una hora e inténtalo de nuevo." }
+  });
+
+  // Rate limit para la lista de espera: 12 intentos por IP cada 10 minutos
+  const waitlistLimiter = rateLimit({
+    windowMs: 10 * 60 * 1000,
+    max: 12,
+    message: { error: "Demasiados intentos. Espera unos minutos e inténtalo de nuevo." }
   });
 
   // Limit global: 5MB cubre base64 de imágenes JPEG (~3.5MB) + overhead JSON.
@@ -6601,6 +6620,74 @@ ${qaLines}`;
       return { score: 50, details: {}, red_flags: serverRedFlags };
     }
   }
+
+  // ── Lista de espera (cierre Skool) ──────────────────────────────────────────
+  // Captcha propio: reto matemático firmado con HMAC (stateless, sin tocar la BD).
+  const waitlistUsedCaptchas = new Set<string>();
+  const wlSign = (payload: string) =>
+    crypto.createHmac("sha256", JWT_SECRET + ":waitlist").update(payload).digest("hex").slice(0, 24);
+
+  function verifyWaitlistCaptcha(token: any, answer: any): boolean {
+    if (!token || answer === undefined || answer === null) return false;
+    const [expStr, sig] = String(token).split(".");
+    const expiry = parseInt(expStr, 10);
+    if (!expiry || !sig || Date.now() > expiry) return false;   // caducado / malformado
+    if (waitlistUsedCaptchas.has(sig)) return false;             // ya usado (anti-replay)
+    const expected = wlSign(`${String(answer).trim()}.${expiry}`);
+    const ok = expected.length === sig.length &&
+      crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(sig));
+    if (ok) {
+      waitlistUsedCaptchas.add(sig);
+      if (waitlistUsedCaptchas.size > 5000) waitlistUsedCaptchas.clear();
+    }
+    return ok;
+  }
+
+  app.get("/api/waitlist/captcha", (_req, res) => {
+    const a = 1 + crypto.randomInt(9);
+    const b = 1 + crypto.randomInt(9);
+    const expiry = Date.now() + 5 * 60 * 1000;
+    res.json({ question: `¿Cuánto es ${a} + ${b}?`, token: `${expiry}.${wlSign(`${a + b}.${expiry}`)}` });
+  });
+
+  app.get("/api/waitlist/count", async (_req, res) => {
+    try {
+      const r = await pool.query(`SELECT COUNT(*)::int AS n FROM waitlist`);
+      res.json({ count: r.rows[0].n });
+    } catch { res.json({ count: 0 }); }
+  });
+
+  app.post("/api/waitlist", waitlistLimiter, async (req, res) => {
+    const { name, phone, captchaToken, captchaAnswer } = req.body || {};
+    const cleanName = String(name || "").trim().slice(0, 80);
+    const cleanPhone = String(phone || "").replace(/[^\d+]/g, "");
+    if (cleanName.length < 2) return res.status(400).json({ error: "name" });
+    if (cleanPhone.replace("+", "").length < 8) return res.status(400).json({ error: "phone" });
+    if (!verifyWaitlistCaptcha(captchaToken, captchaAnswer)) return res.status(400).json({ error: "captcha" });
+    try {
+      await pool.query(
+        `INSERT INTO waitlist (name, phone, user_agent) VALUES ($1, $2, $3)`,
+        [cleanName, cleanPhone, String(req.headers["user-agent"] || "").slice(0, 200)]
+      );
+      // Aviso instantáneo por WhatsApp (mismo patrón que academia)
+      const callmebotKey = process.env.CALLMEBOT_API_KEY;
+      if (callmebotKey) {
+        const txt = encodeURIComponent(`NUEVA LISTA DE ESPERA: ${cleanName} (${cleanPhone})`);
+        fetch(`https://api.callmebot.com/whatsapp.php?phone=34640515871&text=${txt}&apikey=${callmebotKey}`).catch(() => {});
+      }
+      res.json({ ok: true });
+    } catch (e: any) {
+      if (e.code === "23505") return res.status(409).json({ error: "duplicate" }); // teléfono repetido
+      res.status(500).json({ error: "Error al registrar" });
+    }
+  });
+
+  app.get("/api/admin/waitlist", requireAdmin as any, async (_req, res) => {
+    try {
+      const r = await pool.query(`SELECT id, name, phone, created_at FROM waitlist ORDER BY created_at DESC`);
+      res.json(r.rows);
+    } catch { res.status(500).json({ error: "Error del servidor" }); }
+  });
 
   app.post("/api/academia/identify", academiaLimiter, async (req, res) => {
     const { skool_username, email, phone } = req.body || {};
