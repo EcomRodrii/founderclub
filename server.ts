@@ -503,11 +503,14 @@ async function startServer() {
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name TEXT NOT NULL,
       phone TEXT NOT NULL UNIQUE,
+      frenado TEXT,
       source TEXT DEFAULT 'lista-de-espera',
       user_agent TEXT,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
   `).catch(() => {});
+  // Migración: añade la columna 'frenado' a tablas ya existentes
+  await pool.query(`ALTER TABLE waitlist ADD COLUMN IF NOT EXISTS frenado TEXT`).catch(() => {});
 
   // ── Migración AES-CBC → AES-GCM (one-time, idempotente) ─────────────────────
   // Re-cifra IBANs, contraseñas Vinted y session_cookies que aún estén en formato CBC.
@@ -6675,16 +6678,17 @@ ${qaLines}`;
   });
 
   app.post("/api/waitlist", waitlistLimiter, async (req, res) => {
-    const { name, phone, captchaToken, captchaAnswer } = req.body || {};
+    const { name, phone, captchaToken, captchaAnswer, frenado } = req.body || {};
     const cleanName = String(name || "").trim().slice(0, 80);
     const cleanPhone = String(phone || "").replace(/[^\d+]/g, "");
+    const cleanFrenado = String(frenado || "").trim().slice(0, 2000) || null;
     if (cleanName.length < 2) return res.status(400).json({ error: "name" });
     if (cleanPhone.replace("+", "").length < 8) return res.status(400).json({ error: "phone" });
     if (!verifyWaitlistCaptcha(captchaToken, captchaAnswer)) return res.status(400).json({ error: "captcha" });
     try {
       await pool.query(
-        `INSERT INTO waitlist (name, phone, user_agent) VALUES ($1, $2, $3)`,
-        [cleanName, cleanPhone, String(req.headers["user-agent"] || "").slice(0, 200)]
+        `INSERT INTO waitlist (name, phone, frenado, user_agent) VALUES ($1, $2, $3, $4)`,
+        [cleanName, cleanPhone, cleanFrenado, String(req.headers["user-agent"] || "").slice(0, 200)]
       );
       // Aviso instantáneo por WhatsApp (mismo patrón que academia)
       const callmebotKey = process.env.CALLMEBOT_API_KEY;
@@ -6701,7 +6705,7 @@ ${qaLines}`;
 
   app.get("/api/admin/waitlist", requireAdmin as any, async (_req, res) => {
     try {
-      const r = await pool.query(`SELECT id, name, phone, created_at FROM waitlist ORDER BY created_at DESC`);
+      const r = await pool.query(`SELECT id, name, phone, frenado, created_at FROM waitlist ORDER BY created_at DESC`);
       res.json(r.rows);
     } catch { res.status(500).json({ error: "Error del servidor" }); }
   });
