@@ -6688,7 +6688,10 @@ ${qaLines}`;
     if (cleanName.length < 2) return res.status(400).json({ error: "name" });
     if (cleanPhone.replace("+", "").length < 8) return res.status(400).json({ error: "phone" });
     if (!verifyWaitlistCaptcha(captchaToken, captchaAnswer)) return res.status(400).json({ error: "captcha" });
-    const ip = String(req.ip || "").slice(0, 64) || null;
+    // IP real del cliente: en Railway req.ip puede variar entre proxies internos,
+    // así que usamos el primer valor de X-Forwarded-For (el cliente original), estable.
+    const xff = String(req.headers["x-forwarded-for"] || "");
+    const ip = (xff.split(",")[0].trim() || String(req.headers["x-real-ip"] || "") || String(req.ip || "")).slice(0, 64) || null;
     const MAX_PER_IP = 2; // máximo de altas correctas por IP
     try {
       if (ip) {
