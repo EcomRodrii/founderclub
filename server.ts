@@ -6689,11 +6689,11 @@ ${qaLines}`;
     if (cleanPhone.replace("+", "").length < 8) return res.status(400).json({ error: "phone" });
     if (!verifyWaitlistCaptcha(captchaToken, captchaAnswer)) return res.status(400).json({ error: "captcha" });
     const ip = String(req.ip || "").slice(0, 64) || null;
+    const MAX_PER_IP = 2; // máximo de altas correctas por IP
     try {
-      // Una sola solicitud correcta por IP
       if (ip) {
-        const existing = await pool.query(`SELECT 1 FROM waitlist WHERE ip = $1 LIMIT 1`, [ip]);
-        if (existing.rows[0]) return res.status(409).json({ error: "already_ip" });
+        const c = await pool.query(`SELECT COUNT(*)::int AS n FROM waitlist WHERE ip = $1`, [ip]);
+        if (c.rows[0].n >= MAX_PER_IP) return res.status(409).json({ error: "already_ip" });
       }
       await pool.query(
         `INSERT INTO waitlist (name, phone, frenado, ip, user_agent) VALUES ($1, $2, $3, $4, $5)`,
