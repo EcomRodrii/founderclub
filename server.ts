@@ -506,11 +506,14 @@ async function startServer() {
       frenado TEXT,
       source TEXT DEFAULT 'lista-de-espera',
       user_agent TEXT,
+      ip TEXT,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
   `).catch(() => {});
-  // Migración: añade la columna 'frenado' a tablas ya existentes
+  // Migraciones para tablas ya existentes
   await pool.query(`ALTER TABLE waitlist ADD COLUMN IF NOT EXISTS frenado TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE waitlist ADD COLUMN IF NOT EXISTS ip TEXT`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_waitlist_ip ON waitlist(ip)`).catch(() => {});
 
   // ── Migración AES-CBC → AES-GCM (one-time, idempotente) ─────────────────────
   // Re-cifra IBANs, contraseñas Vinted y session_cookies que aún estén en formato CBC.
@@ -6685,10 +6688,16 @@ ${qaLines}`;
     if (cleanName.length < 2) return res.status(400).json({ error: "name" });
     if (cleanPhone.replace("+", "").length < 8) return res.status(400).json({ error: "phone" });
     if (!verifyWaitlistCaptcha(captchaToken, captchaAnswer)) return res.status(400).json({ error: "captcha" });
+    const ip = String(req.ip || "").slice(0, 64) || null;
     try {
+      // Una sola solicitud correcta por IP
+      if (ip) {
+        const existing = await pool.query(`SELECT 1 FROM waitlist WHERE ip = $1 LIMIT 1`, [ip]);
+        if (existing.rows[0]) return res.status(409).json({ error: "already_ip" });
+      }
       await pool.query(
-        `INSERT INTO waitlist (name, phone, frenado, user_agent) VALUES ($1, $2, $3, $4)`,
-        [cleanName, cleanPhone, cleanFrenado, String(req.headers["user-agent"] || "").slice(0, 200)]
+        `INSERT INTO waitlist (name, phone, frenado, ip, user_agent) VALUES ($1, $2, $3, $4, $5)`,
+        [cleanName, cleanPhone, cleanFrenado, ip, String(req.headers["user-agent"] || "").slice(0, 200)]
       );
       // Aviso instantáneo por WhatsApp (mismo patrón que academia)
       const callmebotKey = process.env.CALLMEBOT_API_KEY;
