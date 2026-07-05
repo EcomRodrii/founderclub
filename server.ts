@@ -6689,6 +6689,13 @@ ${qaLines}`;
     } catch { res.status(500).json({ error: "Error del servidor" }); }
   });
 
+  app.delete("/api/admin/waitlist/:id", requireAdmin as any, async (req, res) => {
+    try {
+      await pool.query(`DELETE FROM waitlist WHERE id = $1`, [req.params.id]);
+      res.json({ ok: true });
+    } catch { res.status(500).json({ error: "Error del servidor" }); }
+  });
+
   app.post("/api/academia/identify", academiaLimiter, async (req, res) => {
     const { skool_username, email, phone } = req.body || {};
     if (!skool_username || !email || !phone)
