@@ -1309,6 +1309,23 @@ async function startServer() {
     res.json(result.rows[0]);
   });
 
+  app.patch("/api/admin/licenses/:id/extend", requireAdmin as any, async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    const days = parseInt(req.body.days, 10);
+    if (isNaN(id)) return res.status(400).json({ error: "ID inválido" });
+    if (isNaN(days) || days < 1 || days > 3650) return res.status(400).json({ error: "Días inválidos (1–3650)" });
+    const row = await pool.query("SELECT expires_at FROM licenses WHERE id=$1", [id]);
+    if (!row.rows[0]) return res.status(404).json({ error: "Licencia no encontrada" });
+    const current = row.rows[0].expires_at;
+    const base = (current && new Date(current) > new Date()) ? new Date(current) : new Date();
+    const newExpiry = new Date(base.getTime() + days * 24 * 60 * 60 * 1000);
+    const result = await pool.query(
+      "UPDATE licenses SET expires_at=$1 WHERE id=$2 RETURNING id, expires_at",
+      [newExpiry, id]
+    );
+    res.json(result.rows[0]);
+  });
+
   app.get("/api/admin/sessions", requireAdmin as any, async (_req, res) => {
     const result = await pool.query(`
       SELECT s.*, u.username, u.email

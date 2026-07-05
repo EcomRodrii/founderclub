@@ -432,6 +432,10 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
   // Expiry editing per license (licenseId → draft date string "YYYY-MM-DD" or "")
   const [editingExpiry, setEditingExpiry] = useState<Record<number, string>>({});
 
+  // Extend license (licenseId → custom days string for input)
+  const [extendingLicense, setExtendingLicense] = useState<number | null>(null);
+  const [extendDays, setExtendDays] = useState('30');
+
   // Academia
   const [acadList, setAcadList] = useState<any[]>([]);
   const [acadFilter, setAcadFilter] = useState<'all'|'pending'|'approved'|'denied'>('all');
@@ -549,6 +553,12 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
     const expires_at = raw || null;
     await client.patch(`/api/admin/licenses/${licenseId}/expires`, { expires_at });
     setEditingExpiry(prev => { const n = { ...prev }; delete n[licenseId]; return n; });
+    loadTab('licenses');
+  };
+
+  const extendLicense = async (licenseId: number, days: number) => {
+    await client.patch(`/api/admin/licenses/${licenseId}/extend`, { days });
+    setExtendingLicense(null);
     loadTab('licenses');
   };
 
@@ -1173,17 +1183,45 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
                             <button onClick={() => saveLicenseExpiry(l.id)} className="text-acid text-xs px-1.5 py-1 rounded hover:text-white transition">✓</button>
                             <button onClick={() => setEditingExpiry(prev => { const n = { ...prev }; delete n[l.id]; return n; })} className="text-zinc-500 text-xs px-1 py-1 rounded hover:text-white transition">✕</button>
                           </div>
+                        ) : extendingLicense === l.id ? (
+                          <div className="flex items-center gap-1 flex-wrap">
+                            {[7, 30, 90].map(d => (
+                              <button
+                                key={d}
+                                onClick={() => extendLicense(l.id, d)}
+                                className="text-[10px] font-bold px-2 py-1 rounded-lg bg-violet-600/20 border border-violet-500/40 text-violet-400 hover:bg-violet-600/40 transition"
+                              >+{d}d</button>
+                            ))}
+                            <input
+                              type="number" min={1} max={3650} placeholder="días"
+                              value={extendDays}
+                              onChange={e => setExtendDays(e.target.value)}
+                              onKeyDown={e => { if (e.key === 'Enter') extendLicense(l.id, parseInt(extendDays) || 30); }}
+                              className="w-14 bg-zinc-800 border border-zinc-600 rounded-lg px-1.5 py-1 text-xs text-white text-center focus:outline-none focus:border-violet-500"
+                            />
+                            <button onClick={() => extendLicense(l.id, parseInt(extendDays) || 30)} className="text-acid text-xs px-1.5 py-1 rounded hover:text-white transition">✓</button>
+                            <button onClick={() => setExtendingLicense(null)} className="text-zinc-500 text-xs px-1 py-1 rounded hover:text-white transition">✕</button>
+                          </div>
                         ) : (
-                          <button
-                            onClick={() => {
-                              const d = l.expires_at ? new Date(l.expires_at).toISOString().slice(0, 10) : '';
-                              setEditingExpiry(prev => ({ ...prev, [l.id]: d }));
-                            }}
-                            className="text-zinc-400 hover:text-white hover:underline transition cursor-pointer"
-                            title="Editar fecha de expiración"
-                          >
-                            {formatDate(l.expires_at)}
-                          </button>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              onClick={() => {
+                                const d = l.expires_at ? new Date(l.expires_at).toISOString().slice(0, 10) : '';
+                                setEditingExpiry(prev => ({ ...prev, [l.id]: d }));
+                              }}
+                              className="text-zinc-400 hover:text-white hover:underline transition cursor-pointer"
+                              title="Editar fecha exacta"
+                            >
+                              {formatDate(l.expires_at)}
+                            </button>
+                            {l.type !== 'lifetime' && (
+                              <button
+                                onClick={() => { setExtendingLicense(l.id); setExtendDays('30'); }}
+                                title="Añadir tiempo"
+                                className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-violet-600/15 border border-violet-500/30 text-violet-400 hover:bg-violet-600/30 transition"
+                              >+</button>
+                            )}
+                          </div>
                         )}
                       </td>
                       <td className="px-4 py-3 text-xs text-zinc-500 max-w-[90px] truncate" title={l.hwid || ''}>{truncate(l.hwid, 10)}</td>
