@@ -6950,18 +6950,28 @@ ${qaLines}`;
         .map(([k, v]) => `**${QUESTIONS[k]}**\n${v}`)
         .join("\n\n");
 
-      const prompt = `Eres el asistente de Lamine Resell y tienes que hacer un resumen ejecutivo de las respuestas de ${skool_username} al cuestionario de acceso a la Academia. Su puntuación final es ${score}/100${(red_flags as string[]).length > 0 ? ` (con alertas en: ${(red_flags as string[]).join(', ')})` : ''}.
+      const prompt = `Eres el coach de Lamine Resell. Crea un plan de acción personalizado para ${skool_username} basándote en sus respuestas al cuestionario de la Academia. Puntuación: ${score}/100.${(red_flags as string[]).length > 0 ? ` Señales de alerta en: ${(red_flags as string[]).join(', ')}.` : ''}
 
-RESPUESTAS:
+RESPUESTAS COMPLETAS:
 ${qaLines}
 
-Escribe un resumen en español, bien estructurado, con estos apartados:
-1. **Perfil rápido** (2-3 frases): quién es, en qué punto está, qué vende
-2. **Puntos fuertes** (bullet points)
-3. **Áreas de mejora** (bullet points)
-4. **Valoración final** (1 párrafo): si está preparado para la academia o qué le falta
+---
 
-Sé directo y concreto, no uses relleno. Máximo 400 palabras.`;
+Crea un plan de mejora en español con EXACTAMENTE estos apartados (usa los encabezados tal cual, con ##):
+
+## Lo que ya tienes bien ✅
+Bullet points de sus puntos fuertes REALES según sus respuestas. Solo lo que realmente hace bien, sin relleno.
+
+## Lo que más te está frenando 🔴
+Los 3-4 cuellos de botella principales, ordenados por impacto. Para cada uno: por qué le frena y qué le cuesta en resultados.
+
+## Tu plan de acción 🎯
+Para cada punto débil: una acción concreta y específica (no "mejorar X" sino "hacer Y exactamente"). Muy práctico.
+
+## Esta semana, empieza por aquí ⚡
+Una sola acción, la más urgente e impactante. Accionable en los próximos 7 días.
+
+REGLAS: Basa TODO en sus respuestas reales (si dice que tiene X cuentas, úsalo; si vende Y, úsalo). Nada genérico. Máximo 450 palabras.`;
 
       const resp = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,

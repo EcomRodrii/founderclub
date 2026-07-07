@@ -1767,7 +1767,7 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
                       : 'text-zinc-500 border-transparent hover:text-white'
                   }`}
                 >
-                  {t === 'full' ? '📄 Leer completo' : '✨ Resumir con IA'}
+                  {t === 'full' ? '📄 Leer completo' : '🎯 Plan IA'}
                 </button>
               ))}
             </div>
@@ -1806,29 +1806,49 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
                 <div>
                   {!acadSummary[acadModal.id] && !acadSummaryLoading && (
                     <div className="text-center py-8 space-y-4">
-                      <p className="text-sm text-zinc-400">Pulsa para que la IA analice las 40 respuestas y genere un resumen ejecutivo.</p>
+                      <p className="text-sm text-zinc-400">La IA analiza las 40 respuestas y crea un plan de acción personalizado para el alumno.</p>
                       <button
                         onClick={() => generateAcadSummary(acadModal!.id)}
                         className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-sm font-semibold transition"
-                      >✨ Generar resumen con IA</button>
+                      >🎯 Generar plan personalizado</button>
                     </div>
                   )}
                   {acadSummaryLoading && (
                     <div className="flex items-center gap-3 py-8 justify-center text-zinc-400 text-sm">
-                      <RefreshCcw className="w-4 h-4 animate-spin" /> Analizando respuestas…
+                      <RefreshCcw className="w-4 h-4 animate-spin" /> Creando plan personalizado…
                     </div>
                   )}
                   {acadSummary[acadModal.id] && (
                     <div className="space-y-4">
-                      <div className="text-sm leading-relaxed text-zinc-200 whitespace-pre-wrap">
-                        {acadSummary[acadModal.id].split(/\*\*(.+?)\*\*/g).map((part, i) =>
-                          i % 2 === 1 ? <strong key={i} className="text-white font-semibold">{part}</strong> : part
-                        )}
+                      <div className="space-y-3">
+                        {acadSummary[acadModal.id].split('\n').map((line, i) => {
+                          if (line.startsWith('## ')) {
+                            return (
+                              <h3 key={i} className="text-sm font-bold text-white mt-5 first:mt-0 flex items-center gap-1.5">
+                                {line.replace('## ', '')}
+                              </h3>
+                            );
+                          }
+                          if (line.trim() === '') return null;
+                          const parts = line.split(/\*\*(.+?)\*\*/g);
+                          const rendered = parts.map((p, j) =>
+                            j % 2 === 1 ? <strong key={j} className="text-white font-semibold">{p}</strong> : p
+                          );
+                          const isBullet = line.trimStart().startsWith('- ') || line.trimStart().startsWith('• ');
+                          return isBullet ? (
+                            <div key={i} className="flex gap-2 text-sm leading-relaxed text-zinc-300">
+                              <span className="text-violet-400 shrink-0 mt-0.5">•</span>
+                              <span>{rendered}</span>
+                            </div>
+                          ) : (
+                            <p key={i} className="text-sm leading-relaxed text-zinc-300">{rendered}</p>
+                          );
+                        })}
                       </div>
                       <button
                         onClick={() => { setAcadSummary(p => { const n={...p}; delete n[acadModal!.id]; return n; }); generateAcadSummary(acadModal!.id); }}
                         className="text-xs text-zinc-500 hover:text-zinc-300 transition"
-                      >↺ Regenerar</button>
+                      >↺ Regenerar plan</button>
                     </div>
                   )}
                 </div>
