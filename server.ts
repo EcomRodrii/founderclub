@@ -3802,6 +3802,88 @@ Devuelve la imagen editada con calidad de catálogo profesional.`;
     res.json(result);
   });
 
+  // ── Títulos y descripciones: generación con IA ──────────────────────────────
+  app.post("/api/titles/generate", geminiLimiter, requireLicense as any, checkDailyLimit as any, async (req: AuthRequest, res) => {
+    const { code, imageBase64, lang } = req.body;
+
+    if (!code && !imageBase64) return res.status(400).json({ error: "Proporciona un código o una foto" });
+    if (!["es", "fr", "en"].includes(lang)) return res.status(400).json({ error: "Idioma no válido" });
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY no configurada" });
+
+    const langNames: Record<string, string> = { es: "Spanish", fr: "French", en: "English" };
+    const sizePlaceholders: Record<string, string> = { es: "Talla (X)", fr: "Pointure (X)", en: "Size (X)" };
+
+    const textPrompt = `You are an expert at creating Vinted/Wallapop second-hand marketplace listings for sneakers in ${langNames[lang]}.
+
+${code ? `The shoe model code is: ${code}` : "The image shows a shoe tongue label. First extract the complete model code from it."}
+
+Instructions:
+1. Identify the exact shoe: brand, exact model name, colorway, gender (men/women/unisex), and the model code.
+2. Generate 3 SEO-optimized listing titles in ${langNames[lang]}. Each title must include: brand + model name + color + gender keyword + size placeholder "${sizePlaceholders[lang]}" + the model code. Vary the structure across the 3 titles. Natural seller tone, not robotic.
+3. Generate 3 natural listing descriptions in ${langNames[lang]}. Story: the shoes were bought as a gift for a sister/female relative but didn't fit — she returned them, now selling at a lower price. Vary the story slightly in each. Warm and believable tone. 2-3 sentences each.
+
+Return ONLY valid JSON (no markdown):
+{
+  "identified": { "brand": "...", "model": "...", "color": "...", "gender": "..." },
+  "code": "...",
+  "titles": ["title1", "title2", "title3"],
+  "descriptions": ["desc1", "desc2", "desc3"]
+}`;
+
+    function extractJsonLocal(text: string): any | null {
+      const m1 = text.match(/```json\s*([\s\S]*?)```/i);
+      if (m1) { try { return JSON.parse(m1[1].trim()); } catch {} }
+      const m2 = text.match(/```\s*([\s\S]*?)```/);
+      if (m2) { try { return JSON.parse(m2[1].trim()); } catch {} }
+      const i1 = text.indexOf("{"), i2 = text.lastIndexOf("}");
+      if (i1 >= 0 && i2 > i1) { try { return JSON.parse(text.slice(i1, i2 + 1)); } catch {} }
+      return null;
+    }
+
+    const SAFETY_OFF = [
+      { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+      { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+      { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+      { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
+    ];
+
+    for (const model of ["gemini-2.5-flash", "gemini-2.5-pro"]) {
+      try {
+        const parts: any[] = [];
+        if (imageBase64) {
+          const mimeMatch = imageBase64.match(/^data:([^;]+);/);
+          const mimeType = mimeMatch?.[1] || "image/jpeg";
+          const base64Data = imageBase64.includes(",") ? imageBase64.split(",")[1] : imageBase64;
+          parts.push({ inlineData: { mimeType, data: base64Data } });
+        }
+        parts.push({ text: textPrompt });
+
+        const r = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ contents: [{ parts }], safetySettings: SAFETY_OFF }),
+          }
+        );
+        const data: any = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data?.error?.message || `HTTP ${r.status}`);
+
+        const raw: string = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        const parsed = extractJsonLocal(raw);
+        if (parsed?.titles?.length >= 3 && parsed?.descriptions?.length >= 3) {
+          return res.json(parsed);
+        }
+      } catch (e: any) {
+        console.error(`[titles] ${model} error:`, e.message);
+      }
+    }
+
+    res.status(500).json({ error: "No se pudo generar el contenido. Inténtalo de nuevo." });
+  });
+
   // ── SSE: Ops Terminal stream ─────────────────────────────────────────────────
   // El cliente se conecta con el token JWT en query param porque EventSource
   // no soporta cabeceras personalizadas.

@@ -3,12 +3,12 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   LayoutDashboard, Users, Package, ShoppingBag, Settings,
   LogOut, ShieldCheck, Scissors, Ghost, TrendingUp,
-  MoreHorizontal, X, Lock, Send, Layers, Tag,
+  MoreHorizontal, X, Lock, Send, Layers, Tag, Type,
 } from 'lucide-react';
 
 export type Page =
   | 'dashboard' | 'accounts' | 'inventory' | 'orders'
-  | 'profits' | 'tongue' | 'photos' | 'alfombras' | 'metadatos' | 'settings' | 'publish';
+  | 'profits' | 'tongue' | 'photos' | 'alfombras' | 'metadatos' | 'titles' | 'settings' | 'publish';
 
 interface SidebarProps {
   currentPage: Page;
@@ -33,6 +33,7 @@ const NAV_TOOLS: { id: Page; label: string; icon: React.ReactNode }[] = [
   { id: 'photos',    label: 'Fantasma',    icon: <Ghost   className="w-[18px] h-[18px]" /> },
   { id: 'alfombras', label: 'Alfombras',   icon: <Layers  className="w-[18px] h-[18px]" /> },
   { id: 'metadatos', label: 'Metadatos',   icon: <Tag     className="w-[18px] h-[18px]" /> },
+  { id: 'titles',    label: 'Títulos IA',  icon: <Type    className="w-[18px] h-[18px]" /> },
   { id: 'settings',  label: 'Config',      icon: <Settings className="w-[18px] h-[18px]" /> },
 ];
 
@@ -137,11 +138,12 @@ const MOBILE_MAIN: { id: Page; label: string; icon: React.ReactNode }[] = [
 ];
 
 const MOBILE_MORE: { id: Page; label: string; icon: React.ReactNode }[] = [
-  { id: 'tongue',    label: 'RealG',     icon: <Scissors className="w-5 h-5" /> },
-  { id: 'photos',    label: 'Fantasma',  icon: <Ghost    className="w-5 h-5" /> },
-  { id: 'alfombras', label: 'Alfombras', icon: <Layers   className="w-5 h-5" /> },
-  { id: 'metadatos', label: 'Metadatos', icon: <Tag      className="w-5 h-5" /> },
-  { id: 'settings',  label: 'Config',    icon: <Settings className="w-5 h-5" /> },
+  { id: 'tongue',    label: 'RealG',      icon: <Scissors className="w-5 h-5" /> },
+  { id: 'photos',    label: 'Fantasma',   icon: <Ghost    className="w-5 h-5" /> },
+  { id: 'alfombras', label: 'Alfombras',  icon: <Layers   className="w-5 h-5" /> },
+  { id: 'metadatos', label: 'Metadatos',  icon: <Tag      className="w-5 h-5" /> },
+  { id: 'titles',    label: 'Títulos IA', icon: <Type     className="w-5 h-5" /> },
+  { id: 'settings',  label: 'Config',     icon: <Settings className="w-5 h-5" /> },
 ];
 
 export function MobileTabBar({
