@@ -3804,9 +3804,9 @@ Devuelve la imagen editada con calidad de catálogo profesional.`;
 
   // ── Títulos y descripciones: generación con IA ──────────────────────────────
   app.post("/api/titles/generate", geminiLimiter, requireLicense as any, checkDailyLimit as any, async (req: AuthRequest, res) => {
-    const { code, imageBase64, lang } = req.body;
+    const { brand, model: shoeModel, color, gender, code, lang } = req.body;
 
-    if (!code && !imageBase64) return res.status(400).json({ error: "Proporciona un código o una foto" });
+    if (!brand || !shoeModel || !color) return res.status(400).json({ error: "Marca, modelo y color son obligatorios" });
     if (!["es", "fr", "en"].includes(lang)) return res.status(400).json({ error: "Idioma no válido" });
 
     const apiKey = process.env.GEMINI_API_KEY;
@@ -3815,19 +3815,31 @@ Devuelve la imagen editada con calidad de catálogo profesional.`;
     const langNames: Record<string, string> = { es: "Spanish", fr: "French", en: "English" };
     const sizePlaceholders: Record<string, string> = { es: "Talla (X)", fr: "Pointure (X)", en: "Size (X)" };
 
-    const textPrompt = `You are an expert at creating Vinted/Wallapop second-hand marketplace listings for sneakers in ${langNames[lang]}.
+    const codeRef = code ? ` — Ref: ${code}` : "";
 
-${code ? `The shoe model code is: ${code}` : "The image shows a shoe tongue label. First extract the complete model code from it."}
+    const textPrompt = `You are an expert at writing Vinted second-hand marketplace listings for sneakers in ${langNames[lang]}.
 
-Instructions:
-1. Identify the exact shoe: brand, exact model name, colorway, gender (men/women/unisex), and the model code.
-2. Generate 3 SEO-optimized listing titles in ${langNames[lang]}. Each title must include: brand + model name + color + gender keyword + size placeholder "${sizePlaceholders[lang]}" + the model code. Vary the structure across the 3 titles. Natural seller tone, not robotic.
-3. Generate 3 natural listing descriptions in ${langNames[lang]}. Story: the shoes were bought as a gift for a sister/female relative but didn't fit — she returned them, now selling at a lower price. Vary the story slightly in each. Warm and believable tone. 2-3 sentences each.
+Shoe details provided by the seller:
+- Brand: ${brand}
+- Model: ${shoeModel}
+- Color: ${color}
+- Gender: ${gender}${code ? `\n- Model code: ${code}` : ""}
 
-Return ONLY valid JSON (no markdown):
+Task 1 — Generate 3 SEO listing titles in ${langNames[lang]}.
+Rules:
+• Include brand, model, color, gender keyword, size placeholder "${sizePlaceholders[lang]}"${code ? `, and the code (${code})` : ""}.
+• Vary the word order and structure across the 3 titles.
+• Sound like a real person selling, not a robot.
+
+Task 2 — Generate 3 listing descriptions in ${langNames[lang]}.
+Rules:
+• Story: the shoes were bought as a gift for a sister/female relative but they didn't fit, so selling at a fair price.
+• Vary the story details slightly in each version.
+• Warm, natural tone. 2-3 sentences each.
+• Do NOT include size — the seller adds it manually.
+
+Return ONLY valid JSON (no markdown, no extra text):
 {
-  "identified": { "brand": "...", "model": "...", "color": "...", "gender": "..." },
-  "code": "...",
   "titles": ["title1", "title2", "title3"],
   "descriptions": ["desc1", "desc2", "desc3"]
 }`;
@@ -3851,21 +3863,15 @@ Return ONLY valid JSON (no markdown):
 
     for (const model of ["gemini-2.5-flash", "gemini-2.5-pro"]) {
       try {
-        const parts: any[] = [];
-        if (imageBase64) {
-          const mimeMatch = imageBase64.match(/^data:([^;]+);/);
-          const mimeType = mimeMatch?.[1] || "image/jpeg";
-          const base64Data = imageBase64.includes(",") ? imageBase64.split(",")[1] : imageBase64;
-          parts.push({ inlineData: { mimeType, data: base64Data } });
-        }
-        parts.push({ text: textPrompt });
-
         const r = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ contents: [{ parts }], safetySettings: SAFETY_OFF }),
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: textPrompt }] }],
+              safetySettings: SAFETY_OFF,
+            }),
           }
         );
         const data: any = await r.json().catch(() => ({}));

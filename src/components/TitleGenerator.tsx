@@ -1,49 +1,24 @@
-import React, { useState, useRef } from 'react';
-import {
-  Camera, Pencil, Copy, Check, RefreshCcw,
-  ChevronDown, ChevronUp, AlertCircle, CheckCircle2, X,
-} from 'lucide-react';
+import React, { useState } from 'react';
+import { Copy, Check, RefreshCcw, CheckCircle2 } from 'lucide-react';
 
-type InputMode = 'photo' | 'manual';
 type Lang = 'es' | 'fr' | 'en';
+type Gender = 'mujer' | 'hombre' | 'unisex';
 
 interface Result {
-  identified: { brand: string; model: string; color: string; gender: string };
-  code: string;
   titles: string[];
   descriptions: string[];
 }
 
-const BRAND_GUIDES = [
-  {
-    brand: 'Adidas',
-    icon: '🟠',
-    where: 'En la lengüeta (tongue) del zapato.',
-    format: 'Letras + 5 dígitos',
-    example: 'JQ5874, IF1234',
-  },
-  {
-    brand: 'New Balance',
-    icon: '🟡',
-    where: 'Etiqueta interior del talón o lengüeta.',
-    format: 'Letras + números (puede incluir color)',
-    example: 'ML574LB, U998GB',
-  },
-  {
-    brand: 'Onitsuka Tiger',
-    icon: '⭕',
-    where: 'Etiqueta interior lateral del zapato.',
-    format: 'Número + letra + número',
-    example: '1183A204, 1183B563',
-  },
-  {
-    brand: 'Asics',
-    icon: '🔵',
-    where: 'Etiqueta interior del talón.',
-    format: 'Número alfanumérico',
-    example: '1011B295, 1012A234',
-  },
+const BRANDS = [
+  'Adidas', 'Nike', 'New Balance', 'Onitsuka Tiger', 'Asics',
+  'Puma', 'Vans', 'Converse', 'Salomon', 'Saucony', 'Reebok', 'Otra',
 ];
+
+const GENDER_LABELS: Record<Gender, string> = {
+  mujer: '👩 Mujer',
+  hombre: '👨 Hombre',
+  unisex: '⚡ Unisex',
+};
 
 function CopyBtn({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -62,31 +37,36 @@ function CopyBtn({ text }: { text: string }) {
 }
 
 export default function TitleGenerator({ token }: { token: string }) {
-  const [mode, setMode] = useState<InputMode>('photo');
+  const [brand, setBrand] = useState('Adidas');
+  const [brandCustom, setBrandCustom] = useState('');
+  const [model, setModel] = useState('');
+  const [color, setColor] = useState('');
+  const [code, setCode] = useState('');
+  const [gender, setGender] = useState<Gender>('mujer');
   const [lang, setLang] = useState<Lang>('es');
-  const [codeInput, setCodeInput] = useState('');
-  const [imageFile, setImageFile] = useState<string | null>(null);
-  const [showGuide, setShowGuide] = useState(false);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
 
-  const canGenerate = mode === 'photo' ? !!imageFile : codeInput.trim().length >= 4;
+  const resolvedBrand = brand === 'Otra' ? brandCustom.trim() : brand;
+  const canGenerate = resolvedBrand.length > 0 && model.trim().length > 0 && color.trim().length > 0;
 
   const generate = async () => {
     setLoading(true);
     setError(null);
     setResult(null);
     try {
-      const body: Record<string, string> = { lang };
-      if (mode === 'photo') body.imageBase64 = imageFile!;
-      else body.code = codeInput.trim().toUpperCase();
-
       const r = await fetch('/api/titles/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify(body),
+        body: JSON.stringify({
+          brand: resolvedBrand,
+          model: model.trim(),
+          color: color.trim(),
+          gender,
+          code: code.trim().toUpperCase() || undefined,
+          lang,
+        }),
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || 'Error generando contenido');
@@ -98,8 +78,8 @@ export default function TitleGenerator({ token }: { token: string }) {
     }
   };
 
-  const langLabels: Record<Lang, string> = { es: 'Español', fr: 'Français', en: 'English' };
   const langFlags: Record<Lang, string> = { es: '🇪🇸', fr: '🇫🇷', en: '🇬🇧' };
+  const langLabels: Record<Lang, string> = { es: 'Español', fr: 'Français', en: 'English' };
 
   return (
     <div className="max-w-xl mx-auto space-y-5">
@@ -107,135 +87,115 @@ export default function TitleGenerator({ token }: { token: string }) {
       <div>
         <h1 className="text-lg font-bold text-[#f2f2ef]">Títulos y descripciones IA</h1>
         <p className="text-[0.78rem] text-[#888880] mt-0.5">
-          Genera títulos SEO y descripciones listas para publicar en Vinted
+          Rellena los datos de la zapatilla → la IA escribe los textos listos para Vinted
         </p>
       </div>
 
-      {/* Mode selector */}
-      <div className="flex gap-2">
-        {([['photo', '📷 Foto lengüeta'], ['manual', '✏️ Código manual']] as [InputMode, string][]).map(([id, label]) => (
-          <button
-            key={id}
-            onClick={() => { setMode(id); setResult(null); setError(null); }}
-            className={`flex-1 py-2 rounded-xl text-sm font-semibold border transition ${
-              mode === id
-                ? 'bg-[#d4ff00]/10 border-[#d4ff00]/40 text-[#d4ff00]'
-                : 'bg-white/[0.04] border-white/[0.08] text-[#888880] hover:text-[#f2f2ef]'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {/* Input area */}
-      <div className="space-y-3">
-        {mode === 'photo' ? (
-          <>
-            <div className="flex items-start gap-2.5 bg-yellow-500/[0.08] border border-yellow-500/20 rounded-xl px-3.5 py-2.5">
-              <AlertCircle className="w-4 h-4 text-yellow-400 shrink-0 mt-0.5" />
-              <p className="text-[0.76rem] text-yellow-300 leading-relaxed">
-                El código debe leerse <strong>completo y sin cortes</strong> en la foto. Buena luz, buen ángulo.
-              </p>
-            </div>
-
-            <div
-              onClick={() => fileRef.current?.click()}
-              className={`border-2 border-dashed rounded-xl p-5 text-center cursor-pointer transition ${
-                imageFile
-                  ? 'border-[#d4ff00]/30 bg-[#d4ff00]/5'
-                  : 'border-white/[0.1] hover:border-white/20'
-              }`}
-            >
-              {imageFile ? (
-                <div className="space-y-2">
-                  <img src={imageFile} className="max-h-44 mx-auto rounded-lg object-contain" alt="lengüeta" />
-                  <div className="flex items-center justify-center gap-2">
-                    <p className="text-xs text-[#888880]">Toca para cambiar</p>
-                    <button
-                      onClick={e => { e.stopPropagation(); setImageFile(null); }}
-                      className="text-zinc-600 hover:text-red-400 transition"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-2 py-3">
-                  <Camera className="w-8 h-8 text-[#444440] mx-auto" />
-                  <p className="text-sm text-[#888880]">Sube foto de la lengüeta</p>
-                  <p className="text-xs text-[#444440]">JPEG · PNG · HEIC</p>
-                </div>
-              )}
-              <input
-                type="file"
-                ref={fileRef}
-                accept="image/*"
-                className="hidden"
-                onChange={e => {
-                  const file = e.target.files?.[0];
-                  if (!file) return;
-                  const reader = new FileReader();
-                  reader.onloadend = () => setImageFile(reader.result as string);
-                  reader.readAsDataURL(file);
-                  e.target.value = '';
-                }}
-              />
-            </div>
-          </>
-        ) : (
-          <div>
-            <label className="block text-xs text-[#888880] mb-1.5">Código del modelo</label>
-            <input
-              type="text"
-              value={codeInput}
-              onChange={e => setCodeInput(e.target.value.toUpperCase())}
-              placeholder="Ej: JQ5874"
-              className="w-full bg-white/[0.04] border border-white/[0.08] rounded-xl px-4 py-3 text-[#f2f2ef] text-center text-lg font-mono tracking-widest placeholder-[#444440] focus:outline-none focus:border-[#d4ff00]/40 transition"
-            />
-          </div>
-        )}
-
-        {/* Brand guide */}
-        <button
-          onClick={() => setShowGuide(v => !v)}
-          className="flex items-center gap-1.5 text-xs text-[#888880] hover:text-[#f2f2ef] transition"
-        >
-          {showGuide ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-          ¿Dónde encuentro el código?
-        </button>
-        {showGuide && (
-          <div className="grid gap-2">
-            {BRAND_GUIDES.map(g => (
-              <div key={g.brand} className="bg-white/[0.03] border border-white/[0.06] rounded-xl px-4 py-3">
-                <p className="text-sm font-semibold mb-0.5 text-[#f2f2ef]">{g.icon} {g.brand}</p>
-                <p className="text-xs text-[#888880]">{g.where}</p>
-                <p className="text-xs text-[#555550] mt-0.5">
-                  Formato: {g.format} — <span className="font-mono text-[#777770]">{g.example}</span>
-                </p>
-              </div>
+      {/* Form */}
+      <div className="space-y-4">
+        {/* Marca */}
+        <div>
+          <label className="block text-xs text-[#888880] mb-1.5">Marca</label>
+          <div className="flex flex-wrap gap-1.5">
+            {BRANDS.map(b => (
+              <button
+                key={b}
+                onClick={() => setBrand(b)}
+                className={`px-3 py-1.5 rounded-xl text-sm border transition ${
+                  brand === b
+                    ? 'bg-[#d4ff00]/10 border-[#d4ff00]/40 text-[#d4ff00]'
+                    : 'bg-white/[0.04] border-white/[0.08] text-[#888880] hover:text-[#f2f2ef]'
+                }`}
+              >
+                {b}
+              </button>
             ))}
           </div>
-        )}
-      </div>
+          {brand === 'Otra' && (
+            <input
+              type="text"
+              value={brandCustom}
+              onChange={e => setBrandCustom(e.target.value)}
+              placeholder="Nombre de la marca"
+              className="mt-2 w-full bg-white/[0.04] border border-white/[0.08] rounded-xl px-4 py-2.5 text-[#f2f2ef] text-sm placeholder-[#444440] focus:outline-none focus:border-[#d4ff00]/40 transition"
+            />
+          )}
+        </div>
 
-      {/* Language selector */}
-      <div>
-        <p className="text-xs text-[#888880] mb-2">Idioma del listado</p>
-        <div className="flex gap-2">
-          {(['es', 'fr', 'en'] as Lang[]).map(l => (
-            <button
-              key={l}
-              onClick={() => setLang(l)}
-              className={`flex-1 py-2 rounded-xl text-sm font-semibold border transition ${
-                lang === l
-                  ? 'bg-[#d4ff00]/10 border-[#d4ff00]/40 text-[#d4ff00]'
-                  : 'bg-white/[0.04] border-white/[0.08] text-[#888880] hover:text-[#f2f2ef]'
-              }`}
-            >
-              {langFlags[l]} {langLabels[l]}
-            </button>
-          ))}
+        {/* Modelo */}
+        <div>
+          <label className="block text-xs text-[#888880] mb-1.5">Modelo</label>
+          <input
+            type="text"
+            value={model}
+            onChange={e => setModel(e.target.value)}
+            placeholder="Ej: Samba OG, 574, Gel-Lyte III…"
+            className="w-full bg-white/[0.04] border border-white/[0.08] rounded-xl px-4 py-2.5 text-[#f2f2ef] text-sm placeholder-[#444440] focus:outline-none focus:border-[#d4ff00]/40 transition"
+          />
+        </div>
+
+        {/* Color + Código en fila */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs text-[#888880] mb-1.5">Color</label>
+            <input
+              type="text"
+              value={color}
+              onChange={e => setColor(e.target.value)}
+              placeholder="Ej: Blanco/Negro"
+              className="w-full bg-white/[0.04] border border-white/[0.08] rounded-xl px-4 py-2.5 text-[#f2f2ef] text-sm placeholder-[#444440] focus:outline-none focus:border-[#d4ff00]/40 transition"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-[#888880] mb-1.5">Código <span className="text-[#555550]">(opcional)</span></label>
+            <input
+              type="text"
+              value={code}
+              onChange={e => setCode(e.target.value.toUpperCase())}
+              placeholder="Ej: JQ5874"
+              className="w-full bg-white/[0.04] border border-white/[0.08] rounded-xl px-4 py-2.5 text-[#f2f2ef] text-sm font-mono placeholder-[#444440] focus:outline-none focus:border-[#d4ff00]/40 transition"
+            />
+          </div>
+        </div>
+
+        {/* Género */}
+        <div>
+          <label className="block text-xs text-[#888880] mb-1.5">Para quién</label>
+          <div className="flex gap-2">
+            {(['mujer', 'hombre', 'unisex'] as Gender[]).map(g => (
+              <button
+                key={g}
+                onClick={() => setGender(g)}
+                className={`flex-1 py-2 rounded-xl text-sm font-semibold border transition ${
+                  gender === g
+                    ? 'bg-[#d4ff00]/10 border-[#d4ff00]/40 text-[#d4ff00]'
+                    : 'bg-white/[0.04] border-white/[0.08] text-[#888880] hover:text-[#f2f2ef]'
+                }`}
+              >
+                {GENDER_LABELS[g]}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Idioma */}
+        <div>
+          <label className="block text-xs text-[#888880] mb-1.5">Idioma</label>
+          <div className="flex gap-2">
+            {(['es', 'fr', 'en'] as Lang[]).map(l => (
+              <button
+                key={l}
+                onClick={() => setLang(l)}
+                className={`flex-1 py-2 rounded-xl text-sm font-semibold border transition ${
+                  lang === l
+                    ? 'bg-[#d4ff00]/10 border-[#d4ff00]/40 text-[#d4ff00]'
+                    : 'bg-white/[0.04] border-white/[0.08] text-[#888880] hover:text-[#f2f2ef]'
+                }`}
+              >
+                {langFlags[l]} {langLabels[l]}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -261,18 +221,6 @@ export default function TitleGenerator({ token }: { token: string }) {
       {/* Results */}
       {result && (
         <div className="space-y-4">
-          {/* Identified */}
-          <div className="bg-white/[0.04] border border-white/[0.08] rounded-xl px-4 py-3">
-            <p className="text-xs text-[#888880] mb-1">Modelo identificado</p>
-            <p className="text-sm font-semibold text-[#f2f2ef]">
-              {result.identified.brand} {result.identified.model} {result.identified.color}
-              <span className="ml-2 text-xs font-normal text-[#888880]">· {result.identified.gender}</span>
-            </p>
-            {result.code && (
-              <p className="text-xs text-[#555550] font-mono mt-0.5">Ref: {result.code}</p>
-            )}
-          </div>
-
           {/* Titles */}
           <div>
             <p className="text-xs font-bold text-[#888880] uppercase tracking-wider mb-2">
@@ -311,7 +259,7 @@ export default function TitleGenerator({ token }: { token: string }) {
             <div>
               <p className="text-sm font-semibold text-green-300">Revisa antes de publicar</p>
               <p className="text-xs text-green-400/70 mt-0.5">
-                Comprueba que modelo, color y referencia son correctos. Sustituye <strong>(X)</strong> por la talla real.
+                Comprueba que todo cuadra y es coherente. Sustituye <strong>(X)</strong> por la talla real.
               </p>
             </div>
           </div>
