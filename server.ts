@@ -6974,7 +6974,15 @@ CONTEXTO (respétalo siempre):
 - El modelo de negocio se llama ECOMMERCE REVENTA. Nunca lo llames "compra-venta" ni ningún otro término.
 - Vendemos ÚNICAMENTE en Vinted. No existen otras plataformas de venta ni de búsqueda de tendencias en este negocio.
 - Los bloqueos NO siempre son por el producto: muchas veces son por denuncias de vendedores o compradores. Hay que distinguir ambos casos.
-- NO menciones ninguna app, herramienta, software ni plataforma externa.
+- NO menciones ninguna app, herramienta, software ni plataforma externa (salvo módulos del classroom listados abajo).
+
+MÓDULOS DEL CLASSROOM (para recomendar recursos concretos al alumno):
+📱 MULTICUENTAS: "Maduración Multicuentas" · "Evitar Bloqueos en Vinted" · "Creación: Multicuentas Vinted (Método SIM)" · "Perfiles Safari — Primera Parte" · "Perfiles Safari — Segunda Parte"
+📦 PRODUCTOS: "Búsqueda Productos Ganadores" · "Volumen: Cuántos productos publicar por día" · "¿Qué hacemos cuando Vinted nos retira un anuncio?"
+🏭 PROVEEDORES: "Proveedores Zapatillas" · "Mis 2 Proveedores Personales" · "Proveedores Bolsos (económico)" · "Proveedores Bolsos (premium)"
+💰 VENTAS: "Qué Título + Imágenes publico?" · "Ejecución: Estrategia base (El Sistema de Ventas)" · "Método LAMINE: Publicar sin revisión" · "Guía Anti-Estafas en Vinted" · "Cancelar pedidos sin mala valoración"
+📋 LOGÍSTICA: "Plantilla control stock (Excel)" · "Gestión: Organización de etiquetas"
+📊 FISCALIDAD: "Guía fiscal DAC7" · "Timing: Cuándo empezar a declarar" · "Método Real: Cómo YO declaro a Hacienda"
 
 RESPUESTAS DEL ALUMNO:
 ${qaLines}
@@ -6990,7 +6998,9 @@ Máximo 3 puntos. Cada punto: 1 frase que nombre el problema + 1 frase de consec
 Bullets cortos, 1 línea cada uno. Solo lo que realmente hace bien según sus respuestas.
 
 ## Tu plan de acción 🎯
-Un punto por cada punto crítico. Máximo 2 líneas por punto: acción concreta y específica de proceso de negocio, nada genérico.
+Un punto por cada punto crítico. Formato por punto:
+- Acción concreta (máximo 2 líneas, nada genérico)
+- 📚 Classroom: "[nombre exacto del módulo más relevante de la lista]" — si no hay módulo aplicable escribe: "Consúltalo directamente con Lamine"
 
 ## Plan 1:1 con Lamine 🤝
 Mínimo 3 puntos, máximo 4. Formato estricto:
@@ -7012,7 +7022,8 @@ _"Hola Lamine, soy ${skool_username}. He visto mi plan. Quiero empezar por el Pu
 REGLAS ABSOLUTAS:
 - Primera línea: "## Puntos críticos 🔴". Sin nada antes.
 - Secciones cortas. Respeta los límites de líneas por apartado.
-- Cero apps, cero plataformas, cero herramientas externas.
+- Solo módulos del classroom listados arriba. Cero apps o plataformas externas.
+- Nombres de módulos EXACTOS como aparecen en la lista.
 - Todo basado en sus respuestas reales.`;
 
       const resp = await fetch(
@@ -7153,7 +7164,15 @@ CONTEXTO (respétalo siempre):
 - El modelo de negocio se llama ECOMMERCE REVENTA. Nunca lo llames "compra-venta" ni ningún otro término.
 - Vendemos ÚNICAMENTE en Vinted. No existen otras plataformas de venta ni de búsqueda de tendencias en este negocio.
 - Los bloqueos NO siempre son por el producto: muchas veces son por denuncias de vendedores o compradores. Hay que distinguir ambos casos.
-- NO menciones ninguna app, herramienta, software ni plataforma externa.
+- NO menciones ninguna app, herramienta, software ni plataforma externa (salvo módulos del classroom listados abajo).
+
+MÓDULOS DEL CLASSROOM (para recomendar recursos concretos al alumno):
+📱 MULTICUENTAS: "Maduración Multicuentas" · "Evitar Bloqueos en Vinted" · "Creación: Multicuentas Vinted (Método SIM)" · "Perfiles Safari — Primera Parte" · "Perfiles Safari — Segunda Parte"
+📦 PRODUCTOS: "Búsqueda Productos Ganadores" · "Volumen: Cuántos productos publicar por día" · "¿Qué hacemos cuando Vinted nos retira un anuncio?"
+🏭 PROVEEDORES: "Proveedores Zapatillas" · "Mis 2 Proveedores Personales" · "Proveedores Bolsos (económico)" · "Proveedores Bolsos (premium)"
+💰 VENTAS: "Qué Título + Imágenes publico?" · "Ejecución: Estrategia base (El Sistema de Ventas)" · "Método LAMINE: Publicar sin revisión" · "Guía Anti-Estafas en Vinted" · "Cancelar pedidos sin mala valoración"
+📋 LOGÍSTICA: "Plantilla control stock (Excel)" · "Gestión: Organización de etiquetas"
+📊 FISCALIDAD: "Guía fiscal DAC7" · "Timing: Cuándo empezar a declarar" · "Método Real: Cómo YO declaro a Hacienda"
 
 RESPUESTAS DEL ALUMNO:
 ${qaLines}
@@ -7169,7 +7188,9 @@ Máximo 3 puntos. Cada punto: 1 frase que nombre el problema + 1 frase de consec
 Bullets cortos, 1 línea cada uno. Solo lo que realmente hace bien según sus respuestas.
 
 ## Tu plan de acción 🎯
-Un punto por cada punto crítico. Máximo 2 líneas por punto: acción concreta y específica de proceso de negocio, nada genérico.
+Un punto por cada punto crítico. Formato por punto:
+- Acción concreta (máximo 2 líneas, nada genérico)
+- 📚 Classroom: "[nombre exacto del módulo más relevante de la lista]" — si no hay módulo aplicable escribe: "Consúltalo directamente con Lamine"
 
 ## Plan 1:1 con Lamine 🤝
 Mínimo 3 puntos, máximo 4. Formato estricto:
@@ -7191,7 +7212,8 @@ _"Hola Lamine, soy ${skool_username}. He visto mi plan. Quiero empezar por el Pu
 REGLAS ABSOLUTAS:
 - Primera línea: "## Puntos críticos 🔴". Sin nada antes.
 - Secciones cortas. Respeta los límites de líneas por apartado.
-- Cero apps, cero plataformas, cero herramientas externas.
+- Solo módulos del classroom listados arriba. Cero apps o plataformas externas.
+- Nombres de módulos EXACTOS como aparecen en la lista.
 - Todo basado en sus respuestas reales.`;
 
       const SAFETY_OFF = [
