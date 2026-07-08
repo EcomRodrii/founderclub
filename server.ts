@@ -501,13 +501,19 @@ async function startServer() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS student_diagnostics (
       id SERIAL PRIMARY KEY,
-      user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       answers JSONB NOT NULL DEFAULT '{}',
       ai_plan TEXT,
+      is_validated BOOLEAN NOT NULL DEFAULT FALSE,
       submitted_at TIMESTAMPTZ DEFAULT NOW(),
-      plan_generated_at TIMESTAMPTZ
+      plan_generated_at TIMESTAMPTZ,
+      validated_at TIMESTAMPTZ
     );
   `).catch(() => {});
+  // Migraciones para tablas existentes
+  await pool.query(`ALTER TABLE student_diagnostics DROP CONSTRAINT IF EXISTS student_diagnostics_user_id_key`).catch(() => {});
+  await pool.query(`ALTER TABLE student_diagnostics ADD COLUMN IF NOT EXISTS is_validated BOOLEAN NOT NULL DEFAULT FALSE`).catch(() => {});
+  await pool.query(`ALTER TABLE student_diagnostics ADD COLUMN IF NOT EXISTS validated_at TIMESTAMPTZ`).catch(() => {});
 
   // ── Lista de espera (cierre Skool) ──────────────────────────────────────────
   await pool.query(`
@@ -7030,17 +7036,21 @@ REGLAS ABSOLUTAS:
   app.get("/api/diagnostic/mine", requireLicense as any, async (req: AuthRequest, res) => {
     try {
       const r = await pool.query(
-        "SELECT answers, ai_plan, submitted_at, plan_generated_at FROM student_diagnostics WHERE user_id=$1",
+        `SELECT answers, ai_plan, is_validated, submitted_at, plan_generated_at, validated_at
+         FROM student_diagnostics WHERE user_id=$1
+         ORDER BY submitted_at DESC LIMIT 1`,
         [req.user!.id]
       );
       if (!r.rows[0]) return res.json({ status: 'none' });
       const row = r.rows[0];
-      res.json({
-        status: row.ai_plan ? 'plan_ready' : 'submitted',
-        submitted_at: row.submitted_at,
-        plan: row.ai_plan || null,
-        plan_generated_at: row.plan_generated_at,
-      });
+      // Comprobar si puede volver a enviar (han pasado más de 30 días)
+      const submittedAt = new Date(row.submitted_at);
+      const daysSince = (Date.now() - submittedAt.getTime()) / (1000 * 60 * 60 * 24);
+      const canResubmit = daysSince >= 30;
+      if (row.ai_plan && row.is_validated) {
+        return res.json({ status: 'plan_ready', plan: row.ai_plan, plan_generated_at: row.plan_generated_at, validated_at: row.validated_at, can_resubmit: canResubmit });
+      }
+      res.json({ status: 'submitted', submitted_at: row.submitted_at, can_resubmit: canResubmit });
     } catch { res.status(500).json({ error: "Error del servidor" }); }
   });
 
@@ -7049,8 +7059,11 @@ REGLAS ABSOLUTAS:
     const { answers } = req.body;
     if (!answers || typeof answers !== 'object') return res.status(400).json({ error: "Faltan respuestas" });
     try {
-      const existing = await pool.query("SELECT id FROM student_diagnostics WHERE user_id=$1", [req.user!.id]);
-      if (existing.rows[0]) return res.status(409).json({ error: "Ya enviaste tu diagnóstico" });
+      const existing = await pool.query(
+        "SELECT id FROM student_diagnostics WHERE user_id=$1 AND submitted_at > NOW() - INTERVAL '30 days' ORDER BY submitted_at DESC LIMIT 1",
+        [req.user!.id]
+      );
+      if (existing.rows[0]) return res.status(409).json({ error: "Ya enviaste tu diagnóstico este mes. Podrás hacerlo de nuevo en 30 días." });
       await pool.query(
         "INSERT INTO student_diagnostics (user_id, answers) VALUES ($1, $2)",
         [req.user!.id, JSON.stringify(answers)]
@@ -7064,7 +7077,7 @@ REGLAS ABSOLUTAS:
     try {
       const r = await pool.query(`
         SELECT sd.id, sd.user_id, u.username, sd.submitted_at, sd.plan_generated_at,
-               (sd.ai_plan IS NOT NULL) AS has_plan
+               (sd.ai_plan IS NOT NULL) AS has_plan, sd.is_validated, sd.validated_at
         FROM student_diagnostics sd
         JOIN users u ON u.id = sd.user_id
         ORDER BY sd.submitted_at DESC
@@ -7078,12 +7091,25 @@ REGLAS ABSOLUTAS:
     try {
       const r = await pool.query(
         `SELECT sd.answers, u.username FROM student_diagnostics sd
-         JOIN users u ON u.id = sd.user_id WHERE sd.user_id=$1`,
+         JOIN users u ON u.id = sd.user_id WHERE sd.user_id=$1
+         ORDER BY sd.submitted_at DESC LIMIT 1`,
         [req.params.userId]
       );
       if (!r.rows[0]) return res.status(404).json({ error: "No encontrado" });
       res.json(r.rows[0]);
     } catch { res.status(500).json({ error: "Error del servidor" }); }
+  });
+
+  // ── Admin: validar y enviar plan al alumno ───────────────────────────────────
+  app.post("/api/admin/diagnostics/:userId/validate", requireAdmin as any, async (req, res) => {
+    try {
+      const r = await pool.query(
+        "UPDATE student_diagnostics SET is_validated=TRUE, validated_at=NOW() WHERE user_id=$1 AND ai_plan IS NOT NULL RETURNING id",
+        [req.params.userId]
+      );
+      if (!r.rows[0]) return res.status(404).json({ error: "No hay plan generado para este alumno" });
+      res.json({ ok: true });
+    } catch { res.status(500).json({ error: "Error al validar" }); }
   });
 
   // ── Admin: generar plan IA para un alumno ────────────────────────────────────
@@ -7093,7 +7119,8 @@ REGLAS ABSOLUTAS:
     try {
       const r = await pool.query(
         `SELECT sd.answers, u.username FROM student_diagnostics sd
-         JOIN users u ON u.id = sd.user_id WHERE sd.user_id=$1`,
+         JOIN users u ON u.id = sd.user_id WHERE sd.user_id=$1
+         ORDER BY sd.submitted_at DESC LIMIT 1`,
         [req.params.userId]
       );
       if (!r.rows[0]) return res.status(404).json({ error: "Diagnóstico no encontrado" });
@@ -7194,7 +7221,7 @@ REGLAS ABSOLUTAS:
       }
 
       await pool.query(
-        "UPDATE student_diagnostics SET ai_plan=$1, plan_generated_at=NOW() WHERE user_id=$2",
+        "UPDATE student_diagnostics SET ai_plan=$1, plan_generated_at=NOW(), is_validated=FALSE, validated_at=NULL WHERE user_id=$2 AND id=(SELECT id FROM student_diagnostics WHERE user_id=$2 ORDER BY submitted_at DESC LIMIT 1)",
         [plan, req.params.userId]
       );
       res.json({ plan });

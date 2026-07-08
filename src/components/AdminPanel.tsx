@@ -466,6 +466,7 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
   const [diagAnswers, setDiagAnswers] = useState<Record<number, any>>({});
   const [diagPlan, setDiagPlan] = useState<Record<number, string>>({});
   const [diagPlanLoading, setDiagPlanLoading] = useState<number | null>(null);
+  const [diagValidating, setDiagValidating] = useState<number | null>(null);
 
   // MFA setup
   const [mfaSetup, setMfaSetup] = useState<{ secret: string; qrDataUrl: string; otpauthUrl: string } | null>(null);
@@ -704,6 +705,20 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
     finally { setDiagPlanLoading(null); }
   };
 
+
+  const validateDiagPlan = async (userId: number) => {
+    setDiagValidating(userId);
+    try {
+      const d = await fetch(`/api/admin/diagnostics/${userId}/validate`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      }).then(r => r.json());
+      if (d.ok) {
+        setDiagList(prev => prev.map(x => x.user_id === userId ? { ...x, is_validated: true } : x));
+      } else alert('Error: ' + (d.error || 'desconocido'));
+    } catch { alert('Error al validar'); }
+    finally { setDiagValidating(null); }
+  };
 
   async function createUser() {
     const { username, email, password } = newUserForm;
@@ -1681,9 +1696,11 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
                         <td className="px-4 py-3 font-semibold">{d.username}</td>
                         <td className="px-4 py-3 text-xs text-zinc-400">{timeAgo(d.submitted_at)}</td>
                         <td className="px-4 py-3">
-                          {d.has_plan
-                            ? <span className="text-xs px-2 py-0.5 rounded-full bg-green-500/10 text-green-400 border border-green-500/25 font-semibold">Listo</span>
-                            : <span className="text-xs px-2 py-0.5 rounded-full bg-zinc-700 text-zinc-400 border border-zinc-600 font-semibold">Pendiente</span>
+                          {d.is_validated
+                            ? <span className="text-xs px-2 py-0.5 rounded-full bg-green-500/10 text-green-400 border border-green-500/25 font-semibold">✅ Enviado</span>
+                            : d.has_plan
+                              ? <span className="text-xs px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/25 font-semibold">Plan listo</span>
+                              : <span className="text-xs px-2 py-0.5 rounded-full bg-zinc-700 text-zinc-400 border border-zinc-600 font-semibold">Pendiente</span>
                           }
                         </td>
                         <td className="px-4 py-3">
@@ -1705,6 +1722,15 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
                             >
                               {diagPlanLoading === d.user_id ? '…' : d.has_plan ? '↺ Plan' : '🎯 Generar plan'}
                             </button>
+                            {d.has_plan && !d.is_validated && (
+                              <button
+                                onClick={() => validateDiagPlan(d.user_id)}
+                                disabled={diagValidating === d.user_id}
+                                className="text-xs px-2 py-1 rounded-lg bg-green-500/10 border border-green-500/25 text-green-400 hover:bg-green-500/20 transition disabled:opacity-50 font-semibold"
+                              >
+                                {diagValidating === d.user_id ? '…' : '✅ Enviar al alumno'}
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>

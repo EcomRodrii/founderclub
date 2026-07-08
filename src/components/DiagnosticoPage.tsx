@@ -176,10 +176,13 @@ export default function DiagnosticoPage({ token }: { token: string }) {
         <div className="w-14 h-14 rounded-2xl bg-[#d4ff00]/10 border border-[#d4ff00]/25 flex items-center justify-center">
           <Clock className="w-7 h-7 text-[#d4ff00]" />
         </div>
-        <div>
-          <h2 className="text-lg font-bold text-[#f2f2ef]">Diagnóstico enviado</h2>
-          <p className="text-[#888880] mt-2 max-w-xs leading-relaxed text-sm">
-            Lamine está revisando tus respuestas y preparando tu plan personalizado. Te avisará cuando esté listo.
+        <div className="max-w-sm">
+          <h2 className="text-lg font-bold text-[#f2f2ef]">Diagnóstico enviado ✅</h2>
+          <p className="text-[#888880] mt-2 leading-relaxed text-sm">
+            En menos de 24h Lamine revisará tus respuestas y te dirá exactamente qué puntos mejorar y cómo hacerlo.
+          </p>
+          <p className="text-[#555550] mt-3 text-xs">
+            Cuando tu plan esté listo aparecerá aquí directamente.
           </p>
         </div>
       </div>
