@@ -699,8 +699,8 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
         setDiagPlan(prev => ({ ...prev, [userId]: d.plan }));
         setDiagList(prev => prev.map(x => x.user_id === userId ? { ...x, has_plan: true } : x));
         setDiagModal({ userId, username });
-      } else alert('Error: ' + (d.error || 'desconocido'));
-    } catch { alert('Error al generar plan'); }
+      } else alert('Error generando plan: ' + (d.error || 'respuesta vacía del servidor'));
+    } catch (e: any) { alert('Error al generar plan: ' + (e?.message || e)); }
     finally { setDiagPlanLoading(null); }
   };
 

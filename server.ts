@@ -7167,17 +7167,31 @@ REGLAS ABSOLUTAS:
 - Cero apps, cero plataformas, cero herramientas externas.
 - Todo basado en sus respuestas reales.`;
 
+      const SAFETY_OFF = [
+        { category: "HARM_CATEGORY_HARASSMENT",        threshold: "BLOCK_NONE" },
+        { category: "HARM_CATEGORY_HATE_SPEECH",       threshold: "BLOCK_NONE" },
+        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
+      ];
+
       const resp = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.1, maxOutputTokens: 8192 } }),
+          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], safetySettings: SAFETY_OFF, generationConfig: { temperature: 0.1, maxOutputTokens: 8192 } }),
         }
       );
       const data: any = await resp.json();
+      if (!resp.ok || data.error) {
+        console.error("[diag/plan] Gemini error:", JSON.stringify(data));
+        return res.status(500).json({ error: data.error?.message || "Error de Gemini" });
+      }
       const plan = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-      if (!plan) return res.status(500).json({ error: "Gemini no devolvió respuesta" });
+      if (!plan) {
+        console.error("[diag/plan] Gemini sin texto. finish_reason:", data?.candidates?.[0]?.finishReason, JSON.stringify(data).slice(0, 300));
+        return res.status(500).json({ error: `Gemini no generó texto (${data?.candidates?.[0]?.finishReason || "sin candidatos"})` });
+      }
 
       await pool.query(
         "UPDATE student_diagnostics SET ai_plan=$1, plan_generated_at=NOW() WHERE user_id=$2",
