@@ -39,7 +39,7 @@ const DIAG_QUESTIONS: Record<string, string> = {
   q1: '¿Hace cuánto tiempo llevas vendiendo en Vinted?',
   q2: '¿Cuánto estás facturando de media al mes?',
   q3: '¿Con cuántas cuentas de Vinted trabajas actualmente?',
-  q4: '¿Qué tipo de zapatillas vendes?',
+  q4: '¿En qué nicho vendes?',
   q5: '¿De dónde consigues el stock y a qué precio lo compras?',
   q6: '¿Cuánto tardas de media en vender un par desde que lo publicas?',
   q7: 'Proceso completo: desde que compras hasta que vendes',

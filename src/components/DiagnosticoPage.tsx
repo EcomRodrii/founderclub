@@ -15,7 +15,7 @@ const STEPS = [
   {
     title: 'Tu producto y stock',
     qs: [
-      { key: 'q4', label: '¿Qué tipo de zapatillas vendes?', placeholder: 'Marcas, modelos, rangos de precio, nuevas o segunda mano…' },
+      { key: 'q4', label: '¿En qué nicho vendes?', placeholder: 'Zapatillas, bolsos, ropa vintage, accesorios, cosmética… cuéntame qué vendes y qué marcas o modelos…' },
       { key: 'q5', label: '¿De dónde consigues el stock y a qué precio lo compras?', placeholder: 'Cómo encuentras los productos, dónde los compras…' },
       { key: 'q6', label: '¿Cuánto tardas de media en vender un par desde que lo publicas?', placeholder: 'Días, semanas… y si varía mucho entre productos' },
     ],
