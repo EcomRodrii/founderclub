@@ -6950,34 +6950,41 @@ ${qaLines}`;
         .map(([k, v]) => `**${QUESTIONS[k]}**\n${v}`)
         .join("\n\n");
 
-      const weakAreas = (red_flags as string[]).length > 0 ? ` Áreas con más margen de mejora según sus respuestas: ${(red_flags as string[]).join(', ')}.` : '';
+      const prompt = `Eres el coach personal de ${skool_username} dentro de la Academia de Lamine Resell.
 
-      const prompt = `Eres el coach personal de ${skool_username} dentro de la Academia de Lamine Resell. Este alumno ya forma parte de la academia y ha rellenado un cuestionario de diagnóstico para que puedas ayudarle a mejorar. Tu trabajo es crear su plan de mejora personalizado basado en lo que ha respondido.${weakAreas}
+CONTEXTO DEL NEGOCIO (no inventes nada fuera de esto):
+- Vendemos ÚNICAMENTE en Vinted. No existe otro marketplace en este negocio.
+- Herramientas de la academia disponibles AHORA MISMO:
+  • RealG (Lengüetas IA): genera la foto de la lengüeta para que Vinted valide la zapatilla como auténtica.
+  • Fantasma IA: elimina el fondo de las fotos de producto.
+  • Metadatos IA: optimiza los metadatos de las fotos.
+- La app de búsqueda de productos de Lamine NO está disponible todavía. NO la menciones.
+- No menciones ninguna herramienta, plataforma ni recurso que no esté en esta lista.
 
 RESPUESTAS DEL ALUMNO:
 ${qaLines}
 
 ---
 
-Escribe el plan de mejora en español, en segunda persona (háblale directamente de tú), con EXACTAMENTE estos apartados (##):
+Escribe su evaluación en español, en segunda persona (de tú). Empieza DIRECTAMENTE con el primer ## sin saludo, sin introducción, sin ningún texto previo. Usa EXACTAMENTE estos 4 apartados:
 
-## Tus puntos fuertes ✅
-Lo que ya haces bien según tus propias respuestas. Bullet points concretos, referenciando lo que ha dicho.
+## Puntos críticos 🔴
+Los 2-3 problemas más urgentes que le están limitando los resultados ahora mismo. Concreto, directo, referencia sus respuestas.
 
-## En qué tienes que mejorar 🔴
-Los 3-4 puntos donde más puedes crecer, ordenados por impacto en tus resultados. Para cada uno explica brevemente por qué te está limitando.
+## Puntos fuertes ✅
+Lo que ya hace bien. Bullet points concretos basados en lo que ha respondido.
 
 ## Tu plan de acción 🎯
-Para cada punto de mejora: qué hacer exactamente (acción concreta, no consejo genérico). Algo que pueda aplicar directamente.
+Para cada punto crítico: qué hacer exactamente. Acción específica, no consejo genérico. Solo herramientas que existen.
 
-## Por dónde empezar esta semana ⚡
-Una sola cosa, la más impactante. Concreta y accionable en 7 días.
+## Plan 1:1 con Lamine 🤝
+En qué va a trabajar Lamine personalmente con este alumno, punto por punto, para superar sus puntos críticos.
 
-REGLAS ESTRICTAS:
-- Empieza DIRECTAMENTE con "## Tus puntos fuertes ✅", sin saludo, sin introducción, sin texto previo.
-- Usa lo que ha respondido literalmente cuando sea relevante.
-- Tono directo, de coach, sin relleno.
-- Máximo 500 palabras en total.`;
+REGLAS:
+- Primera palabra del texto: "##". Sin nada antes.
+- Solo herramientas reales (RealG, Fantasma, Metadatos). Nunca menciones la app de búsqueda.
+- Basa TODO en sus respuestas. Cero inventado.
+- Máximo 420 palabras en total. Directo y sin relleno.`;
 
       const resp = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
