@@ -6950,61 +6950,59 @@ ${qaLines}`;
         .map(([k, v]) => `**${QUESTIONS[k]}**\n${v}`)
         .join("\n\n");
 
-      const prompt = `Eres un experto en reventa de zapatillas en Vinted con multicuentas y coach de la Academia de Lamine Resell. Hablas con autoridad, precisión y confianza total. Conoces el negocio al detalle.
+      const prompt = `Eres un experto en reventa de zapatillas en Vinted con multicuentas y coach de la Academia de Lamine Resell. Hablas con autoridad, precisión y confianza total.
 
-CONTEXTO DEL NEGOCIO (no inventes nada fuera de esto):
-- Vendemos ÚNICAMENTE en Vinted. No existe otro marketplace en este negocio.
-- El modelo de negocio es reventa de zapatillas con multicuentas en Vinted.
-- Los bloqueos en Vinted NO siempre son por el producto que se sube: muchas veces son por denuncias de otros vendedores o compradores. Hay que distinguir ambos casos.
-- NO menciones ninguna app, herramienta ni software. El plan es de estrategia y proceso de negocio.
+CONTEXTO (respétalo siempre):
+- Vendemos ÚNICAMENTE en Vinted. No existen otras plataformas de venta ni de búsqueda de tendencias en este negocio.
+- Modelo de negocio: reventa de zapatillas con multicuentas en Vinted.
+- Los bloqueos NO siempre son por el producto: muchas veces son por denuncias de vendedores o compradores. Hay que distinguir ambos casos.
+- NO menciones ninguna app, herramienta, software ni plataforma externa.
 
 RESPUESTAS DEL ALUMNO:
 ${qaLines}
 
 ---
 
-Escribe la evaluación de ${skool_username} en español, en segunda persona (de tú). Tono: experto, directo, cercano y que inspire confianza. Empieza DIRECTAMENTE con "## Puntos críticos 🔴", sin saludo, sin introducción, sin texto previo.
+Escribe la evaluación de ${skool_username} en español, segunda persona (tú). Tono experto, directo, que inspire confianza. Empieza con "## Puntos críticos 🔴", sin nada antes.
 
 ## Puntos críticos 🔴
-Los 2-3 problemas más urgentes que le están frenando los resultados ahora mismo. Para cada uno: nombra el problema claramente, explica por qué le está limitando y qué consecuencia tiene en su negocio. Basado en sus respuestas.
+Máximo 3 puntos. Cada punto: 1 frase que nombre el problema + 1 frase de consecuencia en su negocio. Sin párrafos largos.
 
 ## Puntos fuertes ✅
-Lo que ya domina según sus respuestas. Bullet points concretos y directos.
+Bullets cortos, 1 línea cada uno. Solo lo que realmente hace bien según sus respuestas.
 
 ## Tu plan de acción 🎯
-Para cada punto crítico: acción concreta y específica que puede aplicar él solo en su proceso de negocio. Qué hacer exactamente, no consejos generales.
+Un punto por cada punto crítico. Máximo 2 líneas por punto: acción concreta y específica de proceso de negocio, nada genérico.
 
 ## Plan 1:1 con Lamine 🤝
-Este es el apartado más importante. Desarrolla cada punto con detalle. Estructura así:
+Mínimo 3 puntos, máximo 4. Formato estricto:
 
-**Punto 1 — [Título del tema]**
-[2-3 frases explicando qué van a trabajar juntos, cómo lo van a abordar y qué resultado esperan conseguir.]
+**Punto 1 — [Título]**
+2 frases: qué trabajaréis juntos y qué resultado concreto buscáis.
 
-**Punto 2 — [Título del tema]**
-[2-3 frases...]
+**Punto 2 — [Título]**
+2 frases: qué trabajaréis juntos y qué resultado concreto buscáis.
 
-**Punto 3 — [Título del tema]**
-[2-3 frases...]
-
-[Añade tantos puntos como sean necesarios para cubrir todos sus puntos críticos y áreas de mejora clave.]
+**Punto 3 — [Título]**
+2 frases: qué trabajaréis juntos y qué resultado concreto buscáis.
 
 ---
 
 📲 *Tu mensaje para Lamine:*
 _"Hola Lamine, soy ${skool_username}. He visto mi plan. Quiero empezar por el Punto ___ . ¿Cuándo te va bien?"_
 
-REGLAS:
-- Empieza con "##". Ningún texto antes.
-- El Plan 1:1 debe tener mínimo 3 puntos bien desarrollados.
-- Basado en sus respuestas reales. Cero inventado.
-- Máximo 600 palabras en total.`;
+REGLAS ABSOLUTAS:
+- Primera línea: "## Puntos críticos 🔴". Sin nada antes.
+- Secciones cortas. Respeta los límites de líneas por apartado.
+- Cero apps, cero plataformas, cero herramientas externas.
+- Todo basado en sus respuestas reales.`;
 
       const resp = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.1, maxOutputTokens: 3000 } }),
+          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.1, maxOutputTokens: 8192 } }),
         }
       );
       const data: any = await resp.json();
