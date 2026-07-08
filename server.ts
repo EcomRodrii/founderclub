@@ -7100,20 +7100,19 @@ REGLAS ABSOLUTAS:
       const { answers, username: skool_username } = r.rows[0];
 
       const QUESTIONS: Record<string, string> = {
-        q1:'¿En qué punto estás ahora mismo con la reventa?',q2:'Facturación mensual',q3:'¿Qué estás vendiendo?',
-        q4:'Proveedores y precios',q5:'Organización del stock',q6:'¿Compras stock por semana o mes?',
-        q7:'¿Sabes gestionar incidencias en envíos?',q8:'Número de cuentas de Vinted activas',
-        q9:'¿Sabes detectar shadowban?',q10:'¿Sabes detectar lista negra?',q11:'Actividad fuera de Vinted',
-        q12:'Método de creación de cuentas',q13:'Estabilidad de cuentas',q14:'Interpretación de bloqueos',
-        q15:'Control del proceso de maduración',q16:'Búsqueda de productos',q17:'Decisión de escalar producto',
-        q18:'Gestión de productos en revisión (REPS)',q19:'Proceso desde compra hasta venta',q20:'Testeo de producto nuevo',
-        q21:'Criterios para invertir más',q22:'Margen medio por producto',q23:'Volumen vs margen',
-        q24:'% vendido en primera semana',q25:'Publicaciones por cuenta al día',q26:'Método de publicación',
-        q27:'Estrategia con reps (¿mete normales antes?)',q28:'% stock parado más de 15 días',
-        q29:'Acción con producto estancado',q30:'Control de beneficios y números',q31:'Diagnóstico de bloqueos',
-        q32:'Gestión de compradores difíciles',q33:'Punto de mejora principal',q34:'Plan de recuperación desde cero',
-        q35:'Qué haría diferente empezando hoy',q36:'Objetivo de facturación',q37:'Uso de la app',
-        q38:'Error más caro cometido',q39:'Escalado sin romper lo que funciona',q40:'Criterios para madurar una cuenta',
+        q1: '¿Hace cuánto tiempo llevas vendiendo en Vinted?',
+        q2: '¿Cuánto estás facturando de media al mes?',
+        q3: '¿Con cuántas cuentas de Vinted trabajas actualmente?',
+        q4: '¿Qué tipo de zapatillas vendes?',
+        q5: '¿De dónde consigues el stock y a qué precio lo compras?',
+        q6: '¿Cuánto tardas de media en vender un par desde que lo publicas?',
+        q7: 'Proceso completo: desde que compras hasta que vendes',
+        q8: '¿Has tenido bloqueos de cuentas? ¿A qué crees que se deben?',
+        q9: '¿Qué haces cuando un producto lleva más de 2 semanas sin venderse?',
+        q10: '¿Cuál es el mayor problema o bloqueo que tienes ahora mismo?',
+        q11: '¿Qué has intentado para solucionarlo y no ha funcionado?',
+        q12: '¿Cuánto quieres ganar al mes y en qué plazo?',
+        q13: '¿Hay algo más que quieras contarle a Lamine sobre tu situación?',
       };
 
       const qaLines = Object.entries(answers as Record<string,string>)

@@ -5,78 +5,36 @@ type Status = 'loading' | 'none' | 'submitted' | 'plan_ready';
 
 const STEPS = [
   {
-    title: 'Tu situación actual',
+    title: '¿Dónde estás ahora?',
     qs: [
-      { key: 'q1', label: '¿En qué punto estás ahora mismo con la reventa?', placeholder: 'Cuéntame desde dónde partes, cuánto llevas, qué has probado…' },
-      { key: 'q2', label: 'Facturación mensual', placeholder: 'Tu media mensual y tu mejor mes…' },
-      { key: 'q3', label: '¿Qué estás vendiendo?', placeholder: 'Tipos de producto, marcas, rangos de precio…' },
+      { key: 'q1', label: '¿Hace cuánto tiempo llevas vendiendo en Vinted?', placeholder: 'Ej: 2 meses, 6 meses, desde enero…' },
+      { key: 'q2', label: '¿Cuánto estás facturando de media al mes?', placeholder: 'Aproximado está bien, sin presión' },
+      { key: 'q3', label: '¿Con cuántas cuentas de Vinted trabajas actualmente?', placeholder: 'Cuántas tienes y cuántas usas de verdad' },
     ],
   },
   {
-    title: 'Stock y proveedores',
+    title: 'Tu producto y stock',
     qs: [
-      { key: 'q4', label: 'Proveedores y precios', placeholder: 'De dónde sacas el stock, precios de coste aproximados…' },
-      { key: 'q5', label: 'Organización del stock', placeholder: 'Cómo lo tienes organizado, dónde lo almacenas…' },
-      { key: 'q6', label: '¿Compras stock por semana o mes?', placeholder: 'Frecuencia de compra y volumen…' },
+      { key: 'q4', label: '¿Qué tipo de zapatillas vendes?', placeholder: 'Marcas, modelos, rangos de precio, nuevas o segunda mano…' },
+      { key: 'q5', label: '¿De dónde consigues el stock y a qué precio lo compras?', placeholder: 'Cómo encuentras los productos, dónde los compras…' },
+      { key: 'q6', label: '¿Cuánto tardas de media en vender un par desde que lo publicas?', placeholder: 'Días, semanas… y si varía mucho entre productos' },
     ],
   },
   {
-    title: 'Multicuentas — Operativa',
+    title: 'Cómo lo haces',
     qs: [
-      { key: 'q8', label: 'Número de cuentas de Vinted activas', placeholder: 'Cuántas tienes activas y cómo las gestionas…' },
-      { key: 'q7', label: '¿Sabes gestionar incidencias en envíos?', placeholder: 'Qué haces cuando hay problemas con envíos…' },
-      { key: 'q9', label: '¿Sabes detectar shadowban?', placeholder: 'Cómo lo detectas, qué señales buscas…' },
-      { key: 'q10', label: '¿Sabes detectar lista negra?', placeholder: 'Cómo sabes si un producto está en lista negra…' },
-      { key: 'q12', label: 'Método de creación de cuentas', placeholder: 'Cómo creas las cuentas, qué dispositivos usas…' },
+      { key: 'q7', label: 'Cuéntame tu proceso completo: desde que compras hasta que vendes', placeholder: 'Fotos, publicación, precio, gestión de mensajes, envíos…' },
+      { key: 'q8', label: '¿Has tenido bloqueos de cuentas? Si es así, ¿a qué crees que se deben?', placeholder: 'Si no has tenido, cuéntame cómo los evitas o por qué crees que no los tienes…' },
+      { key: 'q9', label: '¿Qué haces cuando un producto lleva más de 2 semanas sin venderse?', placeholder: 'Tu estrategia actual con el stock parado…' },
     ],
   },
   {
-    title: 'Multicuentas — Control',
+    title: 'Tus problemas y objetivos',
     qs: [
-      { key: 'q13', label: 'Estabilidad de cuentas', placeholder: 'Cuánto duran, qué porcentaje se bloquea…' },
-      { key: 'q14', label: 'Interpretación de bloqueos', placeholder: 'Cuando te bloquean, a qué lo atribuyes…' },
-      { key: 'q15', label: 'Control del proceso de maduración', placeholder: 'Cómo maduras una cuenta nueva…' },
-      { key: 'q31', label: 'Diagnóstico de bloqueos', placeholder: 'Cómo analizas por qué te han bloqueado…' },
-      { key: 'q40', label: 'Criterios para madurar una cuenta', placeholder: 'Qué tiene que cumplir una cuenta para considerarla madura…' },
-    ],
-  },
-  {
-    title: 'Productos',
-    qs: [
-      { key: 'q16', label: 'Búsqueda de productos', placeholder: 'Cómo encuentras qué vender…' },
-      { key: 'q17', label: 'Decisión de escalar producto', placeholder: 'Cuándo decides escalar y cuánto…' },
-      { key: 'q18', label: 'Gestión de productos en revisión (REPS)', placeholder: 'Qué haces cuando un producto está en revisión…' },
-      { key: 'q19', label: 'Proceso desde compra hasta venta', placeholder: 'Cuéntame el proceso completo…' },
-      { key: 'q20', label: 'Testeo de producto nuevo', placeholder: 'Cuántas unidades testeas, en qué cuentas…' },
-      { key: 'q21', label: 'Criterios para invertir más', placeholder: 'Qué tiene que pasar para invertir más en un producto…' },
-    ],
-  },
-  {
-    title: 'Números y publicación',
-    qs: [
-      { key: 'q22', label: 'Margen medio por producto', placeholder: 'Qué margen sacas de media por par…' },
-      { key: 'q23', label: 'Volumen vs margen', placeholder: 'Priorizas volumen o margen, y por qué…' },
-      { key: 'q24', label: '% vendido en primera semana', placeholder: 'Qué porcentaje del stock nuevo vendes en la primera semana…' },
-      { key: 'q25', label: 'Publicaciones por cuenta al día', placeholder: 'Cuántos artículos publicas por cuenta…' },
-      { key: 'q26', label: 'Método de publicación', placeholder: 'Cómo publicas, qué proceso sigues…' },
-      { key: 'q27', label: 'Estrategia con reps', placeholder: 'Metes normales antes de subir reps, cómo lo gestionas…' },
-      { key: 'q28', label: '% stock parado más de 15 días', placeholder: 'Qué porcentaje lleva más de 15 días sin venderse…' },
-      { key: 'q29', label: 'Acción con producto estancado', placeholder: 'Qué haces cuando un producto no se mueve…' },
-      { key: 'q30', label: 'Control de beneficios y números', placeholder: 'Cómo llevas el control de tus números…' },
-    ],
-  },
-  {
-    title: 'Mentalidad y objetivos',
-    qs: [
-      { key: 'q32', label: 'Gestión de compradores difíciles', placeholder: 'Cómo manejas conflictos con compradores…' },
-      { key: 'q33', label: 'Punto de mejora principal', placeholder: 'En qué crees que más puedes mejorar…' },
-      { key: 'q34', label: 'Plan de recuperación desde cero', placeholder: 'Si mañana te quitaran todo, qué harías…' },
-      { key: 'q35', label: 'Qué harías diferente empezando hoy', placeholder: 'Con lo que sabes ahora, qué cambiarías…' },
-      { key: 'q36', label: 'Objetivo de facturación', placeholder: 'Cuánto quieres facturar y en qué plazo…' },
-      { key: 'q37', label: 'Uso de la app', placeholder: 'Qué herramientas de la app usas y cómo te van…' },
-      { key: 'q38', label: 'Error más caro cometido', placeholder: 'El error que más te ha costado, qué pasó…' },
-      { key: 'q39', label: 'Escalado sin romper lo que funciona', placeholder: 'Cómo piensas escalar sin perder lo que ya funciona…' },
-      { key: 'q11', label: 'Actividad adicional relacionada', placeholder: 'Tienes otras actividades relacionadas con la reventa…' },
+      { key: 'q10', label: '¿Cuál es el mayor problema o bloqueo que tienes ahora mismo?', placeholder: 'Lo que más te frena, lo que no consigues resolver o lo que más te preocupa…' },
+      { key: 'q11', label: '¿Qué has intentado para solucionarlo y no ha funcionado?', placeholder: 'Sé honesto, esto ayuda a Lamine a entenderte de verdad…' },
+      { key: 'q12', label: '¿Cuánto quieres ganar al mes y en qué plazo?', placeholder: 'Tu objetivo concreto: número y fecha…' },
+      { key: 'q13', label: '¿Hay algo más que quieras contarle a Lamine sobre tu situación?', placeholder: 'Cualquier contexto que creas importante y no hayas contado…' },
     ],
   },
 ];
@@ -144,8 +102,7 @@ export default function DiagnosticoPage({ token }: { token: string }) {
 
   const currentStep = STEPS[step];
   const totalSteps = STEPS.length;
-  const progress = Math.round(((step) / totalSteps) * 100);
-
+  const progress = Math.round((step / totalSteps) * 100);
   const stepComplete = currentStep.qs.every(q => (answers[q.key] || '').trim().length > 0);
 
   const submit = async () => {
@@ -179,7 +136,6 @@ export default function DiagnosticoPage({ token }: { token: string }) {
     navigator.clipboard.writeText(plain);
   };
 
-  // Loading
   if (status === 'loading') {
     return (
       <div className="flex items-center justify-center min-h-[50vh]">
@@ -188,7 +144,6 @@ export default function DiagnosticoPage({ token }: { token: string }) {
     );
   }
 
-  // Plan ready
   if (status === 'plan_ready' && plan) {
     return (
       <div className="max-w-2xl mx-auto space-y-5">
@@ -205,7 +160,7 @@ export default function DiagnosticoPage({ token }: { token: string }) {
             onClick={copyPlanForWhatsApp}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-600/20 border border-green-500/30 text-green-400 text-xs font-semibold hover:bg-green-600/35 transition shrink-0"
           >
-            Copiar para WhatsApp
+            📋 Copiar para WhatsApp
           </button>
         </div>
         <div className="bg-white/[0.03] border border-white/[0.08] rounded-2xl p-5">
@@ -215,7 +170,6 @@ export default function DiagnosticoPage({ token }: { token: string }) {
     );
   }
 
-  // Submitted / waiting
   if (status === 'submitted') {
     return (
       <div className="flex flex-col items-center justify-center min-h-[55vh] gap-5 text-center px-4">
@@ -232,10 +186,8 @@ export default function DiagnosticoPage({ token }: { token: string }) {
     );
   }
 
-  // Form
   return (
     <div className="max-w-xl mx-auto space-y-5">
-      {/* Header */}
       <div>
         <h1 className="text-lg font-bold text-[#f2f2ef]">Diagnóstico inicial</h1>
         <p className="text-[0.78rem] text-[#888880] mt-0.5">
@@ -243,7 +195,6 @@ export default function DiagnosticoPage({ token }: { token: string }) {
         </p>
       </div>
 
-      {/* Progress */}
       <div>
         <div className="flex items-center justify-between text-xs text-[#888880] mb-2">
           <span>{currentStep.title}</span>
@@ -257,7 +208,6 @@ export default function DiagnosticoPage({ token }: { token: string }) {
         </div>
       </div>
 
-      {/* Questions */}
       <div className="space-y-4">
         {currentStep.qs.map(q => (
           <div key={q.key}>
@@ -277,7 +227,6 @@ export default function DiagnosticoPage({ token }: { token: string }) {
         <div className="bg-red-500/10 border border-red-500/25 rounded-xl px-4 py-3 text-sm text-red-400">{error}</div>
       )}
 
-      {/* Navigation */}
       <div className="flex gap-3">
         {step > 0 && (
           <button

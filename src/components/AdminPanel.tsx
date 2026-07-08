@@ -35,6 +35,22 @@ const ACADEMIA_QUESTIONS: Record<string, string> = {
   q38:'Error más caro cometido',q39:'Escalado sin romper lo que funciona',q40:'Criterios para madurar una cuenta',
 };
 
+const DIAG_QUESTIONS: Record<string, string> = {
+  q1: '¿Hace cuánto tiempo llevas vendiendo en Vinted?',
+  q2: '¿Cuánto estás facturando de media al mes?',
+  q3: '¿Con cuántas cuentas de Vinted trabajas actualmente?',
+  q4: '¿Qué tipo de zapatillas vendes?',
+  q5: '¿De dónde consigues el stock y a qué precio lo compras?',
+  q6: '¿Cuánto tardas de media en vender un par desde que lo publicas?',
+  q7: 'Proceso completo: desde que compras hasta que vendes',
+  q8: '¿Has tenido bloqueos de cuentas? ¿A qué crees que se deben?',
+  q9: '¿Qué haces cuando un producto lleva más de 2 semanas sin venderse?',
+  q10: '¿Cuál es el mayor problema o bloqueo que tienes ahora mismo?',
+  q11: '¿Qué has intentado para solucionarlo y no ha funcionado?',
+  q12: '¿Cuánto quieres ganar al mes y en qué plazo?',
+  q13: '¿Hay algo más que quieras contarle a Lamine sobre tu situación?',
+};
+
 const BRANDS = ['ADIDAS', 'NEW BALANCE', 'ASICS', 'ONITSUKA'] as const;
 type Brand = typeof BRANDS[number];
 
@@ -668,9 +684,13 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
     finally { setAcadSummaryLoading(false); }
   };
 
-  const generateDiagPlan = async (userId: number) => {
+  const generateDiagPlan = async (userId: number, username: string) => {
     setDiagPlanLoading(userId);
     try {
+      if (!diagAnswers[userId]) {
+        const ans = await client.get(`/api/admin/diagnostics/${userId}/answers`);
+        setDiagAnswers(prev => ({ ...prev, [userId]: ans }));
+      }
       const d = await fetch(`/api/admin/diagnostics/${userId}/plan`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
@@ -678,6 +698,7 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
       if (d.plan) {
         setDiagPlan(prev => ({ ...prev, [userId]: d.plan }));
         setDiagList(prev => prev.map(x => x.user_id === userId ? { ...x, has_plan: true } : x));
+        setDiagModal({ userId, username });
       } else alert('Error: ' + (d.error || 'desconocido'));
     } catch { alert('Error al generar plan'); }
     finally { setDiagPlanLoading(null); }
@@ -1678,7 +1699,7 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
                               className="text-xs px-2 py-1 rounded-lg bg-amber-500/10 border border-amber-500/25 text-amber-400 hover:bg-amber-500/20 transition"
                             >📄 Ver</button>
                             <button
-                              onClick={() => generateDiagPlan(d.user_id)}
+                              onClick={() => generateDiagPlan(d.user_id, d.username)}
                               disabled={diagPlanLoading === d.user_id}
                               className="text-xs px-2 py-1 rounded-lg bg-violet-500/10 border border-violet-500/25 text-violet-400 hover:bg-violet-500/20 transition disabled:opacity-50"
                             >
@@ -1871,7 +1892,7 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
               {/* Answers */}
               {diagAnswers[diagModal.userId] ? (
                 <div className="space-y-4">
-                  {Object.entries(ACADEMIA_QUESTIONS).map(([key, question]) => {
+                  {Object.entries(DIAG_QUESTIONS).map(([key, question]) => {
                     const answer = (diagAnswers[diagModal.userId]?.answers as Record<string,string>)?.[key] ?? '—';
                     return (
                       <div key={key} className="pb-4 border-b border-zinc-800 last:border-0 last:pb-0">
