@@ -6950,28 +6950,30 @@ ${qaLines}`;
         .map(([k, v]) => `**${QUESTIONS[k]}**\n${v}`)
         .join("\n\n");
 
-      const prompt = `Eres el coach de Lamine Resell. Crea un plan de acción personalizado para ${skool_username} basándote en sus respuestas al cuestionario de la Academia. Puntuación: ${score}/100.${(red_flags as string[]).length > 0 ? ` Señales de alerta en: ${(red_flags as string[]).join(', ')}.` : ''}
+      const weakAreas = (red_flags as string[]).length > 0 ? ` Áreas con más margen de mejora según sus respuestas: ${(red_flags as string[]).join(', ')}.` : '';
 
-RESPUESTAS COMPLETAS:
+      const prompt = `Eres el coach personal de ${skool_username} dentro de la Academia de Lamine Resell. Este alumno ya forma parte de la academia y ha rellenado un cuestionario de diagnóstico para que puedas ayudarle a mejorar. Tu trabajo es crear su plan de mejora personalizado basado en lo que ha respondido.${weakAreas}
+
+RESPUESTAS DEL ALUMNO:
 ${qaLines}
 
 ---
 
-Crea un plan de mejora en español con EXACTAMENTE estos apartados (usa los encabezados tal cual, con ##):
+Escribe el plan de mejora en español, en segunda persona (háblale directamente de tú), con EXACTAMENTE estos apartados (##):
 
-## Lo que ya tienes bien ✅
-Bullet points de sus puntos fuertes REALES según sus respuestas. Solo lo que realmente hace bien, sin relleno.
+## Tus puntos fuertes ✅
+Lo que ya haces bien según tus propias respuestas. Bullet points concretos, referenciando lo que ha dicho.
 
-## Lo que más te está frenando 🔴
-Los 3-4 cuellos de botella principales, ordenados por impacto. Para cada uno: por qué le frena y qué le cuesta en resultados.
+## En qué tienes que mejorar 🔴
+Los 3-4 puntos donde más puedes crecer, ordenados por impacto en tus resultados. Para cada uno explica brevemente por qué te está limitando.
 
 ## Tu plan de acción 🎯
-Para cada punto débil: una acción concreta y específica (no "mejorar X" sino "hacer Y exactamente"). Muy práctico.
+Para cada punto de mejora: qué hacer exactamente (acción concreta, no consejo genérico). Algo que pueda aplicar directamente.
 
-## Esta semana, empieza por aquí ⚡
-Una sola acción, la más urgente e impactante. Accionable en los próximos 7 días.
+## Por dónde empezar esta semana ⚡
+Una sola cosa, la más impactante. Concreta y accionable en 7 días.
 
-REGLAS: Basa TODO en sus respuestas reales (si dice que tiene X cuentas, úsalo; si vende Y, úsalo). Nada genérico. Máximo 450 palabras.`;
+REGLAS: Usa lo que ha respondido literalmente cuando sea relevante. Tono directo, de coach, sin relleno. Máximo 450 palabras.`;
 
       const resp = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
