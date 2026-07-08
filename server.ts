@@ -6973,14 +6973,18 @@ Para cada punto de mejora: qué hacer exactamente (acción concreta, no consejo 
 ## Por dónde empezar esta semana ⚡
 Una sola cosa, la más impactante. Concreta y accionable en 7 días.
 
-REGLAS: Usa lo que ha respondido literalmente cuando sea relevante. Tono directo, de coach, sin relleno. Máximo 450 palabras.`;
+REGLAS ESTRICTAS:
+- Empieza DIRECTAMENTE con "## Tus puntos fuertes ✅", sin saludo, sin introducción, sin texto previo.
+- Usa lo que ha respondido literalmente cuando sea relevante.
+- Tono directo, de coach, sin relleno.
+- Máximo 500 palabras en total.`;
 
       const resp = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.2, maxOutputTokens: 1024 } }),
+          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.1, maxOutputTokens: 3000 } }),
         }
       );
       const data: any = await resp.json();
