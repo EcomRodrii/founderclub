@@ -10,12 +10,12 @@ import Sidebar, { MobileTabBar, type Page } from './components/Sidebar';
 // 'photos' = Fantasma — siempre disponible para todos
 // 'academia' = desbloquea todo lo demás
 
-const ALL_PAGES: Page[] = ['dashboard', 'accounts', 'inventory', 'orders', 'profits', 'tongue', 'photos', 'alfombras', 'metadatos', 'titles', 'settings', 'publish'];
+const ALL_PAGES: Page[] = ['dashboard', 'accounts', 'inventory', 'orders', 'profits', 'tongue', 'photos', 'alfombras', 'metadatos', 'titles', 'settings', 'publish', 'diagnostico'];
 
 function computeAllowedPages(license: any, isAdmin: boolean): Set<Page> {
   if (isAdmin) return new Set(ALL_PAGES);
   const features: string[] = license?.features || ['photos'];
-  const pages = new Set<Page>(['photos', 'alfombras', 'metadatos', 'titles', 'settings']); // mínimo gratuito
+  const pages = new Set<Page>(['photos', 'alfombras', 'metadatos', 'titles', 'settings', 'diagnostico']); // mínimo gratuito
   if (features.includes('all') || features.includes('academia')) {
     ALL_PAGES.forEach(p => pages.add(p));
   }
@@ -64,6 +64,7 @@ const TitleGenerator   = lazy(() => import('./components/TitleGenerator'));
 const VintedAutoPublish = lazy(() => import('./components/VintedAutoPublish'));
 // photos
 const ImageUniquifier  = lazy(() => import('./components/ImageUniquifier'));
+const DiagnosticoPage  = lazy(() => import('./components/DiagnosticoPage'));
 
 function ChunkLoading() {
   return (
@@ -285,6 +286,7 @@ function Dashboard({
       case 'alfombras':  return <S><CarpetEditor token={token} isPro={user?.rank === 'pro'} isAdmin={!!user?.is_admin} /></S>;
       case 'metadatos':  return <S><MetadatosEditor /></S>;
       case 'titles':     return <S><TitleGenerator token={token} /></S>;
+      case 'diagnostico': return <S><DiagnosticoPage token={token} /></S>;
       case 'settings':   return <SettingsPage token={token} user={user} license={license} onLogout={onLogout} />;
     }
   };

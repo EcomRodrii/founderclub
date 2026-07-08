@@ -497,6 +497,18 @@ async function startServer() {
     );
   `).catch(() => {});
 
+  // ── Diagnósticos de alumnos ──────────────────────────────────────────────────
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS student_diagnostics (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+      answers JSONB NOT NULL DEFAULT '{}',
+      ai_plan TEXT,
+      submitted_at TIMESTAMPTZ DEFAULT NOW(),
+      plan_generated_at TIMESTAMPTZ
+    );
+  `).catch(() => {});
+
   // ── Lista de espera (cierre Skool) ──────────────────────────────────────────
   await pool.query(`
     CREATE TABLE IF NOT EXISTS waitlist (
@@ -7011,6 +7023,170 @@ REGLAS ABSOLUTAS:
       res.json({ summary });
     } catch (e: any) {
       res.status(500).json({ error: "Error al generar resumen" });
+    }
+  });
+
+  // ── Diagnóstico alumno: estado ───────────────────────────────────────────────
+  app.get("/api/diagnostic/mine", requireLicense as any, async (req: AuthRequest, res) => {
+    try {
+      const r = await pool.query(
+        "SELECT answers, ai_plan, submitted_at, plan_generated_at FROM student_diagnostics WHERE user_id=$1",
+        [req.user!.id]
+      );
+      if (!r.rows[0]) return res.json({ status: 'none' });
+      const row = r.rows[0];
+      res.json({
+        status: row.ai_plan ? 'plan_ready' : 'submitted',
+        submitted_at: row.submitted_at,
+        plan: row.ai_plan || null,
+        plan_generated_at: row.plan_generated_at,
+      });
+    } catch { res.status(500).json({ error: "Error del servidor" }); }
+  });
+
+  // ── Diagnóstico alumno: enviar respuestas ────────────────────────────────────
+  app.post("/api/diagnostic/submit", requireLicense as any, async (req: AuthRequest, res) => {
+    const { answers } = req.body;
+    if (!answers || typeof answers !== 'object') return res.status(400).json({ error: "Faltan respuestas" });
+    try {
+      const existing = await pool.query("SELECT id FROM student_diagnostics WHERE user_id=$1", [req.user!.id]);
+      if (existing.rows[0]) return res.status(409).json({ error: "Ya enviaste tu diagnóstico" });
+      await pool.query(
+        "INSERT INTO student_diagnostics (user_id, answers) VALUES ($1, $2)",
+        [req.user!.id, JSON.stringify(answers)]
+      );
+      res.json({ ok: true });
+    } catch { res.status(500).json({ error: "Error al guardar" }); }
+  });
+
+  // ── Admin: listar todos los diagnósticos ─────────────────────────────────────
+  app.get("/api/admin/diagnostics", requireAdmin as any, async (_req, res) => {
+    try {
+      const r = await pool.query(`
+        SELECT sd.id, sd.user_id, u.username, sd.submitted_at, sd.plan_generated_at,
+               (sd.ai_plan IS NOT NULL) AS has_plan
+        FROM student_diagnostics sd
+        JOIN users u ON u.id = sd.user_id
+        ORDER BY sd.submitted_at DESC
+      `);
+      res.json(r.rows);
+    } catch { res.status(500).json({ error: "Error del servidor" }); }
+  });
+
+  // ── Admin: ver respuestas de un alumno ───────────────────────────────────────
+  app.get("/api/admin/diagnostics/:userId/answers", requireAdmin as any, async (req, res) => {
+    try {
+      const r = await pool.query(
+        `SELECT sd.answers, u.username FROM student_diagnostics sd
+         JOIN users u ON u.id = sd.user_id WHERE sd.user_id=$1`,
+        [req.params.userId]
+      );
+      if (!r.rows[0]) return res.status(404).json({ error: "No encontrado" });
+      res.json(r.rows[0]);
+    } catch { res.status(500).json({ error: "Error del servidor" }); }
+  });
+
+  // ── Admin: generar plan IA para un alumno ────────────────────────────────────
+  app.post("/api/admin/diagnostics/:userId/plan", requireAdmin as any, async (req, res) => {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return res.status(503).json({ error: "GEMINI_API_KEY no configurada" });
+    try {
+      const r = await pool.query(
+        `SELECT sd.answers, u.username FROM student_diagnostics sd
+         JOIN users u ON u.id = sd.user_id WHERE sd.user_id=$1`,
+        [req.params.userId]
+      );
+      if (!r.rows[0]) return res.status(404).json({ error: "Diagnóstico no encontrado" });
+      const { answers, username: skool_username } = r.rows[0];
+
+      const QUESTIONS: Record<string, string> = {
+        q1:'¿En qué punto estás ahora mismo con la reventa?',q2:'Facturación mensual',q3:'¿Qué estás vendiendo?',
+        q4:'Proveedores y precios',q5:'Organización del stock',q6:'¿Compras stock por semana o mes?',
+        q7:'¿Sabes gestionar incidencias en envíos?',q8:'Número de cuentas de Vinted activas',
+        q9:'¿Sabes detectar shadowban?',q10:'¿Sabes detectar lista negra?',q11:'Actividad fuera de Vinted',
+        q12:'Método de creación de cuentas',q13:'Estabilidad de cuentas',q14:'Interpretación de bloqueos',
+        q15:'Control del proceso de maduración',q16:'Búsqueda de productos',q17:'Decisión de escalar producto',
+        q18:'Gestión de productos en revisión (REPS)',q19:'Proceso desde compra hasta venta',q20:'Testeo de producto nuevo',
+        q21:'Criterios para invertir más',q22:'Margen medio por producto',q23:'Volumen vs margen',
+        q24:'% vendido en primera semana',q25:'Publicaciones por cuenta al día',q26:'Método de publicación',
+        q27:'Estrategia con reps (¿mete normales antes?)',q28:'% stock parado más de 15 días',
+        q29:'Acción con producto estancado',q30:'Control de beneficios y números',q31:'Diagnóstico de bloqueos',
+        q32:'Gestión de compradores difíciles',q33:'Punto de mejora principal',q34:'Plan de recuperación desde cero',
+        q35:'Qué haría diferente empezando hoy',q36:'Objetivo de facturación',q37:'Uso de la app',
+        q38:'Error más caro cometido',q39:'Escalado sin romper lo que funciona',q40:'Criterios para madurar una cuenta',
+      };
+
+      const qaLines = Object.entries(answers as Record<string,string>)
+        .filter(([k]) => QUESTIONS[k])
+        .map(([k, v]) => `**${QUESTIONS[k]}**\n${v}`)
+        .join('\n\n');
+
+      const prompt = `Eres un experto en reventa de zapatillas en Vinted con multicuentas y coach de la Academia de Lamine Resell. Hablas con autoridad, precisión y confianza total.
+
+CONTEXTO (respétalo siempre):
+- Vendemos ÚNICAMENTE en Vinted. No existen otras plataformas de venta ni de búsqueda de tendencias en este negocio.
+- Modelo de negocio: reventa de zapatillas con multicuentas en Vinted.
+- Los bloqueos NO siempre son por el producto: muchas veces son por denuncias de vendedores o compradores. Hay que distinguir ambos casos.
+- NO menciones ninguna app, herramienta, software ni plataforma externa.
+
+RESPUESTAS DEL ALUMNO:
+${qaLines}
+
+---
+
+Escribe la evaluación de ${skool_username} en español, segunda persona (tú). Tono experto, directo, que inspire confianza. Empieza con "## Puntos críticos 🔴", sin nada antes.
+
+## Puntos críticos 🔴
+Máximo 3 puntos. Cada punto: 1 frase que nombre el problema + 1 frase de consecuencia en su negocio. Sin párrafos largos.
+
+## Puntos fuertes ✅
+Bullets cortos, 1 línea cada uno. Solo lo que realmente hace bien según sus respuestas.
+
+## Tu plan de acción 🎯
+Un punto por cada punto crítico. Máximo 2 líneas por punto: acción concreta y específica de proceso de negocio, nada genérico.
+
+## Plan 1:1 con Lamine 🤝
+Mínimo 3 puntos, máximo 4. Formato estricto:
+
+**Punto 1 — [Título]**
+2 frases: qué trabajaréis juntos y qué resultado concreto buscáis.
+
+**Punto 2 — [Título]**
+2 frases: qué trabajaréis juntos y qué resultado concreto buscáis.
+
+**Punto 3 — [Título]**
+2 frases: qué trabajaréis juntos y qué resultado concreto buscáis.
+
+---
+
+📲 *Tu mensaje para Lamine:*
+_"Hola Lamine, soy ${skool_username}. He visto mi plan. Quiero empezar por el Punto ___ . ¿Cuándo te va bien?"_
+
+REGLAS ABSOLUTAS:
+- Primera línea: "## Puntos críticos 🔴". Sin nada antes.
+- Secciones cortas. Respeta los límites de líneas por apartado.
+- Cero apps, cero plataformas, cero herramientas externas.
+- Todo basado en sus respuestas reales.`;
+
+      const resp = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.1, maxOutputTokens: 8192 } }),
+        }
+      );
+      const data: any = await resp.json();
+      const plan = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      if (!plan) return res.status(500).json({ error: "Gemini no devolvió respuesta" });
+
+      await pool.query(
+        "UPDATE student_diagnostics SET ai_plan=$1, plan_generated_at=NOW() WHERE user_id=$2",
+        [plan, req.params.userId]
+      );
+      res.json({ plan });
+    } catch (e: any) {
+      res.status(500).json({ error: "Error al generar plan" });
     }
   });
 

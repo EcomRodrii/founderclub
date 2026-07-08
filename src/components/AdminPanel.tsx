@@ -444,6 +444,12 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
   const [acadSummary, setAcadSummary] = useState<Record<string, string>>({});
   const [acadSummaryLoading, setAcadSummaryLoading] = useState(false);
   const [acadModalTab, setAcadModalTab] = useState<'full'|'ai'>('full');
+  const [acadSubTab, setAcadSubTab] = useState<'verifications'|'diagnostics'>('verifications');
+  const [diagList, setDiagList] = useState<any[]>([]);
+  const [diagModal, setDiagModal] = useState<{ userId: number; username: string } | null>(null);
+  const [diagAnswers, setDiagAnswers] = useState<Record<number, any>>({});
+  const [diagPlan, setDiagPlan] = useState<Record<number, string>>({});
+  const [diagPlanLoading, setDiagPlanLoading] = useState<number | null>(null);
 
   // MFA setup
   const [mfaSetup, setMfaSetup] = useState<{ secret: string; qrDataUrl: string; otpauthUrl: string } | null>(null);
@@ -504,7 +510,12 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
         setRefs(await client.get('/api/admin/label-references'));
       }
       else if (t === 'academia') {
-        setAcadList(await client.get('/api/admin/academia/verifications'));
+        const [verifs, diags] = await Promise.all([
+          client.get('/api/admin/academia/verifications'),
+          client.get('/api/admin/diagnostics'),
+        ]);
+        setAcadList(verifs);
+        setDiagList(diags);
       }
     } finally {
       setLoading(false);
@@ -655,6 +666,21 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
       else alert('Error al generar resumen: ' + (d.error || 'desconocido'));
     } catch { alert('Error de conexión'); }
     finally { setAcadSummaryLoading(false); }
+  };
+
+  const generateDiagPlan = async (userId: number) => {
+    setDiagPlanLoading(userId);
+    try {
+      const d = await fetch(`/api/admin/diagnostics/${userId}/plan`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      }).then(r => r.json());
+      if (d.plan) {
+        setDiagPlan(prev => ({ ...prev, [userId]: d.plan }));
+        setDiagList(prev => prev.map(x => x.user_id === userId ? { ...x, has_plan: true } : x));
+      } else alert('Error: ' + (d.error || 'desconocido'));
+    } catch { alert('Error al generar plan'); }
+    finally { setDiagPlanLoading(null); }
   };
 
 
@@ -1520,87 +1546,155 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
         {/* Academia */}
         {tab === 'academia' && (
           <div className="space-y-4">
-            {/* Filtros */}
-            <div className="flex gap-2 flex-wrap">
-              {(['all','pending','approved','denied'] as const).map(f => (
-                <button
-                  key={f}
-                  onClick={() => setAcadFilter(f)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
-                    acadFilter === f
-                      ? 'bg-amber-500/20 border border-amber-500/40 text-amber-400'
-                      : 'bg-zinc-800 border border-zinc-700 text-zinc-400 hover:text-white'
-                  }`}
-                >
-                  {{ all:'Todas', pending:'Pendientes', approved:'Aprobadas', denied:'Denegadas' }[f]}
+            {/* Sub-tab toggle */}
+            <div className="flex gap-2 border-b border-zinc-800 pb-3">
+              {(['verifications', 'diagnostics'] as const).map(t => (
+                <button key={t} onClick={() => setAcadSubTab(t)}
+                  className={`px-4 py-1.5 rounded-xl text-sm font-semibold border transition ${
+                    acadSubTab === t ? 'bg-amber-500/20 border-amber-500/40 text-amber-400' : 'bg-zinc-800/50 border-zinc-700 text-zinc-400 hover:text-white'
+                  }`}>
+                  {t === 'verifications' ? `Verificaciones VIP (${acadList.length})` : `Diagnósticos (${diagList.length})`}
                 </button>
               ))}
             </div>
 
-            <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-x-auto">
-              <table className="w-full text-sm min-w-[700px]">
-                <thead>
-                  <tr className="border-b border-zinc-800">
-                    {['Usuario Skool','Email','Teléfono','Fecha','Estado','Cuestionario','Acciones'].map(h => (
-                      <th key={h} className="text-left text-xs text-zinc-500 font-medium px-4 py-3">{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {(acadFilter === 'all' ? acadList : acadList.filter(v => v.status === acadFilter)).map(v => (
-                    <tr key={v.id} className="border-b border-zinc-800/60 hover:bg-zinc-800/20 transition">
-                      <td className="px-4 py-3 font-semibold text-sm">{v.skool_username || '—'}</td>
-                      <td className="px-4 py-3 text-xs text-zinc-400">{v.email || '—'}</td>
-                      <td className="px-4 py-3 text-xs text-zinc-400">{v.phone || '—'}</td>
-                      <td className="px-4 py-3 text-xs text-zinc-500">{timeAgo(v.created_at)}</td>
-                      <td className="px-4 py-3">
-                        <span className={`text-xs px-2 py-0.5 rounded-full border font-semibold ${
-                          v.status === 'pending'  ? 'bg-yellow-500/10 text-yellow-400 border-yellow-500/25' :
-                          v.status === 'approved' ? 'bg-green-500/10 text-green-400 border-green-500/25' :
-                                                    'bg-red-500/10 text-red-400 border-red-500/25'
-                        }`}>
-                          {{ pending:'Pendiente', approved:'Aprobada', denied:'Denegada' }[v.status as string] ?? v.status}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        {v.completed ? (
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs font-bold text-green-400">{v.score}/100</span>
-                            <button
-                              onClick={() => openAcadAnswers(v.id, v.skool_username, 'full')}
-                              className="text-xs px-2 py-1 rounded-lg bg-amber-500/10 border border-amber-500/25 text-amber-400 hover:bg-amber-500/20 transition"
-                            >📄 Leer</button>
-                            <button
-                              onClick={() => openAcadAnswers(v.id, v.skool_username, 'ai')}
-                              className="text-xs px-2 py-1 rounded-lg bg-violet-500/10 border border-violet-500/25 text-violet-400 hover:bg-violet-500/20 transition"
-                            >✨ IA</button>
-                          </div>
-                        ) : (
-                          <span className="text-xs text-zinc-600">Sin enviar</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3">
-                        {v.status === 'pending' ? (
-                          <div className="flex gap-2">
-                            <button
-                              onClick={() => reviewAcad(v.id, 'approve')}
-                              className="text-xs px-2 py-1 rounded-lg bg-green-500/10 border border-green-500/25 text-green-400 hover:bg-green-500/20 transition font-semibold"
-                            >✓ Verificar</button>
-                            <button
-                              onClick={() => reviewAcad(v.id, 'deny')}
-                              className="text-xs px-2 py-1 rounded-lg bg-red-500/10 border border-red-500/25 text-red-400 hover:bg-red-500/20 transition font-semibold"
-                            >✗ Denegar</button>
-                          </div>
-                        ) : <span className="text-xs text-zinc-700">—</span>}
-                      </td>
-                    </tr>
+            {acadSubTab === 'verifications' && (
+              <div className="space-y-4">
+                {/* Filtros */}
+                <div className="flex gap-2 flex-wrap">
+                  {(['all','pending','approved','denied'] as const).map(f => (
+                    <button
+                      key={f}
+                      onClick={() => setAcadFilter(f)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                        acadFilter === f
+                          ? 'bg-amber-500/20 border border-amber-500/40 text-amber-400'
+                          : 'bg-zinc-800 border border-zinc-700 text-zinc-400 hover:text-white'
+                      }`}
+                    >
+                      {{ all:'Todas', pending:'Pendientes', approved:'Aprobadas', denied:'Denegadas' }[f]}
+                    </button>
                   ))}
-                </tbody>
-              </table>
-              {acadList.length === 0 && !loading && (
-                <p className="text-center text-zinc-600 py-8 text-sm">No hay solicitudes</p>
-              )}
-            </div>
+                </div>
+
+                <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-x-auto">
+                  <table className="w-full text-sm min-w-[700px]">
+                    <thead>
+                      <tr className="border-b border-zinc-800">
+                        {['Usuario Skool','Email','Teléfono','Fecha','Estado','Cuestionario','Acciones'].map(h => (
+                          <th key={h} className="text-left text-xs text-zinc-500 font-medium px-4 py-3">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(acadFilter === 'all' ? acadList : acadList.filter(v => v.status === acadFilter)).map(v => (
+                        <tr key={v.id} className="border-b border-zinc-800/60 hover:bg-zinc-800/20 transition">
+                          <td className="px-4 py-3 font-semibold text-sm">{v.skool_username || '—'}</td>
+                          <td className="px-4 py-3 text-xs text-zinc-400">{v.email || '—'}</td>
+                          <td className="px-4 py-3 text-xs text-zinc-400">{v.phone || '—'}</td>
+                          <td className="px-4 py-3 text-xs text-zinc-500">{timeAgo(v.created_at)}</td>
+                          <td className="px-4 py-3">
+                            <span className={`text-xs px-2 py-0.5 rounded-full border font-semibold ${
+                              v.status === 'pending'  ? 'bg-yellow-500/10 text-yellow-400 border-yellow-500/25' :
+                              v.status === 'approved' ? 'bg-green-500/10 text-green-400 border-green-500/25' :
+                                                        'bg-red-500/10 text-red-400 border-red-500/25'
+                            }`}>
+                              {{ pending:'Pendiente', approved:'Aprobada', denied:'Denegada' }[v.status as string] ?? v.status}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3">
+                            {v.completed ? (
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-bold text-green-400">{v.score}/100</span>
+                                <button
+                                  onClick={() => openAcadAnswers(v.id, v.skool_username, 'full')}
+                                  className="text-xs px-2 py-1 rounded-lg bg-amber-500/10 border border-amber-500/25 text-amber-400 hover:bg-amber-500/20 transition"
+                                >📄 Leer</button>
+                                <button
+                                  onClick={() => openAcadAnswers(v.id, v.skool_username, 'ai')}
+                                  className="text-xs px-2 py-1 rounded-lg bg-violet-500/10 border border-violet-500/25 text-violet-400 hover:bg-violet-500/20 transition"
+                                >✨ IA</button>
+                              </div>
+                            ) : (
+                              <span className="text-xs text-zinc-600">Sin enviar</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3">
+                            {v.status === 'pending' ? (
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={() => reviewAcad(v.id, 'approve')}
+                                  className="text-xs px-2 py-1 rounded-lg bg-green-500/10 border border-green-500/25 text-green-400 hover:bg-green-500/20 transition font-semibold"
+                                >✓ Verificar</button>
+                                <button
+                                  onClick={() => reviewAcad(v.id, 'deny')}
+                                  className="text-xs px-2 py-1 rounded-lg bg-red-500/10 border border-red-500/25 text-red-400 hover:bg-red-500/20 transition font-semibold"
+                                >✗ Denegar</button>
+                              </div>
+                            ) : <span className="text-xs text-zinc-700">—</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {acadList.length === 0 && !loading && (
+                    <p className="text-center text-zinc-600 py-8 text-sm">No hay solicitudes</p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {acadSubTab === 'diagnostics' && (
+              <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-x-auto">
+                <table className="w-full text-sm min-w-[600px]">
+                  <thead>
+                    <tr className="border-b border-zinc-800">
+                      {['Usuario','Enviado','Plan','Acciones'].map(h => (
+                        <th key={h} className="text-left text-xs text-zinc-500 font-medium px-4 py-3">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {diagList.map(d => (
+                      <tr key={d.user_id} className="border-b border-zinc-800/60 hover:bg-zinc-800/20 transition">
+                        <td className="px-4 py-3 font-semibold">{d.username}</td>
+                        <td className="px-4 py-3 text-xs text-zinc-400">{timeAgo(d.submitted_at)}</td>
+                        <td className="px-4 py-3">
+                          {d.has_plan
+                            ? <span className="text-xs px-2 py-0.5 rounded-full bg-green-500/10 text-green-400 border border-green-500/25 font-semibold">Listo</span>
+                            : <span className="text-xs px-2 py-0.5 rounded-full bg-zinc-700 text-zinc-400 border border-zinc-600 font-semibold">Pendiente</span>
+                          }
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={async () => {
+                                setDiagModal({ userId: d.user_id, username: d.username });
+                                if (!diagAnswers[d.user_id]) {
+                                  const ans = await client.get(`/api/admin/diagnostics/${d.user_id}/answers`);
+                                  setDiagAnswers(prev => ({ ...prev, [d.user_id]: ans }));
+                                }
+                              }}
+                              className="text-xs px-2 py-1 rounded-lg bg-amber-500/10 border border-amber-500/25 text-amber-400 hover:bg-amber-500/20 transition"
+                            >📄 Ver</button>
+                            <button
+                              onClick={() => generateDiagPlan(d.user_id)}
+                              disabled={diagPlanLoading === d.user_id}
+                              className="text-xs px-2 py-1 rounded-lg bg-violet-500/10 border border-violet-500/25 text-violet-400 hover:bg-violet-500/20 transition disabled:opacity-50"
+                            >
+                              {diagPlanLoading === d.user_id ? '…' : d.has_plan ? '↺ Plan' : '🎯 Generar plan'}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {diagList.length === 0 && !loading && (
+                  <p className="px-4 py-8 text-center text-zinc-600 text-sm">No hay diagnósticos enviados todavía</p>
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -1735,6 +1829,66 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
           </div>
         )}
       </div>
+
+      {/* Modal diagnóstico alumno */}
+      {diagModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={e => { if (e.target === e.currentTarget) setDiagModal(null); }}>
+          <div className="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-2xl max-h-[88vh] flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800 shrink-0">
+              <p className="font-bold text-sm">{diagModal.username} · Diagnóstico</p>
+              <button onClick={() => setDiagModal(null)} className="text-zinc-500 hover:text-white transition text-lg">✕</button>
+            </div>
+            <div className="overflow-y-auto flex-1 p-5 space-y-4">
+              {/* Plan section if available */}
+              {diagPlan[diagModal.userId] && (
+                <div className="bg-zinc-800/50 border border-zinc-700 rounded-xl p-4 space-y-3">
+                  <p className="text-xs font-bold text-violet-400 uppercase tracking-wider">Plan generado</p>
+                  <div className="space-y-2">
+                    {diagPlan[diagModal.userId].split('\n').map((line, i) => {
+                      if (line.startsWith('## ')) return <h3 key={i} className="text-sm font-bold text-white mt-4 first:mt-0">{line.replace('## ', '')}</h3>;
+                      if (/^\*\*Punto \d/.test(line)) return <p key={i} className="text-xs font-bold text-violet-300 mt-2 uppercase tracking-wide">{line.replace(/\*\*/g, '')}</p>;
+                      if (line.trim() === '---') return <hr key={i} className="border-zinc-700 my-1" />;
+                      if (line.trim() === '') return null;
+                      const parts = line.split(/\*\*(.+?)\*\*/g);
+                      const rendered = parts.map((p, j) => j % 2 === 1 ? <strong key={j} className="text-white">{p}</strong> : p);
+                      const isBullet = /^[\s]*[•\-\*] /.test(line);
+                      return isBullet
+                        ? <div key={i} className="flex gap-2 text-sm text-zinc-300"><span className="text-violet-400 shrink-0">•</span><span>{rendered}</span></div>
+                        : <p key={i} className="text-sm text-zinc-300 leading-relaxed">{rendered}</p>;
+                    })}
+                  </div>
+                  <button
+                    onClick={() => {
+                      const raw = diagPlan[diagModal!.userId] || '';
+                      const plain = raw.replace(/^## (.+)$/gm, '\n$1\n').replace(/\*\*(.+?)\*\*/g, '*$1*').replace(/^[•\-\*] /gm, '• ').replace(/\n{3,}/g, '\n\n').trim();
+                      navigator.clipboard.writeText(plain);
+                    }}
+                    className="text-xs px-3 py-1.5 rounded-lg bg-green-600/20 border border-green-500/30 text-green-400 hover:bg-green-600/35 transition font-semibold"
+                  >📋 Copiar para WhatsApp</button>
+                </div>
+              )}
+              {/* Answers */}
+              {diagAnswers[diagModal.userId] ? (
+                <div className="space-y-4">
+                  {Object.entries(ACADEMIA_QUESTIONS).map(([key, question]) => {
+                    const answer = (diagAnswers[diagModal.userId]?.answers as Record<string,string>)?.[key] ?? '—';
+                    return (
+                      <div key={key} className="pb-4 border-b border-zinc-800 last:border-0 last:pb-0">
+                        <p className="text-xs font-semibold text-amber-500/80 uppercase tracking-wider mb-1">{key.toUpperCase()}</p>
+                        <p className="text-xs text-zinc-400 font-medium mb-1.5">{question}</p>
+                        <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">{answer}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="text-center text-zinc-600 py-8 text-sm">Cargando…</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal respuestas academia */}
       {acadModal && (
