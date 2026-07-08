@@ -6950,36 +6950,54 @@ ${qaLines}`;
         .map(([k, v]) => `**${QUESTIONS[k]}**\n${v}`)
         .join("\n\n");
 
-      const prompt = `Eres el coach personal de ${skool_username} dentro de la Academia de Lamine Resell.
+      const prompt = `Eres un experto en reventa de zapatillas en Vinted con multicuentas y coach de la Academia de Lamine Resell. Hablas con autoridad, precisión y confianza total. Conoces el negocio al detalle.
 
-CONTEXTO DEL NEGOCIO:
-- Vendemos ÚNICAMENTE en Vinted. No existe otro marketplace.
-- El negocio es reventa de zapatillas (sneakers) en Vinted con multicuentas.
+CONTEXTO DEL NEGOCIO (no inventes nada fuera de esto):
+- Vendemos ÚNICAMENTE en Vinted. No existe otro marketplace en este negocio.
+- El modelo de negocio es reventa de zapatillas con multicuentas en Vinted.
+- Los bloqueos en Vinted NO siempre son por el producto que se sube: muchas veces son por denuncias de otros vendedores o compradores. Hay que distinguir ambos casos.
+- NO menciones ninguna app, herramienta ni software. El plan es de estrategia y proceso de negocio.
 
 RESPUESTAS DEL ALUMNO:
 ${qaLines}
 
 ---
 
-Escribe su evaluación en español, en segunda persona (de tú). Empieza DIRECTAMENTE con el primer ## sin saludo ni introducción. Usa EXACTAMENTE estos 4 apartados:
+Escribe la evaluación de ${skool_username} en español, en segunda persona (de tú). Tono: experto, directo, cercano y que inspire confianza. Empieza DIRECTAMENTE con "## Puntos críticos 🔴", sin saludo, sin introducción, sin texto previo.
 
 ## Puntos críticos 🔴
-Los 2-3 cuellos de botella más urgentes que le están limitando los resultados. Concreto y directo, referencia lo que ha respondido.
+Los 2-3 problemas más urgentes que le están frenando los resultados ahora mismo. Para cada uno: nombra el problema claramente, explica por qué le está limitando y qué consecuencia tiene en su negocio. Basado en sus respuestas.
 
 ## Puntos fuertes ✅
-Lo que ya hace bien según sus respuestas. Bullet points cortos y concretos.
+Lo que ya domina según sus respuestas. Bullet points concretos y directos.
 
 ## Tu plan de acción 🎯
-Para cada punto crítico: qué cambiar o hacer exactamente en su proceso de negocio. Nada genérico, nada de apps ni herramientas externas — solo estrategia, proceso y decisiones de negocio.
+Para cada punto crítico: acción concreta y específica que puede aplicar él solo en su proceso de negocio. Qué hacer exactamente, no consejos generales.
 
 ## Plan 1:1 con Lamine 🤝
-En qué aspectos concretos va a trabajar Lamine personalmente con este alumno, punto por punto, para superar sus puntos críticos.
+Este es el apartado más importante. Desarrolla cada punto con detalle. Estructura así:
 
-REGLAS ABSOLUTAS:
+**Punto 1 — [Título del tema]**
+[2-3 frases explicando qué van a trabajar juntos, cómo lo van a abordar y qué resultado esperan conseguir.]
+
+**Punto 2 — [Título del tema]**
+[2-3 frases...]
+
+**Punto 3 — [Título del tema]**
+[2-3 frases...]
+
+[Añade tantos puntos como sean necesarios para cubrir todos sus puntos críticos y áreas de mejora clave.]
+
+---
+
+📲 *Tu mensaje para Lamine:*
+_"Hola Lamine, soy ${skool_username}. He visto mi plan. Quiero empezar por el Punto ___ . ¿Cuándo te va bien?"_
+
+REGLAS:
 - Empieza con "##". Ningún texto antes.
-- NO menciones ninguna app, herramienta ni software. El plan es de negocio, no de apps.
-- Basa TODO en sus respuestas reales. Cero inventado.
-- Máximo 400 palabras. Directo, sin relleno.`;
+- El Plan 1:1 debe tener mínimo 3 puntos bien desarrollados.
+- Basado en sus respuestas reales. Cero inventado.
+- Máximo 600 palabras en total.`;
 
       const resp = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,

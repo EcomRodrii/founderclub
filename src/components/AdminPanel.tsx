@@ -1822,33 +1822,67 @@ export default function AdminPanel({ token, onLogout, onBack }: AdminPanelProps)
                     <div className="space-y-4">
                       <div className="space-y-3">
                         {acadSummary[acadModal.id].split('\n').map((line, i) => {
+                          // Section header: ## Título
                           if (line.startsWith('## ')) {
                             return (
-                              <h3 key={i} className="text-sm font-bold text-white mt-5 first:mt-0 flex items-center gap-1.5">
+                              <h3 key={i} className="text-sm font-bold text-white mt-6 first:mt-0">
                                 {line.replace('## ', '')}
                               </h3>
                             );
                           }
-                          if (line.trim() === '') return null;
+                          // 1:1 point header: **Punto X — Título**
+                          if (/^\*\*Punto \d/.test(line)) {
+                            const text = line.replace(/\*\*/g, '');
+                            return (
+                              <p key={i} className="text-xs font-bold text-violet-300 mt-3 uppercase tracking-wide">
+                                {text}
+                              </p>
+                            );
+                          }
+                          // Separator ---
+                          if (line.trim() === '---') {
+                            return <hr key={i} className="border-zinc-800 my-2" />;
+                          }
+                          if (line.trim() === '') return <div key={i} className="h-1" />;
                           const parts = line.split(/\*\*(.+?)\*\*/g);
                           const rendered = parts.map((p, j) =>
                             j % 2 === 1 ? <strong key={j} className="text-white font-semibold">{p}</strong> : p
                           );
-                          const isBullet = line.trimStart().startsWith('- ') || line.trimStart().startsWith('• ');
+                          const isBullet = line.trimStart().startsWith('- ') || line.trimStart().startsWith('• ') || line.trimStart().startsWith('* ');
+                          const isWhatsapp = line.includes('📲') || line.includes('mensaje para Lamine');
+                          if (isWhatsapp) {
+                            return <p key={i} className="text-sm leading-relaxed text-amber-300/90 italic">{rendered}</p>;
+                          }
                           return isBullet ? (
                             <div key={i} className="flex gap-2 text-sm leading-relaxed text-zinc-300">
                               <span className="text-violet-400 shrink-0 mt-0.5">•</span>
-                              <span>{rendered}</span>
+                              <span>{parts.map((p, j) => j % 2 === 1 ? <strong key={j} className="text-white font-semibold">{p}</strong> : p.replace(/^[•\-\*]\s*/, ''))}</span>
                             </div>
                           ) : (
                             <p key={i} className="text-sm leading-relaxed text-zinc-300">{rendered}</p>
                           );
                         })}
                       </div>
-                      <button
-                        onClick={() => { setAcadSummary(p => { const n={...p}; delete n[acadModal!.id]; return n; }); generateAcadSummary(acadModal!.id); }}
-                        className="text-xs text-zinc-500 hover:text-zinc-300 transition"
-                      >↺ Regenerar plan</button>
+                      <div className="flex items-center gap-3 pt-2 border-t border-zinc-800">
+                        <button
+                          onClick={() => {
+                            const raw = acadSummary[acadModal!.id] || '';
+                            const plain = raw
+                              .replace(/^## (.+)$/gm, '\n$1\n')
+                              .replace(/^\*\*(.+?)\*\*$/gm, '$1')
+                              .replace(/\*\*(.+?)\*\*/g, '*$1*')
+                              .replace(/^[•\-] /gm, '• ')
+                              .replace(/\n{3,}/g, '\n\n')
+                              .trim();
+                            navigator.clipboard.writeText(plain);
+                          }}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-600/20 border border-green-500/30 text-green-400 text-xs font-semibold hover:bg-green-600/35 transition"
+                        >📋 Copiar para WhatsApp</button>
+                        <button
+                          onClick={() => { setAcadSummary(p => { const n={...p}; delete n[acadModal!.id]; return n; }); generateAcadSummary(acadModal!.id); }}
+                          className="text-xs text-zinc-500 hover:text-zinc-300 transition"
+                        >↺ Regenerar</button>
+                      </div>
                     </div>
                   )}
                 </div>
