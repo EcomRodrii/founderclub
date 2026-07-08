@@ -6952,39 +6952,34 @@ ${qaLines}`;
 
       const prompt = `Eres el coach personal de ${skool_username} dentro de la Academia de Lamine Resell.
 
-CONTEXTO DEL NEGOCIO (no inventes nada fuera de esto):
-- Vendemos ÚNICAMENTE en Vinted. No existe otro marketplace en este negocio.
-- Herramientas de la academia disponibles AHORA MISMO:
-  • RealG (Lengüetas IA): genera la foto de la lengüeta para que Vinted valide la zapatilla como auténtica.
-  • Fantasma IA: elimina el fondo de las fotos de producto.
-  • Metadatos IA: optimiza los metadatos de las fotos.
-- La app de búsqueda de productos de Lamine NO está disponible todavía. NO la menciones.
-- No menciones ninguna herramienta, plataforma ni recurso que no esté en esta lista.
+CONTEXTO DEL NEGOCIO:
+- Vendemos ÚNICAMENTE en Vinted. No existe otro marketplace.
+- El negocio es reventa de zapatillas (sneakers) en Vinted con multicuentas.
 
 RESPUESTAS DEL ALUMNO:
 ${qaLines}
 
 ---
 
-Escribe su evaluación en español, en segunda persona (de tú). Empieza DIRECTAMENTE con el primer ## sin saludo, sin introducción, sin ningún texto previo. Usa EXACTAMENTE estos 4 apartados:
+Escribe su evaluación en español, en segunda persona (de tú). Empieza DIRECTAMENTE con el primer ## sin saludo ni introducción. Usa EXACTAMENTE estos 4 apartados:
 
 ## Puntos críticos 🔴
-Los 2-3 problemas más urgentes que le están limitando los resultados ahora mismo. Concreto, directo, referencia sus respuestas.
+Los 2-3 cuellos de botella más urgentes que le están limitando los resultados. Concreto y directo, referencia lo que ha respondido.
 
 ## Puntos fuertes ✅
-Lo que ya hace bien. Bullet points concretos basados en lo que ha respondido.
+Lo que ya hace bien según sus respuestas. Bullet points cortos y concretos.
 
 ## Tu plan de acción 🎯
-Para cada punto crítico: qué hacer exactamente. Acción específica, no consejo genérico. Solo herramientas que existen.
+Para cada punto crítico: qué cambiar o hacer exactamente en su proceso de negocio. Nada genérico, nada de apps ni herramientas externas — solo estrategia, proceso y decisiones de negocio.
 
 ## Plan 1:1 con Lamine 🤝
-En qué va a trabajar Lamine personalmente con este alumno, punto por punto, para superar sus puntos críticos.
+En qué aspectos concretos va a trabajar Lamine personalmente con este alumno, punto por punto, para superar sus puntos críticos.
 
-REGLAS:
-- Primera palabra del texto: "##". Sin nada antes.
-- Solo herramientas reales (RealG, Fantasma, Metadatos). Nunca menciones la app de búsqueda.
-- Basa TODO en sus respuestas. Cero inventado.
-- Máximo 420 palabras en total. Directo y sin relleno.`;
+REGLAS ABSOLUTAS:
+- Empieza con "##". Ningún texto antes.
+- NO menciones ninguna app, herramienta ni software. El plan es de negocio, no de apps.
+- Basa TODO en sus respuestas reales. Cero inventado.
+- Máximo 400 palabras. Directo, sin relleno.`;
 
       const resp = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
