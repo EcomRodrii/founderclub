@@ -1259,8 +1259,10 @@ async function startServer() {
     else if (type === "monthly") expires_at = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
     else if (type === "custom" && days) expires_at = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
 
-    // Todos los miembros del FounderClub tienen acceso completo
-    const licFeatures = ["all", "academia", "photos"];
+    // Las licencias se generan sin módulos premium: solo páginas gratuitas.
+    // El admin activa cada módulo (RealG, Dashboard, etc.) por usuario tras la
+    // activación de la clave, con PATCH /api/admin/users/:id/features.
+    const licFeatures = ["photos"];
 
     const keys: string[] = [];
     for (let i = 0; i < Math.min(quantity, 50); i++) {
