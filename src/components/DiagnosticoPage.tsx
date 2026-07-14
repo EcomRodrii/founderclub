@@ -100,9 +100,10 @@ export default function DiagnosticoPage({ token }: { token: string }) {
       .catch(() => setStatus('none'));
   }, [token]);
 
-  const currentStep = STEPS[step];
   const totalSteps = STEPS.length;
-  const progress = Math.round((step / totalSteps) * 100);
+  const safeStep = Math.min(Math.max(step, 0), totalSteps - 1);
+  const currentStep = STEPS[safeStep];
+  const progress = Math.round((safeStep / totalSteps) * 100);
   const stepComplete = currentStep.qs.every(q => (answers[q.key] || '').trim().length > 0);
 
   const submit = async () => {
@@ -233,7 +234,7 @@ export default function DiagnosticoPage({ token }: { token: string }) {
       <div className="flex gap-3">
         {step > 0 && (
           <button
-            onClick={() => setStep(s => s - 1)}
+            onClick={() => setStep(s => Math.max(s - 1, 0))}
             className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl border border-white/[0.08] text-[#888880] hover:text-[#f2f2ef] text-sm font-semibold transition"
           >
             <ChevronLeft className="w-4 h-4" /> Anterior
@@ -241,7 +242,7 @@ export default function DiagnosticoPage({ token }: { token: string }) {
         )}
         {step < totalSteps - 1 ? (
           <button
-            onClick={() => setStep(s => s + 1)}
+            onClick={() => setStep(s => Math.min(s + 1, totalSteps - 1))}
             disabled={!stepComplete}
             className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl font-bold text-black bg-[#d4ff00] hover:bg-[#c8f000] disabled:opacity-30 transition text-sm"
           >
