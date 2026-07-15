@@ -139,6 +139,28 @@ function ActionRow({ label, value, valueColor, btnLabel, btnColor, loading, onCl
   );
 }
 
+// Módulos premium: cada uno es un permiso independiente. La clave coincide con
+// el feature guardado en la licencia y con el id de la page en la app.
+const PREMIUM_MODULES: { key: string; label: string; emoji: string }[] = [
+  { key: 'tongue',    label: 'RealG',        emoji: '👟' },
+  { key: 'dashboard', label: 'Dashboard',    emoji: '📊' },
+  { key: 'accounts',  label: 'Cuentas',      emoji: '👤' },
+  { key: 'inventory', label: 'Inventario',   emoji: '📦' },
+  { key: 'orders',    label: 'Pedidos',      emoji: '🧾' },
+  { key: 'publish',   label: 'Autopublicar', emoji: '🚀' },
+  { key: 'profits',   label: 'Beneficios',   emoji: '💰' },
+];
+
+// Módulos premium activos de una licencia, resolviendo comodines legacy.
+function activeModules(features: string[] | undefined | null): Set<string> {
+  const f = features || [];
+  if (f.includes('all')) return new Set(PREMIUM_MODULES.map(m => m.key));
+  const set = new Set<string>(f.filter(x => PREMIUM_MODULES.some(m => m.key === x)));
+  // 'academia' = alias legacy → módulos de curso, sin RealG
+  if (f.includes('academia')) ['dashboard', 'accounts', 'inventory', 'orders', 'profits', 'publish'].forEach(k => set.add(k));
+  return set;
+}
+
 // ─── UserDrawer ───────────────────────────────────────────────────────────────
 
 function UserDrawer({ user, token, onClose, onRefresh }: {
@@ -171,6 +193,16 @@ function UserDrawer({ user, token, onClose, onRefresh }: {
 
   const online = isOnline(user.last_seen_at);
   const initials = (user.username || 'U').slice(0, 2).toUpperCase();
+
+  const hasLicense = !!user.license_id;
+  const current = activeModules(user.features);
+  const toggleModule = (key: string) => {
+    const next = new Set(current);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return act('mod:' + key, () =>
+      client.patch(`/api/admin/users/${user.id}/features`, { features: Array.from(next) })
+    );
+  };
 
   return (
     <>
@@ -284,6 +316,41 @@ function UserDrawer({ user, token, onClose, onRefresh }: {
             loading={busy === 'rank'}
             onClick={() => act('rank', () => client.patch(`/api/admin/users/${user.id}/rank`, { rank: user.rank === 'pro' ? 'normal' : 'pro' }))}
           />
+
+          {/* Módulos premium — permiso individual por módulo */}
+          <div className="bg-zinc-900 rounded-xl p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-zinc-500 font-medium">Módulos premium</span>
+              {!hasLicense && <span className="text-[10px] text-amber-400">Sin licencia activa</span>}
+            </div>
+            {!hasLicense ? (
+              <p className="text-[11px] text-zinc-600 leading-relaxed">
+                Este usuario no tiene licencia activa. Asígnale una licencia para poder activar módulos.
+              </p>
+            ) : (
+              <div className="grid grid-cols-2 gap-1.5">
+                {PREMIUM_MODULES.map(m => {
+                  const on = current.has(m.key);
+                  const loading = busy === 'mod:' + m.key;
+                  return (
+                    <button
+                      key={m.key}
+                      onClick={() => toggleModule(m.key)}
+                      disabled={!!busy}
+                      className={`flex items-center justify-between gap-1.5 text-[11px] font-medium px-2.5 py-2 rounded-lg transition disabled:opacity-40 ${
+                        on
+                          ? 'bg-green-500/15 text-green-400 border border-green-500/30'
+                          : 'bg-zinc-800 text-zinc-500 border border-transparent hover:text-zinc-300'
+                      }`}
+                    >
+                      <span className="truncate">{m.emoji} {m.label}</span>
+                      <span className="shrink-0">{loading ? '…' : on ? '✓' : '·'}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
 
           <ActionRow
             label="Estado" value={user.is_blocked ? 'Bloqueado' : 'Activo'}

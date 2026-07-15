@@ -12,13 +12,23 @@ import Sidebar, { MobileTabBar, type Page } from './components/Sidebar';
 
 const ALL_PAGES: Page[] = ['dashboard', 'accounts', 'inventory', 'orders', 'profits', 'tongue', 'photos', 'alfombras', 'metadatos', 'titles', 'settings', 'publish', 'diagnostico'];
 
+// Módulos premium: cada uno es un permiso independiente (la clave del feature
+// coincide con el id de la page). Un usuario solo ve el módulo si su licencia
+// incluye explícitamente ese permiso (o 'all', reservado a admin/legacy).
+const PREMIUM_PAGES: Page[] = ['dashboard', 'accounts', 'inventory', 'orders', 'profits', 'tongue', 'publish'];
+// 'academia' es un alias legacy: concede los módulos de curso pero NO RealG (tongue).
+const ACADEMIA_PAGES: Page[] = ['dashboard', 'accounts', 'inventory', 'orders', 'profits', 'publish'];
+
 function computeAllowedPages(license: any, isAdmin: boolean): Set<Page> {
   if (isAdmin) return new Set(ALL_PAGES);
   const features: string[] = license?.features || ['photos'];
   const pages = new Set<Page>(['photos', 'alfombras', 'metadatos', 'titles', 'settings', 'diagnostico']); // mínimo gratuito
-  if (features.includes('all') || features.includes('academia')) {
-    ALL_PAGES.forEach(p => pages.add(p));
-  }
+  // 'all' = comodín total (admin / cuentas legacy)
+  if (features.includes('all')) { ALL_PAGES.forEach(p => pages.add(p)); return pages; }
+  // Permiso individual por módulo
+  PREMIUM_PAGES.forEach(p => { if (features.includes(p)) pages.add(p); });
+  // Compat: usuarios 'pro' antiguos con 'academia' mantienen los módulos de curso (sin RealG)
+  if (features.includes('academia')) ACADEMIA_PAGES.forEach(p => pages.add(p));
   return pages;
 }
 

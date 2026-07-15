@@ -209,6 +209,24 @@ function requireFeature(feature: string) {
   };
 }
 
+// ── Permisos por módulo ───────────────────────────────────────────────────────
+// Cada uno de estos módulos premium es un permiso independiente que el admin
+// activa/desactiva por usuario. 'photos' y el resto de páginas gratuitas están
+// siempre disponibles y no se listan aquí. 'all' es un comodín (solo admins /
+// cuentas legacy) que concede todo; 'academia' es un alias legacy que concede
+// los 6 módulos de curso (todos menos RealG).
+const PREMIUM_FEATURES = [
+  "dashboard", // Dashboard
+  "accounts",  // Cuentas
+  "inventory", // Inventario
+  "orders",    // Pedidos
+  "profits",   // Beneficios
+  "publish",   // Autopublicar
+  "tongue",    // RealG
+] as const;
+// Features que el admin puede asignar explícitamente a un usuario.
+const ASSIGNABLE_FEATURES = new Set<string>(["photos", ...PREMIUM_FEATURES]);
+
 // ── Zod schemas para validación de entrada ────────────────────────────────────
 const BASE64_IMG = z.string().min(50).max(12_000_000);
 const BRAND_ENUM = z.enum(["ADIDAS", "NEW BALANCE", "ASICS", "ONITSUKA"]);
@@ -1032,7 +1050,8 @@ async function startServer() {
     const result = await pool.query(`
       SELECT u.id, u.username, u.email, u.is_admin, u.is_blocked, u.created_at,
         u.last_login_at, u.last_seen_at, u.last_ip, u.rank,
-        l.key AS license_key, l.type AS license_type, l.expires_at, l.is_active AS license_active,
+        l.id AS license_id, l.key AS license_key, l.type AS license_type, l.expires_at,
+        l.is_active AS license_active, l.features,
         l.hwid, l.ip,
         COALESCE(du.count, 0) AS daily_usage_today
       FROM users u
@@ -1108,13 +1127,42 @@ async function startServer() {
     if (type === "trial") expires_at = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
     else if (type === "monthly") expires_at = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
-    const licFeatures = ["all", "academia", "photos"];
+    // Un usuario nuevo NO recibe acceso a ningún módulo premium por defecto.
+    // Solo las páginas gratuitas (photos, alfombras, metadatos, títulos, ajustes,
+    // diagnóstico). El admin activa cada módulo (RealG, Dashboard, Cuentas,
+    // Inventario, Pedidos, Autopublicar, Beneficios) por usuario a mano.
+    const licFeatures = ["photos"];
     const key = generateLicenseKey();
     await pool.query(
       "INSERT INTO licenses (key, type, expires_at, features, user_id, activated_at) VALUES ($1,$2,$3,$4,$5,NOW())",
       [key, type, expires_at, licFeatures, userId]
     );
-    res.json({ ok: true, key, type, expires_at });
+    res.json({ ok: true, key, type, expires_at, features: licFeatures });
+  });
+
+  // ── Activar / desactivar módulos premium de un usuario ────────────────────────
+  // Body: { features: ['tongue','dashboard', ...] }  (lista COMPLETA de módulos
+  // premium activos). 'photos' se fuerza siempre. Reemplaza cualquier comodín
+  // 'all'/'academia' por permisos explícitos, de modo que los toggles por módulo
+  // sean efectivos también para usuarios antiguos que tuvieran acceso total.
+  app.patch("/api/admin/users/:id/features", requireAdmin as any, async (req, res) => {
+    const userId = parseInt(req.params.id);
+    const { features } = req.body;
+    if (!Array.isArray(features))
+      return res.status(400).json({ error: "features debe ser un array" });
+    // Solo se aceptan claves válidas; 'photos' (gratis) siempre presente.
+    const clean = Array.from(
+      new Set<string>(["photos", ...features.map(String).filter((f) => ASSIGNABLE_FEATURES.has(f))])
+    );
+    const result = await pool.query(
+      `UPDATE licenses SET features = $1
+       WHERE user_id = $2 AND is_active = TRUE
+       RETURNING id, features`,
+      [clean, userId]
+    );
+    if (!result.rows[0])
+      return res.status(404).json({ error: "El usuario no tiene una licencia activa. Asígnale una licencia primero." });
+    res.json({ ok: true, features: result.rows[0].features });
   });
 
   // ── Cambiar rango de usuario (admin) ──────────────────────────────────────────
@@ -1219,8 +1267,10 @@ async function startServer() {
     else if (type === "monthly") expires_at = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
     else if (type === "custom" && days) expires_at = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
 
-    // Todos los miembros del FounderClub tienen acceso completo
-    const licFeatures = ["all", "academia", "photos"];
+    // Las licencias se generan sin módulos premium: solo páginas gratuitas.
+    // El admin activa cada módulo (RealG, Dashboard, etc.) por usuario tras la
+    // activación de la clave, con PATCH /api/admin/users/:id/features.
+    const licFeatures = ["photos"];
 
     const keys: string[] = [];
     for (let i = 0; i < Math.min(quantity, 50); i++) {
@@ -2782,7 +2832,7 @@ IMPORTANTE: queremos el TOTAL del lote y el TOTAL de unidades, NO el precio unit
     res.json(data);
   });
 
-  app.post("/api/q/1", geminiLimiter, requireLicense as any, checkDailyLimit as any, async (req: AuthRequest, res) => {
+  app.post("/api/q/1", geminiLimiter, requireLicense as any, requireFeature("tongue") as any, checkDailyLimit as any, async (req: AuthRequest, res) => {
     const parsed = validate(ZTongueAnalyze, req, res);
     if (!parsed) return;
     const { imageBase64, brand } = parsed;
@@ -3182,7 +3232,7 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
 
   });
 
-  app.post("/api/q/2", geminiLimiter, requireLicense as any, lenguetaLimiter as any, checkDailyLimit as any, async (req: AuthRequest, res) => {
+  app.post("/api/q/2", geminiLimiter, requireLicense as any, requireFeature("tongue") as any, lenguetaLimiter as any, checkDailyLimit as any, async (req: AuthRequest, res) => {
     const parsed = validate(ZTongueGenerate, req, res);
     if (!parsed) return;
     const { imageBase64, brand, detections, customPrompt } = parsed;
@@ -3296,7 +3346,7 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
   });
 
   // ── Tongue result polling (BullMQ async mode) ────────────────────────────────
-  app.get("/api/q/result/:jobId", requireLicense as any, async (req: AuthRequest, res) => {
+  app.get("/api/q/result/:jobId", requireLicense as any, requireFeature("tongue") as any, async (req: AuthRequest, res) => {
     if (!lenguetaQueue) return res.status(503).json({ error: "Queue no configurada" });
     try {
       const job = await lenguetaQueue.getJob(req.params.jobId);
@@ -3316,7 +3366,7 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
 
   // ── Tongue Prompts (admin manage / auth read) ─────────────────────────────
 
-  app.get("/api/q/4", requireAuth as any, async (_req, res) => {
+  app.get("/api/q/4", requireAuth as any, requireFeature("tongue") as any, async (_req, res) => {
     try {
       const result = await pool.query("SELECT brand, prompt, updated_at FROM tongue_prompts ORDER BY brand");
       res.json(result.rows);
@@ -3631,7 +3681,7 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
     return null;
   }
 
-  app.post("/api/q/5", geminiLimiter, requireLicense as any, checkDailyLimit as any, async (req: any, res) => {
+  app.post("/api/q/5", geminiLimiter, requireLicense as any, requireFeature("tongue") as any, checkDailyLimit as any, async (req: any, res) => {
     const parsed = validate(ZBoxGenerate, req, res);
     if (!parsed) return;
     const { imageBase64, brand, detections, customPrompt } = parsed;
@@ -3680,7 +3730,7 @@ TAREA: Busca "${brand} ${sku}" en Google y devuelve SOLO este JSON (sin markdown
 
   // ── Dual generation: tongue + box in parallel with synced codes ────────────
 
-  app.post("/api/dual/generate", geminiLimiter, requireLicense as any, checkDailyLimit as any, async (req: any, res) => {
+  app.post("/api/dual/generate", geminiLimiter, requireLicense as any, requireFeature("tongue") as any, checkDailyLimit as any, async (req: any, res) => {
     const { tongueImageBase64, boxImageBase64, brand, detections, tonguePrompt, boxPrompt } = req.body;
     if (!detections) return res.status(400).json({ error: "Se requieren los datos detectados" });
 
