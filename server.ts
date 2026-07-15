@@ -514,6 +514,14 @@ async function startServer() {
   await pool.query(`ALTER TABLE student_diagnostics DROP CONSTRAINT IF EXISTS student_diagnostics_user_id_key`).catch(() => {});
   await pool.query(`ALTER TABLE student_diagnostics ADD COLUMN IF NOT EXISTS is_validated BOOLEAN NOT NULL DEFAULT FALSE`).catch(() => {});
   await pool.query(`ALTER TABLE student_diagnostics ADD COLUMN IF NOT EXISTS validated_at TIMESTAMPTZ`).catch(() => {});
+  // Quitar 'tongue' a usuarios sin academia ni acceso total
+  await pool.query(`
+    UPDATE licenses
+    SET features = array_remove(features, 'tongue')
+    WHERE 'tongue' = ANY(features)
+      AND NOT ('academia' = ANY(features))
+      AND NOT ('all' = ANY(features))
+  `).catch(() => {});
 
   // ── Lista de espera (cierre Skool) ──────────────────────────────────────────
   await pool.query(`
