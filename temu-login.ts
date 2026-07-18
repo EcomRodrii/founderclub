@@ -21,7 +21,25 @@ export interface TemuLoginResult {
 }
 
 // ── Browser ────────────────────────────────────────────────────────────────────
-async function launchBrowser(): Promise<Browser> {
+interface ProxyConfig { host: string; port: number; username?: string; password?: string; }
+
+function parseProxy(): ProxyConfig | null {
+  const raw = process.env.PROXY_URL;
+  if (!raw) return null;
+  try {
+    const u = new URL(raw);
+    return {
+      host: u.hostname,
+      port: parseInt(u.port) || 12323,
+      username: u.username ? decodeURIComponent(u.username) : undefined,
+      password: u.password ? decodeURIComponent(u.password) : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function launchBrowser(): Promise<{ browser: Browser; proxy: ProxyConfig | null }> {
   let executablePath: string | undefined = process.env.PUPPETEER_EXECUTABLE_PATH;
   if (!executablePath && process.platform === "linux") {
     const { execSync } = await import("child_process");
@@ -32,7 +50,11 @@ async function launchBrowser(): Promise<Browser> {
       } catch {}
     }
   }
-  return puppeteer.launch({
+
+  const proxy = parseProxy();
+  const proxyArgs = proxy ? [`--proxy-server=http://${proxy.host}:${proxy.port}`] : [];
+
+  const browser = await puppeteer.launch({
     headless: true,
     ...(executablePath ? { executablePath } : {}),
     args: [
@@ -46,10 +68,12 @@ async function launchBrowser(): Promise<Browser> {
       "--disable-default-apps",
       "--disable-background-networking",
       "--no-first-run",
-      "--disable-blink-features=AutomationControlled", // hide headless
+      "--disable-blink-features=AutomationControlled",
       "--window-size=1366,768",
+      ...proxyArgs,
     ],
   });
+  return { browser, proxy };
 }
 
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -209,8 +233,17 @@ async function clickSubmit(page: Page): Promise<void> {
 export async function loginToTemu(email: string, password: string): Promise<TemuLoginResult> {
   let browser: Browser | null = null;
   try {
-    browser = await launchBrowser();
+    const launched = await launchBrowser();
+    browser = launched.browser;
+    const proxy = launched.proxy;
+
     const page = await browser.newPage();
+
+    // Authenticate proxy if credentials are set (iProyal requires auth)
+    if (proxy?.username && proxy?.password) {
+      await page.authenticate({ username: proxy.username, password: proxy.password });
+    }
+
     await setupPage(page);
 
     // Navigate to login page — wait for network to settle (not just DOM parse)
