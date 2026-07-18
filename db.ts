@@ -466,6 +466,13 @@ export async function initDB() {
     )`,
     `CREATE INDEX IF NOT EXISTS idx_dropship_orders_user ON dropship_orders(user_id)`,
     `CREATE INDEX IF NOT EXISTS idx_dropship_products_user ON dropship_products(user_id)`,
+    `ALTER TABLE dropship_products ADD COLUMN IF NOT EXISTS vinted_listing_id TEXT`,
+    `ALTER TABLE dropship_products ADD COLUMN IF NOT EXISTS vinted_listing_url TEXT`,
+    `ALTER TABLE dropship_products ADD COLUMN IF NOT EXISTS temu_title TEXT`,
+    `ALTER TABLE dropship_products ADD COLUMN IF NOT EXISTS temu_images JSONB DEFAULT '[]'::jsonb`,
+    `ALTER TABLE dropship_products ADD COLUMN IF NOT EXISTS temu_description TEXT`,
+    `ALTER TABLE dropship_products ADD COLUMN IF NOT EXISTS telegram_chat_id TEXT`,
+    `ALTER TABLE temu_credentials ADD COLUMN IF NOT EXISTS telegram_chat_id TEXT`,
   ];
   for (const sql of migrations) {
     await pool.query(sql).catch(() => {}); // silently ignore if column already exists

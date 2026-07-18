@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   RefreshCcw, Package, ShoppingCart, Truck, CheckCircle2, Send,
   Plus, Trash2, Edit2, Check, X, ExternalLink, Settings,
-  AlertCircle, ChevronRight, Store, Link2, Info
+  AlertCircle, ChevronRight, Store, Link2, Info, Download,
+  Upload, Image, MessageCircle, Zap, Tag
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -13,6 +14,8 @@ interface Product {
   id: number; temu_url: string; temu_cost: number | null;
   vinted_price: number | null; title: string; stock: number;
   notes: string | null; is_active: boolean;
+  vinted_listing_id: string | null; vinted_listing_url: string | null;
+  temu_images: string[] | null; temu_description: string | null;
 }
 
 interface Order {
@@ -23,7 +26,7 @@ interface Order {
 }
 
 interface VintedAccount { id: number; username: string; domain: string; }
-interface TemuCreds { exists: boolean; email: string | null; }
+interface TemuCreds { exists: boolean; email: string | null; telegram_chat_id: string | null; }
 
 // ── Step config ───────────────────────────────────────────────────────────────
 // Visual 4-step flow shown to users (we collapse purchased_temu+in_transit → "en camino")
@@ -124,6 +127,19 @@ function OrderCard({ order, products, token, onRefresh }: {
   const [temuId, setTemuId] = useState(order.temu_order_id || '');
   const [assigningProduct, setAssigningProduct] = useState(false);
   const [selectedProductId, setSelectedProductId] = useState(order.product_id?.toString() || '');
+  const [fetchingLabel, setFetchingLabel] = useState(false);
+
+  const downloadLabel = async () => {
+    setFetchingLabel(true);
+    const r = await api(token, `/api/dropship/orders/${order.id}/label`);
+    const d = await r.json().catch(() => ({}));
+    if (d.found && d.label_url) {
+      window.open(d.label_url, '_blank');
+    } else {
+      alert('Etiqueta no disponible aún. Vinted la genera cuando el comprador paga el envío.');
+    }
+    setFetchingLabel(false);
+  };
 
   const nextStatus = STATUS_NEXT[order.status];
 
@@ -289,14 +305,24 @@ function OrderCard({ order, products, token, onRefresh }: {
       )}
 
       {order.status === 'received' && (
-        <button
-          onClick={() => moveNext()}
-          disabled={moving}
-          className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-[#d4ff00] text-black text-xs font-bold hover:bg-[#c8f000] disabled:opacity-40 transition"
-        >
-          {moving ? <RefreshCcw className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
-          Marcar como enviado al comprador
-        </button>
+        <div className="space-y-2">
+          <button
+            onClick={downloadLabel}
+            disabled={fetchingLabel}
+            className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl border border-white/[0.08] text-xs text-[#888880] hover:text-[#f2f2ef] hover:border-white/[0.14] disabled:opacity-40 transition"
+          >
+            {fetchingLabel ? <RefreshCcw className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+            {fetchingLabel ? 'Buscando etiqueta…' : 'Descargar etiqueta de envío Vinted'}
+          </button>
+          <button
+            onClick={() => moveNext()}
+            disabled={moving}
+            className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-[#d4ff00] text-black text-xs font-bold hover:bg-[#c8f000] disabled:opacity-40 transition"
+          >
+            {moving ? <RefreshCcw className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+            Marcar como enviado al comprador
+          </button>
+        </div>
       )}
 
       {order.status === 'shipped' && (
@@ -387,6 +413,155 @@ function ProductModal({ token, product, onClose, onSaved }: {
   );
 }
 
+// ── Publish to Vinted modal ───────────────────────────────────────────────────
+function PublishModal({ token, product, accounts, onClose, onSuccess }: {
+  token: string; product: Product; accounts: VintedAccount[];
+  onClose: () => void; onSuccess: () => void;
+}) {
+  const [accountId, setAccountId] = useState(accounts[0]?.id?.toString() || '');
+  const [price, setPrice] = useState(product.vinted_price?.toString() || '');
+  const [condition, setCondition] = useState('neuf_sans_etiquette');
+  const [size, setSize] = useState('');
+  const [gender, setGender] = useState('unisex');
+  const [publishing, setPublishing] = useState(false);
+  const [logs, setLogs] = useState<string[]>([]);
+  const [done, setDone] = useState(false);
+  const [resultUrl, setResultUrl] = useState<string | null>(null);
+  const [err, setErr] = useState('');
+
+  const publish = async () => {
+    if (!price) { setErr('Indica el precio'); return; }
+    setPublishing(true); setLogs([]); setErr('');
+
+    const response = await fetch(`/api/dropship/products/${product.id}/publish-vinted`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account_id: accountId || undefined, price: parseFloat(price), condition, size: size || undefined, gender }),
+    });
+
+    if (!response.ok || !response.body) {
+      const d = await response.json().catch(() => ({}));
+      setErr(d.error || 'Error al publicar');
+      setPublishing(false);
+      return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done: streamDone, value } = await reader.read();
+      if (streamDone) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const event = JSON.parse(line.slice(6));
+          if (event.message) setLogs(prev => [...prev, event.message]);
+          if (event.type === 'done') { setDone(true); setResultUrl(event.url || null); onSuccess(); }
+          if (event.type === 'error') setErr(event.message || 'Error');
+        } catch {}
+      }
+    }
+    setPublishing(false);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+      <div className="bg-[#1a1a1a] border border-white/[0.08] rounded-2xl p-6 w-full max-w-md space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-bold text-[#f2f2ef]">Publicar en Vinted</h3>
+            <p className="text-xs text-[#555550] mt-0.5 truncate max-w-xs">{product.title}</p>
+          </div>
+          <button onClick={onClose} disabled={publishing} className="text-zinc-500 hover:text-zinc-300 transition">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {done ? (
+          <div className="text-center py-4 space-y-3">
+            <CheckCircle2 className="w-10 h-10 text-green-400 mx-auto" />
+            <p className="text-sm font-bold text-[#f2f2ef]">¡Publicado en Vinted!</p>
+            {resultUrl && (
+              <a href={resultUrl} target="_blank" rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 text-xs text-blue-400 hover:underline">
+                <ExternalLink className="w-3.5 h-3.5" /> Ver anuncio en Vinted
+              </a>
+            )}
+            <button onClick={onClose} className="w-full py-2 rounded-xl bg-[#d4ff00] text-black text-xs font-bold">Cerrar</button>
+          </div>
+        ) : (
+          <>
+            {accounts.length > 1 && (
+              <div>
+                <label className="block text-xs font-medium text-[#888880] mb-1">Cuenta Vinted</label>
+                <select value={accountId} onChange={e => setAccountId(e.target.value)}
+                  className="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-3 py-2 text-sm text-[#f2f2ef] focus:outline-none">
+                  {accounts.map(a => <option key={a.id} value={a.id}>@{a.username} ({a.domain})</option>)}
+                </select>
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-[#888880] mb-1">Precio (€) *</label>
+                <input value={price} onChange={e => setPrice(e.target.value)} type="number" placeholder="45.00"
+                  className="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-3 py-2 text-sm text-[#f2f2ef] placeholder-[#444] focus:outline-none focus:border-[#d4ff00]/40 transition" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-[#888880] mb-1">Talla (opcional)</label>
+                <input value={size} onChange={e => setSize(e.target.value)} placeholder="M, L, 42…"
+                  className="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-3 py-2 text-sm text-[#f2f2ef] placeholder-[#444] focus:outline-none focus:border-[#d4ff00]/40 transition" />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-[#888880] mb-1">Estado</label>
+                <select value={condition} onChange={e => setCondition(e.target.value)}
+                  className="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-3 py-2 text-sm text-[#f2f2ef] focus:outline-none">
+                  <option value="neuf_sans_etiquette">Nuevo sin etiqueta</option>
+                  <option value="neuf_avec_etiquette">Nuevo con etiqueta</option>
+                  <option value="tres_bon_etat">Muy buen estado</option>
+                  <option value="bon_etat">Buen estado</option>
+                  <option value="satisfaisant">Satisfactorio</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-[#888880] mb-1">Género</label>
+                <select value={gender} onChange={e => setGender(e.target.value)}
+                  className="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-3 py-2 text-sm text-[#f2f2ef] focus:outline-none">
+                  <option value="unisex">Unisex</option>
+                  <option value="men">Hombre</option>
+                  <option value="women">Mujer</option>
+                </select>
+              </div>
+            </div>
+            {logs.length > 0 && (
+              <div className="space-y-1 p-3 bg-white/[0.02] rounded-xl border border-white/[0.06] max-h-32 overflow-y-auto">
+                {logs.map((log, i) => <p key={i} className="text-[10px] text-[#888880] font-mono">{log}</p>)}
+              </div>
+            )}
+            {err && <p className="text-xs text-red-400">{err}</p>}
+            <div className="flex gap-2 pt-1">
+              <button onClick={onClose} disabled={publishing}
+                className="flex-1 py-2 rounded-xl border border-white/[0.08] text-xs text-[#888880] hover:text-[#f2f2ef] transition disabled:opacity-40">
+                Cancelar
+              </button>
+              <button onClick={publish} disabled={publishing || !price}
+                className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl bg-[#d4ff00] text-black text-xs font-bold hover:bg-[#c8f000] disabled:opacity-40 transition">
+                {publishing ? <RefreshCcw className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+                {publishing ? 'Publicando…' : 'Publicar ahora'}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Temu credentials tab ──────────────────────────────────────────────────────
 function TemuTab({ token, temu, onSaved }: { token: string; temu: TemuCreds | null; onSaved: () => void }) {
   const [email, setEmail] = useState('');
@@ -394,6 +569,17 @@ function TemuTab({ token, temu, onSaved }: { token: string; temu: TemuCreds | nu
   const [connecting, setConnecting] = useState(false);
   const [err, setErr] = useState('');
   const [status, setStatus] = useState('');
+  const [chatId, setChatId] = useState(temu?.telegram_chat_id || '');
+  const [savingTg, setSavingTg] = useState(false);
+  const [tgSaved, setTgSaved] = useState(false);
+
+  const saveTelegram = async () => {
+    setSavingTg(true); setTgSaved(false);
+    await api(token, '/api/dropship/telegram', { method: 'PUT', body: JSON.stringify({ telegram_chat_id: chatId.trim() }) });
+    setSavingTg(false); setTgSaved(true);
+    onSaved();
+    setTimeout(() => setTgSaved(false), 3000);
+  };
 
   const connect = async () => {
     if (!email.trim() || !password.trim()) { setErr('Introduce email y contraseña'); return; }
@@ -462,6 +648,36 @@ function TemuTab({ token, temu, onSaved }: { token: string; temu: TemuCreds | nu
             {connecting ? <RefreshCcw className="w-3.5 h-3.5 animate-spin" /> : <RefreshCcw className="w-3.5 h-3.5" />}
             {connecting ? status || 'Conectando…' : 'Reconectar cuenta Temu'}
           </button>
+        </div>
+
+        {/* Telegram notifications */}
+        <div className="space-y-3 pt-2 border-t border-white/[0.06]">
+          <div>
+            <p className="text-xs font-semibold text-[#f2f2ef] flex items-center gap-1.5">
+              <MessageCircle className="w-3.5 h-3.5 text-[#888880]" /> Notificaciones por Telegram
+            </p>
+            <p className="text-[10px] text-[#555550] mt-0.5">
+              Recibe un mensaje cuando detecte una venta en Vinted. Habla con @userinfobot en Telegram para obtener tu Chat ID.
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <input
+              value={chatId}
+              onChange={e => setChatId(e.target.value)}
+              placeholder="123456789"
+              className="flex-1 bg-white/[0.04] border border-white/[0.07] rounded-xl px-3 py-2 text-sm text-[#f2f2ef] placeholder-[#444] focus:outline-none focus:border-[#d4ff00]/40 transition"
+            />
+            <button
+              onClick={saveTelegram}
+              disabled={savingTg}
+              className="px-4 py-2 rounded-xl bg-[#d4ff00] text-black text-xs font-bold hover:bg-[#c8f000] disabled:opacity-40 transition shrink-0"
+            >
+              {tgSaved ? '✓ Guardado' : savingTg ? '…' : 'Guardar'}
+            </button>
+          </div>
+          {temu.telegram_chat_id && (
+            <p className="text-[10px] text-green-400">Telegram activo: {temu.telegram_chat_id}</p>
+          )}
         </div>
       </div>
     );
@@ -547,7 +763,10 @@ export default function DropshipPage({ token }: { token: string }) {
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
   const [productModal, setProductModal] = useState<Product | true | null>(null);
+  const [publishProduct, setPublishProduct] = useState<Product | null>(null);
   const [filterStatus, setFilterStatus] = useState<OrderStatus | 'all'>('all');
+  const [importingId, setImportingId] = useState<number | null>(null);
+  const [importResults, setImportResults] = useState<Record<number, { ok: boolean; msg: string }>>({});
 
   const load = useCallback(async () => {
     const [pRes, oRes, aRes, tRes] = await Promise.all([
@@ -584,6 +803,33 @@ export default function DropshipPage({ token }: { token: string }) {
     load();
   };
 
+  const importFromTemu = async (product: Product) => {
+    setImportingId(product.id);
+    setImportResults(prev => { const n = { ...prev }; delete n[product.id]; return n; });
+    const r = await api(token, `/api/dropship/temu-scrape?url=${encodeURIComponent(product.temu_url)}`);
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      setImportResults(prev => ({ ...prev, [product.id]: { ok: false, msg: d.error || 'Error al importar' } }));
+    } else {
+      await api(token, `/api/dropship/products/${product.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          title: product.title || d.title,
+          temu_url: product.temu_url,
+          temu_cost: product.temu_cost,
+          vinted_price: product.vinted_price,
+          stock: product.stock,
+          notes: product.notes,
+          temu_images: d.images || [],
+          temu_description: d.description || '',
+        }),
+      });
+      setImportResults(prev => ({ ...prev, [product.id]: { ok: true, msg: `${(d.images || []).length} foto(s) importada(s)` } }));
+      load();
+    }
+    setImportingId(null);
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[50vh]">
@@ -606,6 +852,15 @@ export default function DropshipPage({ token }: { token: string }) {
           product={productModal === true ? null : productModal}
           onClose={() => setProductModal(null)}
           onSaved={load}
+        />
+      )}
+      {publishProduct && (
+        <PublishModal
+          token={token}
+          product={publishProduct}
+          accounts={accounts}
+          onClose={() => setPublishProduct(null)}
+          onSuccess={load}
         />
       )}
 
@@ -778,12 +1033,27 @@ export default function DropshipPage({ token }: { token: string }) {
           ) : (
             <div className="space-y-2">
               {products.map(p => (
-                <div key={p.id} className="bg-white/[0.03] border border-white/[0.06] rounded-2xl p-4">
+                <div key={p.id} className="bg-white/[0.03] border border-white/[0.06] rounded-2xl p-4 space-y-3">
                   <div className="flex items-start gap-3">
+                    {/* Thumbnail */}
+                    {p.temu_images && p.temu_images.length > 0 && (
+                      <img src={p.temu_images[0]} alt="" className="w-14 h-14 rounded-xl object-cover shrink-0 border border-white/[0.07]" />
+                    )}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <p className="text-sm font-semibold text-[#f2f2ef] truncate">{p.title}</p>
                         {!p.is_active && <span className="text-[9px] text-zinc-500 border border-zinc-700 rounded px-1.5 py-0.5">inactivo</span>}
+                        {p.vinted_listing_id && (
+                          <a
+                            href={p.vinted_listing_url || '#'}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1 text-[9px] font-semibold text-green-400 border border-green-500/25 bg-green-500/10 rounded px-1.5 py-0.5 hover:bg-green-500/20 transition"
+                          >
+                            En Vinted ✓
+                            <ExternalLink className="w-2.5 h-2.5" />
+                          </a>
+                        )}
                       </div>
                       <div className="flex items-center gap-4 mt-2 flex-wrap">
                         {p.temu_cost != null && (
@@ -801,9 +1071,7 @@ export default function DropshipPage({ token }: { token: string }) {
                         {p.temu_cost != null && p.vinted_price != null && (
                           <div className="text-center">
                             <p className="text-[9px] text-[#555550] uppercase tracking-wide">Margen</p>
-                            <p className="text-xs font-semibold text-green-400">
-                              {(p.vinted_price - p.temu_cost).toFixed(2)}€
-                            </p>
+                            <p className="text-xs font-semibold text-green-400">{(p.vinted_price - p.temu_cost).toFixed(2)}€</p>
                           </div>
                         )}
                         <div className="text-center">
@@ -811,33 +1079,51 @@ export default function DropshipPage({ token }: { token: string }) {
                           <p className="text-xs font-semibold text-[#888880]">{p.stock}</p>
                         </div>
                       </div>
-                      {p.notes && (
-                        <p className="text-[10px] text-[#444440] mt-1.5 truncate">{p.notes}</p>
-                      )}
+                      {p.notes && <p className="text-[10px] text-[#444440] mt-1.5 truncate">{p.notes}</p>}
                     </div>
                     <div className="flex gap-1.5 shrink-0 items-start">
-                      <a
-                        href={p.temu_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="p-1.5 rounded-lg border border-white/[0.06] text-[#555550] hover:text-blue-400 hover:border-blue-500/30 transition"
-                      >
+                      <a href={p.temu_url} target="_blank" rel="noopener noreferrer"
+                        className="p-1.5 rounded-lg border border-white/[0.06] text-[#555550] hover:text-blue-400 hover:border-blue-500/30 transition">
                         <ExternalLink className="w-3.5 h-3.5" />
                       </a>
-                      <button
-                        onClick={() => setProductModal(p)}
-                        className="p-1.5 rounded-lg border border-white/[0.06] text-[#555550] hover:text-[#f2f2ef] hover:border-white/[0.12] transition"
-                      >
+                      <button onClick={() => setProductModal(p)}
+                        className="p-1.5 rounded-lg border border-white/[0.06] text-[#555550] hover:text-[#f2f2ef] hover:border-white/[0.12] transition">
                         <Edit2 className="w-3.5 h-3.5" />
                       </button>
-                      <button
-                        onClick={() => deleteProduct(p.id)}
-                        className="p-1.5 rounded-lg border border-white/[0.06] text-[#555550] hover:text-red-400 hover:border-red-500/30 transition"
-                      >
+                      <button onClick={() => deleteProduct(p.id)}
+                        className="p-1.5 rounded-lg border border-white/[0.06] text-[#555550] hover:text-red-400 hover:border-red-500/30 transition">
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   </div>
+
+                  {/* Import & Publish actions */}
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => importFromTemu(p)}
+                      disabled={importingId === p.id}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl border border-white/[0.08] text-xs text-[#888880] hover:text-[#f2f2ef] hover:border-white/[0.14] disabled:opacity-40 transition"
+                    >
+                      {importingId === p.id
+                        ? <RefreshCcw className="w-3.5 h-3.5 animate-spin" />
+                        : <Image className="w-3.5 h-3.5" />}
+                      {importingId === p.id ? 'Importando…' : p.temu_images?.length ? 'Reimportar de Temu' : 'Importar de Temu'}
+                    </button>
+                    <button
+                      onClick={() => setPublishProduct(p)}
+                      disabled={!p.temu_images?.length}
+                      title={!p.temu_images?.length ? 'Importa primero los datos de Temu' : ''}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl bg-[#d4ff00]/10 border border-[#d4ff00]/20 text-xs text-[#d4ff00] font-semibold hover:bg-[#d4ff00]/20 disabled:opacity-30 disabled:cursor-not-allowed transition"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      {p.vinted_listing_id ? 'Republicar en Vinted' : 'Publicar en Vinted'}
+                    </button>
+                  </div>
+                  {importResults[p.id] && (
+                    <p className={`text-[10px] ${importResults[p.id].ok ? 'text-green-400' : 'text-red-400'}`}>
+                      {importResults[p.id].ok ? '✓ ' : '✗ '}{importResults[p.id].msg}
+                    </p>
+                  )}
                 </div>
               ))}
             </div>

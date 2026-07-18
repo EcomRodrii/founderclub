@@ -21,6 +21,7 @@ import { startLenguetaWorker } from "./queues/lenguetaWorker.js";
 import { dropshipQueue } from "./queues/dropshipQueue.js";
 import { startDropshipWorker } from "./queues/dropshipWorker.js";
 import { loginToTemu } from "./temu-login.js";
+import { scrapeTemuProduct } from "./temu-scraper.js";
 import * as otplib from "otplib";
 import QRCode from "qrcode";
 
@@ -7450,13 +7451,16 @@ REGLAS ABSOLUTAS:
 
   app.put("/api/dropship/products/:id", requireLicense as any, async (req: AuthRequest, res) => {
     const uid = req.user!.id;
-    const { temu_url, temu_cost, vinted_price, title, stock, notes, is_active } = req.body;
+    const { temu_url, temu_cost, vinted_price, title, stock, notes, is_active, temu_images, temu_description } = req.body;
     const r = await pool.query(
       `UPDATE dropship_products
-       SET temu_url=$1, temu_cost=$2, vinted_price=$3, title=$4, stock=$5, notes=$6, is_active=$7
+       SET temu_url=$1, temu_cost=$2, vinted_price=$3, title=$4, stock=$5, notes=$6, is_active=$7,
+           temu_images=COALESCE($10::jsonb, temu_images), temu_description=COALESCE($11, temu_description)
        WHERE id=$8 AND user_id=$9 RETURNING *`,
       [temu_url, temu_cost || null, vinted_price || null, title, stock ?? 1, notes || null,
-       is_active !== false, req.params.id, uid]
+       is_active !== false, req.params.id, uid,
+       temu_images !== undefined ? JSON.stringify(temu_images) : null,
+       temu_description !== undefined ? temu_description : null]
     );
     if (!r.rows[0]) return res.status(404).json({ error: "Producto no encontrado" });
     res.json(r.rows[0]);
@@ -7468,13 +7472,190 @@ REGLAS ABSOLUTAS:
     res.json({ ok: true });
   });
 
+  // ── Scraper de producto Temu ──────────────────────────────────────────────────
+  app.get("/api/dropship/temu-scrape", requireLicense as any, async (req: AuthRequest, res) => {
+    const { url } = req.query as { url?: string };
+    if (!url || typeof url !== "string") {
+      return res.status(400).json({ error: "Se requiere el parámetro ?url= con la URL del producto de Temu." });
+    }
+    try {
+      new URL(url); // validate URL
+    } catch {
+      return res.status(400).json({ error: "URL inválida." });
+    }
+    try {
+      const data = await scrapeTemuProduct(url);
+      res.json(data);
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || String(err) });
+    }
+  });
+
   // ── Credenciales Temu ─────────────────────────────────────────────────────────
   app.get("/api/dropship/temu-credentials", requireLicense as any, async (req: AuthRequest, res) => {
     const r = await pool.query(
-      "SELECT id, email, updated_at FROM temu_credentials WHERE user_id=$1",
+      "SELECT id, email, telegram_chat_id, updated_at FROM temu_credentials WHERE user_id=$1",
       [req.user!.id]
     );
-    res.json({ exists: !!r.rows[0], email: r.rows[0]?.email, updated_at: r.rows[0]?.updated_at });
+    res.json({
+      exists: !!r.rows[0],
+      email: r.rows[0]?.email,
+      telegram_chat_id: r.rows[0]?.telegram_chat_id || null,
+      updated_at: r.rows[0]?.updated_at,
+    });
+  });
+
+  // ── Guardar Telegram chat ID ──────────────────────────────────────────────────
+  app.put("/api/dropship/telegram", requireLicense as any, async (req: AuthRequest, res) => {
+    const uid = req.user!.id;
+    const { chat_id } = req.body;
+    await pool.query(
+      `INSERT INTO temu_credentials(user_id, cookies_enc, telegram_chat_id, updated_at)
+       VALUES($1,'',NULLIF($2,''),NOW())
+       ON CONFLICT(user_id) DO UPDATE SET telegram_chat_id=NULLIF($2,''), updated_at=NOW()`,
+      [uid, chat_id || ""]
+    );
+    res.json({ ok: true });
+  });
+
+  // ── Publicar producto en Vinted desde catálogo ────────────────────────────────
+  app.post("/api/dropship/products/:id/publish-vinted", requireLicense as any, async (req: AuthRequest, res) => {
+    const uid = req.user!.id;
+    const productId = parseInt(req.params.id);
+    const { account_id, price, condition = "neuf_sans_etiquette", size, gender = "men" } = req.body;
+
+    // Load product
+    const pRes = await pool.query(
+      "SELECT * FROM dropship_products WHERE id=$1 AND user_id=$2",
+      [productId, uid]
+    );
+    if (!pRes.rows[0]) return res.status(404).json({ error: "Producto no encontrado" });
+    const product = pRes.rows[0];
+
+    const finalPrice = price || product.vinted_price;
+    if (!finalPrice) return res.status(400).json({ error: "Indica el precio de venta en Vinted" });
+
+    const images: string[] = product.temu_images?.length
+      ? product.temu_images
+      : [];
+    if (images.length === 0) return res.status(400).json({ error: "Importa primero los datos de Temu (fotos) antes de publicar" });
+
+    // Select Vinted account
+    const accQ = account_id
+      ? await pool.query(
+          "SELECT cookie, session_cookie, domain FROM vinted_accounts WHERE id=$1 AND user_id=$2 AND is_active=TRUE",
+          [account_id, uid]
+        )
+      : await pool.query(
+          "SELECT cookie, session_cookie, domain FROM vinted_accounts WHERE user_id=$1 AND is_active=TRUE ORDER BY updated_at DESC NULLS LAST LIMIT 1",
+          [uid]
+        );
+    const acc = accQ.rows[0];
+    if (!acc) return res.status(400).json({ error: "No hay cuentas Vinted activas. Ve a Cuentas." });
+    if (acc.session_cookie) acc.session_cookie = ctrlDecrypt(acc.session_cookie);
+    if (!acc.session_cookie && !acc.cookie) return res.status(400).json({ error: "Sin sesión de Vinted activa. Ve a Cuentas y sincroniza." });
+
+    // Create autopublish listing and publish via SSE stream
+    const listRes = await pool.query(
+      `INSERT INTO vinted_autopublish_listings
+       (user_id, title, description, price, condition, brand, size, gender, images, package_size, status)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'small','pending')
+       RETURNING id`,
+      [
+        uid,
+        product.title,
+        product.temu_description || product.notes || "",
+        finalPrice,
+        condition,
+        "",
+        size || null,
+        gender,
+        JSON.stringify(images),
+      ]
+    );
+    const listingId = listRes.rows[0].id;
+
+    // Stream the publish progress via SSE
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+
+    const sendEvent = (data: object) => {
+      if (!res.writableEnded) res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    sendEvent({ type: "log", step: "init", message: "⏳ Iniciando publicación en Vinted..." });
+
+    let publishToVinted: any;
+    try {
+      const mod = await import("./vinted-publisher.js");
+      publishToVinted = mod.publishToVinted;
+    } catch (e: any) {
+      sendEvent({ type: "error", step: "import", message: `Error: ${e.message}` });
+      if (!res.writableEnded) res.end();
+      return;
+    }
+
+    publishToVinted(
+      acc.session_cookie || "",
+      acc.cookie || null,
+      {
+        title: product.title,
+        description: product.temu_description || product.notes || "",
+        price: Number(finalPrice),
+        condition,
+        brand: "",
+        size: size || undefined,
+        gender,
+        images,
+        packageSize: "small",
+        domain: acc.domain || "es",
+      },
+      (event: any) => sendEvent(event)
+    ).then(async (result: any) => {
+      if (result.published && result.vintedId) {
+        await pool.query(
+          "UPDATE dropship_products SET vinted_listing_id=$1, vinted_listing_url=$2 WHERE id=$3",
+          [result.vintedId, result.url || null, productId]
+        ).catch(() => {});
+        await pool.query(
+          "UPDATE vinted_autopublish_listings SET status='published', vinted_id=$1, published_at=NOW() WHERE id=$2",
+          [result.vintedId, listingId]
+        ).catch(() => {});
+        sendEvent({ type: "done", step: "done", message: "✅ Publicado en Vinted", vintedId: result.vintedId, url: result.url });
+      } else {
+        sendEvent({ type: "error", step: "done", message: result.error || "No se pudo publicar" });
+        await pool.query("UPDATE vinted_autopublish_listings SET status='failed' WHERE id=$1", [listingId]).catch(() => {});
+      }
+      if (!res.writableEnded) res.end();
+    }).catch((e: any) => {
+      sendEvent({ type: "error", step: "done", message: e.message });
+      if (!res.writableEnded) res.end();
+    });
+  });
+
+  // ── Etiqueta de envío para un pedido ─────────────────────────────────────────
+  app.get("/api/dropship/orders/:id/label", requireLicense as any, async (req: AuthRequest, res) => {
+    const uid = req.user!.id;
+    const orderId = parseInt(req.params.id);
+    const oRes = await pool.query(
+      "SELECT vinted_order_id FROM dropship_orders WHERE id=$1 AND user_id=$2",
+      [orderId, uid]
+    );
+    if (!oRes.rows[0]) return res.status(404).json({ error: "Pedido no encontrado" });
+    const vintedOrderId = oRes.rows[0].vinted_order_id?.replace("item-", "");
+
+    // Look in order_labels for this transaction
+    const lRes = await pool.query(
+      "SELECT label_url, label_carrier, found_at FROM order_labels WHERE user_id=$1 AND (transaction_id=$2 OR transaction_id=$3) ORDER BY found_at DESC LIMIT 1",
+      [uid, vintedOrderId, `item-${vintedOrderId}`]
+    );
+    if (lRes.rows[0]) {
+      return res.json({ found: true, label_url: lRes.rows[0].label_url, carrier: lRes.rows[0].label_carrier });
+    }
+    res.json({ found: false });
   });
 
   app.post("/api/dropship/temu-credentials", requireLicense as any, async (req: AuthRequest, res) => {
@@ -7660,11 +7841,27 @@ REGLAS ABSOLUTAS:
       const orderId = `item-${item.id}`;
       const itemTitle = item.title || null;
       const amount = item.price?.amount != null ? item.price.amount : (typeof item.price === "number" ? item.price : null);
+
+      let productId: number | null = null;
+      try {
+        const prodRes = await pool.query(
+          "SELECT id FROM dropship_products WHERE user_id=$1 AND vinted_listing_id=$2 AND is_active=TRUE LIMIT 1",
+          [userId, item.id?.toString()]
+        );
+        if (prodRes.rows[0]) productId = prodRes.rows[0].id;
+      } catch { /* ignore */ }
+
+      let buyerName: string | null = null;
+      try {
+        const buyer = item.user || item.buyer;
+        if (buyer?.login) buyerName = buyer.login;
+      } catch { /* ignore */ }
+
       const ins = await pool.query(
-        `INSERT INTO dropship_orders (user_id,vinted_order_id,vinted_item_title,vinted_amount,vinted_sale_data)
-         VALUES($1,$2,$3,$4,$5)
+        `INSERT INTO dropship_orders (user_id,product_id,vinted_order_id,buyer_name,vinted_item_title,vinted_amount,vinted_sale_data)
+         VALUES($1,$2,$3,$4,$5,$6,$7)
          ON CONFLICT(user_id,vinted_order_id) DO NOTHING RETURNING id`,
-        [userId, orderId, itemTitle, amount, JSON.stringify(item)]
+        [userId, productId, orderId, buyerName, itemTitle, amount, JSON.stringify(item)]
       );
       if (ins.rows[0]) newOrders++;
     }
@@ -7698,6 +7895,24 @@ REGLAS ABSOLUTAS:
         totalNew += r.newOrders || 0;
         results.push(r);
       } catch { /* continue with next account */ }
+    }
+    if (totalNew > 0) {
+      try {
+        const tgRes = await pool.query(
+          "SELECT telegram_chat_id FROM temu_credentials WHERE user_id=$1 AND telegram_chat_id IS NOT NULL",
+          [uid]
+        );
+        const chatId = tgRes.rows[0]?.telegram_chat_id;
+        const botToken = process.env.TELEGRAM_BOT_TOKEN;
+        if (chatId && botToken) {
+          const msg = `🛍️ *Nueva venta en Vinted*\n${totalNew} artículo(s) vendido(s). Entra en la app para comprar en Temu.`;
+          await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: chatId, text: msg, parse_mode: "Markdown" }),
+          }).catch(() => {});
+        }
+      } catch { /* ignore */ }
     }
     res.json({ ok: true, new_orders: totalNew, accounts: results });
   });
