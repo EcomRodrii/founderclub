@@ -36,6 +36,8 @@
     "pg": "^8.13.3",
     "piexifjs": "^1.0.6",
     "puppeteer": "^22.0.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
     "qrcode": "^1.5.4",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",

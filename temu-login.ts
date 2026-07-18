@@ -1,15 +1,17 @@
 /**
  * TemuLogin — Puppeteer automation for Temu email+password login.
  *
- * Key challenges:
- *  - Temu is a React SPA: DOM is ready but inputs don't exist until JS hydrates.
- *  - Temu detects headless Chrome via navigator.webdriver; must override it.
- *  - React controlled inputs ignore programmatic `.value = x` — must use the
- *    native HTMLInputElement value setter to trigger React's synthetic events.
- *  - Temu may show cookie/promo overlays that block interaction.
+ * Uses puppeteer-extra with the stealth plugin to bypass Temu's bot detection
+ * (patches navigator.webdriver, Chrome runtime, permissions, WebGL, etc.).
+ * Direct connection without proxy — stealth handles the fingerprinting.
+ * React input trick: native HTMLInputElement value setter + dispatchEvent.
  */
 
-import puppeteer, { type Browser, type Page, type CookieParam } from "puppeteer";
+import { type Browser, type Page, type CookieParam } from "puppeteer";
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const puppeteerExtra = require("puppeteer-extra");
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 
 export interface TemuLoginResult {
   success: boolean;
@@ -17,29 +19,13 @@ export interface TemuLoginResult {
   userEmail?: string;
   error?: string;
   needsOtp?: boolean;
-  debugScreenshot?: string; // base64 PNG if failed, for diagnostics
+  debugScreenshot?: string;
 }
 
 // ── Browser ────────────────────────────────────────────────────────────────────
-interface ProxyConfig { host: string; port: number; username?: string; password?: string; }
+async function launchBrowser(): Promise<Browser> {
+  puppeteerExtra.use(StealthPlugin() as any);
 
-function parseProxy(): ProxyConfig | null {
-  const raw = process.env.PROXY_URL;
-  if (!raw) return null;
-  try {
-    const u = new URL(raw);
-    return {
-      host: u.hostname,
-      port: parseInt(u.port) || 12323,
-      username: u.username ? decodeURIComponent(u.username) : undefined,
-      password: u.password ? decodeURIComponent(u.password) : undefined,
-    };
-  } catch {
-    return null;
-  }
-}
-
-async function launchBrowser(): Promise<{ browser: Browser; proxy: ProxyConfig | null }> {
   let executablePath: string | undefined = process.env.PUPPETEER_EXECUTABLE_PATH;
   if (!executablePath && process.platform === "linux") {
     const { execSync } = await import("child_process");
@@ -51,10 +37,7 @@ async function launchBrowser(): Promise<{ browser: Browser; proxy: ProxyConfig |
     }
   }
 
-  const proxy = parseProxy();
-  const proxyArgs = proxy ? [`--proxy-server=http://${proxy.host}:${proxy.port}`] : [];
-
-  const browser = await puppeteer.launch({
+  return (puppeteerExtra as any).launch({
     headless: true,
     ...(executablePath ? { executablePath } : {}),
     args: [
@@ -68,70 +51,35 @@ async function launchBrowser(): Promise<{ browser: Browser; proxy: ProxyConfig |
       "--disable-default-apps",
       "--disable-background-networking",
       "--no-first-run",
-      "--disable-blink-features=AutomationControlled",
       "--window-size=1366,768",
-      ...proxyArgs,
     ],
   });
-  return { browser, proxy };
 }
 
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
 
-// ── Proxy auth via CDP Fetch (page.authenticate only handles web 401, not 407) ─
-async function setupProxyAuth(page: Page, proxy: ProxyConfig): Promise<void> {
-  if (!proxy.username || !proxy.password) return;
-  const client = await page.createCDPSession();
-
-  // handleAuthRequests:true ALSO pauses regular requests via Fetch.requestPaused.
-  // Without a continueRequest handler those requests hang indefinitely.
-  await client.send("Fetch.enable" as any, { handleAuthRequests: true });
-
-  // Continue all non-auth requests immediately so they don't block page load.
-  client.on("Fetch.requestPaused", async (event: any) => {
-    await client.send("Fetch.continueRequest" as any, { requestId: event.requestId }).catch(() => {});
-  });
-
-  // Respond to proxy 407 challenges with credentials.
-  client.on("Fetch.authRequired", async (event: any) => {
-    await client.send("Fetch.continueWithAuth" as any, {
-      requestId: event.requestId,
-      authChallengeResponse: {
-        response: "ProvideCredentials",
-        username: proxy.username!,
-        password: proxy.password!,
-      },
-    }).catch(() => {});
-  });
-}
-
-// ── Anti-bot evasion injected before every page load ──────────────────────────
+// ── Page setup ─────────────────────────────────────────────────────────────────
 async function setupPage(page: Page) {
-  await page.evaluateOnNewDocument(() => {
-    // Remove the webdriver flag that Temu checks
-    Object.defineProperty(navigator, "webdriver", { get: () => undefined, configurable: true });
-
-    // Make plugins look real
-    Object.defineProperty(navigator, "plugins", {
-      get: () => ({ length: 3, 0: { name: "Chrome PDF Plugin" }, 1: { name: "Chrome PDF Viewer" }, 2: { name: "Native Client" } }),
-      configurable: true,
-    });
-
-    // Realistic languages
-    Object.defineProperty(navigator, "languages", {
-      get: () => ["en-US", "en", "es"],
-      configurable: true,
-    });
-
-    // Hide that Chrome is running in headless mode
-    (window as any).chrome = { runtime: {} };
-  });
-
   await page.setUserAgent(
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Safari/537.36"
   );
   await page.setViewport({ width: 1366, height: 768 });
   await page.setExtraHTTPHeaders({ "Accept-Language": "en-US,en;q=0.9" });
+}
+
+// ── Dismiss cookie / promo overlays ───────────────────────────────────────────
+async function dismissOverlays(page: Page) {
+  try {
+    await page.evaluate(() => {
+      const keywords = /close|accept|ok|got it|skip|dismiss|no thanks|×|✕|allow|agree/i;
+      document.querySelectorAll<HTMLElement>("button, [role=button]").forEach(el => {
+        if (el.offsetParent !== null && keywords.test(el.innerText || el.getAttribute("aria-label") || "")) {
+          el.click();
+        }
+      });
+    });
+    await delay(500);
+  } catch {}
 }
 
 // ── Fill a React-controlled input via the native value setter ─────────────────
@@ -154,251 +102,182 @@ async function reactFillInput(page: Page, selector: string, text: string): Promi
   }
 }
 
-// ── Find any visible text/email input on the page via evaluate ────────────────
+// ── Find the email input selector on the current page ─────────────────────────
 async function findEmailInputSelector(page: Page): Promise<string | null> {
   return page.evaluate(() => {
-    const inputs = Array.from(document.querySelectorAll("input"));
-    const candidates = inputs.filter(i => {
-      if (i.offsetParent === null) return false; // not visible
+    const inputs = Array.from(document.querySelectorAll<HTMLInputElement>("input"));
+    const el = inputs.find(i => {
+      if ((i as HTMLElement).offsetParent === null) return false;
       const t = i.type?.toLowerCase();
       const p = (i.placeholder || "").toLowerCase();
       const n = (i.name || "").toLowerCase();
       const a = (i.getAttribute("autocomplete") || "").toLowerCase();
-      return (
-        t === "email" ||
-        t === "text" ||
+      return t === "email" || t === "text" ||
         p.includes("email") || p.includes("mail") ||
         n.includes("email") || n.includes("mail") ||
-        a === "email" || a === "username"
-      );
+        a === "email" || a === "username";
     });
-    if (!candidates.length) return null;
-    const el = candidates[0];
-    // Build a unique-enough selector
+    if (!el) return null;
     if (el.id) return `#${CSS.escape(el.id)}`;
-    if (el.name) return `input[name="${el.name}"]`;
+    if (el.name) return `input[name="${CSS.escape(el.name)}"]`;
     if (el.type === "email") return 'input[type="email"]';
     return null;
   });
 }
 
-// ── Find password input ───────────────────────────────────────────────────────
+// ── Find password input selector ──────────────────────────────────────────────
 async function findPasswordInputSelector(page: Page): Promise<string | null> {
   return page.evaluate(() => {
-    const inputs = Array.from(document.querySelectorAll('input[type="password"]'));
-    const visible = inputs.filter(i => (i as HTMLElement).offsetParent !== null);
+    const visible = Array.from(document.querySelectorAll<HTMLInputElement>('input[type="password"]'))
+      .filter(i => (i as HTMLElement).offsetParent !== null);
     if (!visible.length) return null;
-    const el = visible[0] as HTMLInputElement;
+    const el = visible[0];
     if (el.id) return `#${CSS.escape(el.id)}`;
-    if (el.name) return `input[name="${el.name}"]`;
+    if (el.name) return `input[name="${CSS.escape(el.name)}"]`;
     return 'input[type="password"]';
   });
 }
 
-// ── Dismiss overlays (cookie consent, promos, welcome popups) ────────────────
-async function dismissOverlays(page: Page): Promise<void> {
-  try {
-    await page.evaluate(() => {
-      // Click any visible "close" / "accept" / "skip" button in overlays
-      const keywords = /close|accept|ok|got it|skip|dismiss|no thanks|decline|×|✕|allow|agree/i;
-      const buttons = Array.from(document.querySelectorAll("button, [role=button], a[href='#']"));
-      for (const btn of buttons) {
-        const el = btn as HTMLElement;
-        if (el.offsetParent !== null && keywords.test(el.innerText || el.getAttribute("aria-label") || "")) {
-          el.click();
-        }
-      }
-    });
-    await delay(600);
-  } catch {}
-}
-
-// ── Click "Sign in" if needed to reveal the login form ───────────────────────
-async function clickSignInIfNeeded(page: Page): Promise<void> {
+// ── Click a sign-in / continue / submit button ────────────────────────────────
+async function clickSignInOrSubmit(page: Page): Promise<void> {
   try {
     const clicked = await page.evaluate(() => {
-      const keywords = /sign in|log in|login|iniciar sesión/i;
-      const els = Array.from(document.querySelectorAll("button, a, [role=button]"));
-      for (const el of els) {
-        const h = el as HTMLElement;
-        if (h.offsetParent !== null && keywords.test(h.innerText || h.getAttribute("aria-label") || "")) {
-          h.click();
-          return true;
-        }
-      }
-      return false;
-    });
-    if (clicked) await delay(2000);
-  } catch {}
-}
-
-// ── Click the submit/continue button ─────────────────────────────────────────
-async function clickSubmit(page: Page): Promise<void> {
-  try {
-    const clicked = await page.evaluate(() => {
-      const keywords = /continue|next|sign in|log in|submit|siguiente|continuar|confirm/i;
-      const buttons = Array.from(document.querySelectorAll("button[type=submit], button"));
-      for (const b of buttons) {
-        const el = b as HTMLButtonElement;
-        if (el.offsetParent !== null && !el.disabled && keywords.test(el.innerText)) {
-          el.click();
-          return true;
-        }
-      }
-      // Fallback: click the only visible button
-      const visible = buttons.filter(b => (b as HTMLElement).offsetParent !== null && !(b as HTMLButtonElement).disabled);
-      if (visible.length === 1) { (visible[0] as HTMLElement).click(); return true; }
+      const keywords = /sign in|log in|login|continue|next|submit|confirm|iniciar|continuar|siguiente/i;
+      const btns = Array.from(document.querySelectorAll<HTMLButtonElement>("button, [role=button]"));
+      const btn = btns.find(b => b.offsetParent !== null && !b.disabled && keywords.test(b.innerText || b.getAttribute("aria-label") || ""));
+      if (btn) { btn.click(); return true; }
+      // If only one visible enabled button, click it
+      const visible = btns.filter(b => b.offsetParent !== null && !b.disabled);
+      if (visible.length === 1) { visible[0].click(); return true; }
       return false;
     });
     if (!clicked) await page.keyboard.press("Enter");
   } catch {
-    await page.keyboard.press("Enter");
+    await page.keyboard.press("Enter").catch(() => {});
   }
+  await delay(2000);
 }
 
-// ── Main login function ───────────────────────────────────────────────────────
+// ── Main ───────────────────────────────────────────────────────────────────────
 export async function loginToTemu(email: string, password: string): Promise<TemuLoginResult> {
   let browser: Browser | null = null;
   try {
-    const launched = await launchBrowser();
-    browser = launched.browser;
-    const proxy = launched.proxy;
-
+    browser = await launchBrowser();
     const page = await browser.newPage();
-
-    // Handle proxy 407 auth via CDP Fetch (page.authenticate only handles 401)
-    if (proxy) await setupProxyAuth(page, proxy);
-
     await setupPage(page);
 
-    // Navigate to login page — wait for network to settle (not just DOM parse)
+    // Navigate — use networkidle2 so React has time to hydrate
     await page.goto("https://www.temu.com/login.html", {
       waitUntil: "networkidle2",
       timeout: 45_000,
     });
-    await delay(3000);
-
-    // Dismiss cookie / welcome overlays
+    await delay(2500);
     await dismissOverlays(page);
-    await delay(800);
 
-    // --- Try to find the email input ---
-    let emailSelector = await findEmailInputSelector(page);
+    // Find email input
+    let emailSel = await findEmailInputSelector(page);
 
-    if (!emailSelector) {
-      // Maybe we're on the homepage and need to click "Sign in"
-      await clickSignInIfNeeded(page);
-      await delay(2500);
-      await dismissOverlays(page);
-      emailSelector = await findEmailInputSelector(page);
+    if (!emailSel) {
+      // Try clicking a "Sign in" link/button that might reveal the form
+      const revealed = await page.evaluate(() => {
+        const keywords = /sign in|log in|login|iniciar/i;
+        const els = Array.from(document.querySelectorAll<HTMLElement>("button, a, [role=button]"));
+        const el = els.find(e => e.offsetParent !== null && keywords.test(e.innerText || e.getAttribute("aria-label") || ""));
+        if (el) { el.click(); return true; }
+        return false;
+      });
+      if (revealed) {
+        await delay(2500);
+        await dismissOverlays(page);
+        emailSel = await findEmailInputSelector(page);
+      }
     }
 
-    if (!emailSelector) {
-      // Last resort: try navigating directly to the sign-in page variant
-      await page.goto("https://www.temu.com/login.html?refer_page_name=home", {
+    if (!emailSel) {
+      // Last attempt: try the alternate login URL
+      await page.goto("https://www.temu.com/login.html?refer_page_name=home&refer_page_id=10005", {
         waitUntil: "networkidle2",
         timeout: 30_000,
       });
-      await delay(3000);
+      await delay(2500);
       await dismissOverlays(page);
-      emailSelector = await findEmailInputSelector(page);
+      emailSel = await findEmailInputSelector(page);
     }
 
-    if (!emailSelector) {
+    if (!emailSel) {
       const screenshot = await page.screenshot({ encoding: "base64", type: "png" }).catch(() => undefined);
-      const pageText = await page.evaluate(() => document.body?.innerText?.slice(0, 500)).catch(() => "");
+      const bodyText = await page.evaluate(() => document.body?.innerText?.slice(0, 500)).catch(() => "");
+      const isCaptcha = /captcha|robot|verify you are human/i.test(bodyText);
       return {
         success: false,
-        error: `No se encontró el formulario de login de Temu. ` +
-               (pageText.toLowerCase().includes("captcha") || pageText.toLowerCase().includes("robot")
-                 ? "Temu está mostrando un captcha. Inténtalo más tarde."
-                 : "La web puede haber cambiado o está detectando el bot."),
+        error: isCaptcha
+          ? "Temu muestra un captcha. Inténtalo más tarde."
+          : "No se encontró el formulario de login de Temu. La web puede haber cambiado.",
         debugScreenshot: screenshot as string | undefined,
       };
     }
 
     // Fill email
-    const emailFilled = await reactFillInput(page, emailSelector, email);
+    const emailFilled = await reactFillInput(page, emailSel, email);
     if (!emailFilled) {
-      return { success: false, error: "No se pudo rellenar el email en Temu." };
+      return { success: false, error: "No se pudo rellenar el email." };
     }
-    await delay(600);
+    await delay(500);
 
-    // Some flows: click "Continue" first, password on next screen
-    const pwdVisibleNow = await findPasswordInputSelector(page);
-    if (!pwdVisibleNow) {
-      await clickSubmit(page);
-      await delay(2500);
+    // If password field isn't visible yet, submit email first (two-step flow)
+    if (!await findPasswordInputSelector(page)) {
+      await clickSignInOrSubmit(page);
     }
 
     // Fill password
-    const pwdSelector = await findPasswordInputSelector(page);
-    if (!pwdSelector) {
-      return { success: false, error: "No apareció el campo de contraseña después del email." };
+    const pwdSel = await findPasswordInputSelector(page);
+    if (!pwdSel) {
+      return { success: false, error: "No apareció el campo de contraseña. Verifica el email." };
     }
-    const pwdFilled = await reactFillInput(page, pwdSelector, password);
+    const pwdFilled = await reactFillInput(page, pwdSel, password);
     if (!pwdFilled) {
-      return { success: false, error: "No se pudo rellenar la contraseña en Temu." };
+      return { success: false, error: "No se pudo rellenar la contraseña." };
     }
-    await delay(600);
+    await delay(500);
 
     // Submit login
-    await clickSubmit(page);
-    await delay(5000); // wait for redirect / error
+    await clickSignInOrSubmit(page);
+    await delay(5000);
 
     // --- Analyse result ---
     const url = page.url();
     const bodyText = await page.evaluate(() => document.body?.innerText?.toLowerCase() || "").catch(() => "");
 
-    if (
-      bodyText.includes("verification code") ||
-      bodyText.includes("código de verificación") ||
-      bodyText.includes("verify your") ||
-      bodyText.includes("otp") ||
-      url.includes("verify") || url.includes("otp")
-    ) {
+    if (/verification code|código de verificación|verify your|otp/i.test(bodyText) || url.includes("verify") || url.includes("otp")) {
       return { success: false, needsOtp: true, error: "Temu ha enviado un código de verificación (2FA). Desactiva la verificación en dos pasos en tu cuenta Temu e inténtalo de nuevo." };
     }
 
-    if (bodyText.includes("captcha") || bodyText.includes("robot") || bodyText.includes("verify you are human")) {
-      return { success: false, error: "Temu está mostrando un captcha. Inténtalo más tarde." };
+    if (/captcha|robot|verify you are human/i.test(bodyText)) {
+      return { success: false, error: "Temu muestra un captcha. Inténtalo de nuevo en unos minutos." };
     }
 
-    if (
-      bodyText.includes("incorrect password") || bodyText.includes("contraseña incorrecta") ||
-      bodyText.includes("wrong password") || bodyText.includes("invalid email") ||
-      bodyText.includes("no account found") || bodyText.includes("cuenta no encontrada") ||
-      bodyText.includes("email or password is incorrect")
-    ) {
+    if (/incorrect password|contraseña incorrecta|wrong password|invalid email|no account found|email or password is incorrect/i.test(bodyText)) {
       return { success: false, error: "Email o contraseña incorrectos." };
     }
 
-    // Check for successful login: should have navigated away from /login
-    const stillOnLogin = url.includes("/login") && !url.includes("?from=");
-
-    if (stillOnLogin) {
-      // Check for user avatar / account info that proves we're logged in
-      const loggedIn = await page.evaluate(() => {
-        const userEls = document.querySelectorAll('[class*="user-name"], [class*="avatar"], [class*="account-name"], [class*="my-account"], [data-testid*="user"]');
-        return userEls.length > 0;
-      });
+    // If still on login page, check for account UI
+    if (url.includes("/login") && !url.includes("?from=")) {
+      const loggedIn = await page.evaluate(() =>
+        document.querySelectorAll('[class*="user-name"], [class*="avatar"], [class*="account-name"], [class*="my-account"]').length > 0
+      );
       if (!loggedIn) {
         const screenshot = await page.screenshot({ encoding: "base64", type: "png" }).catch(() => undefined);
-        return {
-          success: false,
-          error: "El login no completó correctamente. Verifica el email y contraseña.",
-          debugScreenshot: screenshot as string | undefined,
-        };
+        return { success: false, error: "Login no completado. Verifica el email y contraseña.", debugScreenshot: screenshot as string | undefined };
       }
     }
 
-    // Grab all cookies from temu.com
+    // Grab cookies
     await page.goto("https://www.temu.com/", { waitUntil: "domcontentloaded", timeout: 20_000 });
     await delay(1500);
     const cookies: CookieParam[] = await page.cookies("https://www.temu.com");
 
-    if (cookies.length === 0) {
-      return { success: false, error: "Login completado pero no se pudieron capturar las cookies de sesión." };
+    if (!cookies.length) {
+      return { success: false, error: "Login completado pero no se capturaron cookies de sesión." };
     }
 
     return { success: true, cookiesJson: JSON.stringify(cookies), userEmail: email };
