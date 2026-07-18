@@ -7,11 +7,13 @@
  * React input trick: native HTMLInputElement value setter + dispatchEvent.
  */
 
+import { createRequire } from "module";
 import { type Browser, type Page, type CookieParam } from "puppeteer";
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const puppeteerExtra = require("puppeteer-extra");
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const StealthPlugin = require("puppeteer-extra-plugin-stealth");
+
+// puppeteer-extra is CJS-only; use createRequire in ESM context
+const _require = createRequire(import.meta.url);
+const puppeteerExtra = _require("puppeteer-extra");
+const StealthPlugin = _require("puppeteer-extra-plugin-stealth");
 
 export interface TemuLoginResult {
   success: boolean;
