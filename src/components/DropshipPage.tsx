@@ -564,14 +564,35 @@ function PublishModal({ token, product, accounts, onClose, onSuccess }: {
 
 // ── Temu credentials tab ──────────────────────────────────────────────────────
 function TemuTab({ token, temu, onSaved }: { token: string; temu: TemuCreds | null; onSaved: () => void }) {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [connecting, setConnecting] = useState(false);
   const [err, setErr] = useState('');
   const [status, setStatus] = useState('');
+  const [extAvailable, setExtAvailable] = useState<boolean | null>(null);
   const [chatId, setChatId] = useState(temu?.telegram_chat_id || '');
   const [savingTg, setSavingTg] = useState(false);
   const [tgSaved, setTgSaved] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    // Detect Lamine Hub extension by pinging temu:get-status via bridge
+    const onResp = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.action === 'temu:get-status') {
+        setExtAvailable(true);
+        window.removeEventListener('founderclub-ext-response', onResp);
+        clearTimeout(t);
+      }
+    };
+    window.addEventListener('founderclub-ext-response', onResp);
+    window.dispatchEvent(new CustomEvent('founderclub-ext-msg', { detail: { action: 'temu:get-status' } }));
+    const t = setTimeout(() => {
+      window.removeEventListener('founderclub-ext-response', onResp);
+      setExtAvailable(prev => prev === null ? false : prev);
+    }, 2500);
+    return () => { clearTimeout(t); window.removeEventListener('founderclub-ext-response', onResp); };
+  }, []);
+
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
   const saveTelegram = async () => {
     setSavingTg(true); setTgSaved(false);
@@ -581,29 +602,88 @@ function TemuTab({ token, temu, onSaved }: { token: string; temu: TemuCreds | nu
     setTimeout(() => setTgSaved(false), 3000);
   };
 
-  const connect = async () => {
-    if (!email.trim() || !password.trim()) { setErr('Introduce email y contraseña'); return; }
-    setConnecting(true); setErr(''); setStatus('Abriendo Temu… esto puede tardar 20-30 segundos');
-    const r = await api(token, '/api/dropship/temu-login', {
-      method: 'POST',
-      body: JSON.stringify({ email: email.trim(), password }),
-    });
-    const d = await r.json();
-    setConnecting(false);
-    if (r.ok) {
-      setStatus('');
-      setPassword('');
-      onSaved();
-    } else {
-      setErr(d.error || 'Error al conectar');
-      setStatus('');
-    }
+  const startPolling = () => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    let attempts = 0;
+    pollRef.current = setInterval(async () => {
+      attempts++;
+      try {
+        const r = await api(token, '/api/dropship/temu-credentials');
+        const d = await r.json();
+        if (d?.exists) {
+          if (pollRef.current) clearInterval(pollRef.current);
+          setConnecting(false); setStatus(''); onSaved();
+          return;
+        }
+      } catch {}
+      if (attempts >= 60) {
+        if (pollRef.current) clearInterval(pollRef.current);
+        setConnecting(false);
+        setStatus('');
+        setErr('Tiempo agotado. Inténtalo de nuevo.');
+      }
+    }, 3000);
   };
+
+  const connectViaExtension = () => {
+    setConnecting(true); setErr(''); setStatus('Comprobando sesión de Temu…');
+    const onResp = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.action !== 'temu:connect') return;
+      window.removeEventListener('founderclub-ext-response', onResp);
+      const resp = detail.response;
+      if (resp?.ok) {
+        setConnecting(false); setStatus(''); onSaved();
+      } else if (resp?.loginOpened) {
+        setStatus('Inicia sesión en Temu en la pestaña que se ha abierto… esperando');
+        startPolling();
+      } else {
+        setConnecting(false); setStatus('');
+        setErr(resp?.error || 'Error al conectar con la extensión');
+      }
+    };
+    window.addEventListener('founderclub-ext-response', onResp);
+    window.dispatchEvent(new CustomEvent('founderclub-ext-msg', { detail: { action: 'temu:connect' } }));
+    setTimeout(() => {
+      window.removeEventListener('founderclub-ext-response', onResp);
+      if (connecting) { setConnecting(false); setErr('La extensión no respondió. Asegúrate de que Lamine Hub está activo.'); }
+    }, 8000);
+  };
+
+  const telegramSection = (
+    <div className="space-y-3 pt-4 border-t border-white/[0.06]">
+      <div>
+        <p className="text-xs font-semibold text-[#f2f2ef] flex items-center gap-1.5">
+          <MessageCircle className="w-3.5 h-3.5 text-[#888880]" /> Notificaciones por Telegram
+        </p>
+        <p className="text-[10px] text-[#555550] mt-0.5">
+          Recibe un mensaje cuando detecte una venta en Vinted. Habla con @userinfobot en Telegram para obtener tu Chat ID.
+        </p>
+      </div>
+      <div className="flex gap-2">
+        <input
+          value={chatId}
+          onChange={e => setChatId(e.target.value)}
+          placeholder="123456789"
+          className="flex-1 bg-white/[0.04] border border-white/[0.07] rounded-xl px-3 py-2 text-sm text-[#f2f2ef] placeholder-[#444] focus:outline-none focus:border-[#d4ff00]/40 transition"
+        />
+        <button
+          onClick={saveTelegram}
+          disabled={savingTg}
+          className="px-4 py-2 rounded-xl bg-[#d4ff00] text-black text-xs font-bold hover:bg-[#c8f000] disabled:opacity-40 transition shrink-0"
+        >
+          {tgSaved ? '✓ Guardado' : savingTg ? '…' : 'Guardar'}
+        </button>
+      </div>
+      {temu?.telegram_chat_id && (
+        <p className="text-[10px] text-green-400">Telegram activo: {temu.telegram_chat_id}</p>
+      )}
+    </div>
+  );
 
   if (temu?.exists) {
     return (
       <div className="space-y-5 max-w-lg">
-        {/* Connected state */}
         <div className="flex items-center gap-4 p-5 rounded-2xl bg-green-500/10 border border-green-500/20">
           <div className="w-10 h-10 rounded-xl bg-green-500/20 flex items-center justify-center">
             <CheckCircle2 className="w-5 h-5 text-green-400" />
@@ -611,144 +691,92 @@ function TemuTab({ token, temu, onSaved }: { token: string; temu: TemuCreds | nu
           <div className="flex-1 min-w-0">
             <p className="text-sm font-bold text-green-400">Cuenta Temu conectada</p>
             {temu.email && <p className="text-xs text-[#888880] mt-0.5 truncate">{temu.email}</p>}
-            <p className="text-[10px] text-[#555550] mt-0.5">
-              La app puede añadir productos al carrito de Temu automáticamente
-            </p>
+            <p className="text-[10px] text-[#555550] mt-0.5">Sesión activa via Lamine Hub</p>
           </div>
         </div>
 
-        {/* Reconnect */}
-        <div className="space-y-3">
-          <p className="text-xs text-[#555550]">
-            Si Temu ha cerrado tu sesión, vuelve a conectar con tus credenciales:
-          </p>
+        {extAvailable !== false && (
           <div className="space-y-2">
-            <input
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              placeholder="Email de Temu"
-              type="email"
-              className="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-3 py-2.5 text-sm text-[#f2f2ef] placeholder-[#444] focus:outline-none focus:border-[#d4ff00]/40 transition"
-            />
-            <input
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              placeholder="Contraseña de Temu"
-              type="password"
-              className="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-3 py-2.5 text-sm text-[#f2f2ef] placeholder-[#444] focus:outline-none focus:border-[#d4ff00]/40 transition"
-            />
-          </div>
-          {err && <p className="text-xs text-red-400">{err}</p>}
-          {status && <p className="text-xs text-[#888880]">{status}</p>}
-          <button
-            onClick={connect}
-            disabled={connecting || !email.trim() || !password.trim()}
-            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-white/[0.08] text-xs text-[#888880] hover:text-[#f2f2ef] hover:border-white/[0.14] disabled:opacity-40 transition"
-          >
-            {connecting ? <RefreshCcw className="w-3.5 h-3.5 animate-spin" /> : <RefreshCcw className="w-3.5 h-3.5" />}
-            {connecting ? status || 'Conectando…' : 'Reconectar cuenta Temu'}
-          </button>
-        </div>
-
-        {/* Telegram notifications */}
-        <div className="space-y-3 pt-2 border-t border-white/[0.06]">
-          <div>
-            <p className="text-xs font-semibold text-[#f2f2ef] flex items-center gap-1.5">
-              <MessageCircle className="w-3.5 h-3.5 text-[#888880]" /> Notificaciones por Telegram
-            </p>
-            <p className="text-[10px] text-[#555550] mt-0.5">
-              Recibe un mensaje cuando detecte una venta en Vinted. Habla con @userinfobot en Telegram para obtener tu Chat ID.
-            </p>
-          </div>
-          <div className="flex gap-2">
-            <input
-              value={chatId}
-              onChange={e => setChatId(e.target.value)}
-              placeholder="123456789"
-              className="flex-1 bg-white/[0.04] border border-white/[0.07] rounded-xl px-3 py-2 text-sm text-[#f2f2ef] placeholder-[#444] focus:outline-none focus:border-[#d4ff00]/40 transition"
-            />
+            <p className="text-xs text-[#555550]">Si Temu cerró la sesión, vuelve a conectar:</p>
+            {err && <p className="text-xs text-red-400">{err}</p>}
+            {status && <p className="text-xs text-[#888880]">{status}</p>}
             <button
-              onClick={saveTelegram}
-              disabled={savingTg}
-              className="px-4 py-2 rounded-xl bg-[#d4ff00] text-black text-xs font-bold hover:bg-[#c8f000] disabled:opacity-40 transition shrink-0"
+              onClick={connectViaExtension}
+              disabled={connecting || extAvailable === null}
+              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-white/[0.08] text-xs text-[#888880] hover:text-[#f2f2ef] hover:border-white/[0.14] disabled:opacity-40 transition"
             >
-              {tgSaved ? '✓ Guardado' : savingTg ? '…' : 'Guardar'}
+              {connecting ? <RefreshCcw className="w-3.5 h-3.5 animate-spin" /> : <RefreshCcw className="w-3.5 h-3.5" />}
+              {connecting ? (status || 'Reconectando…') : 'Reconectar via Lamine Hub'}
             </button>
           </div>
-          {temu.telegram_chat_id && (
-            <p className="text-[10px] text-green-400">Telegram activo: {temu.telegram_chat_id}</p>
-          )}
-        </div>
+        )}
+
+        {telegramSection}
       </div>
     );
   }
 
   return (
     <div className="space-y-6 max-w-lg">
-      {/* Header */}
       <div>
         <h2 className="text-base font-bold text-[#f2f2ef]">Conectar cuenta de Temu</h2>
         <p className="text-xs text-[#888880] mt-1">
-          Introduce tus datos de Temu. La app inicia sesión automáticamente y guarda tu sesión para comprar en tu nombre.
+          La conexión se realiza a través de la extensión Lamine Hub — no se guardan contraseñas.
+          La extensión captura tu sesión directamente del navegador.
         </p>
       </div>
 
-      {/* Form */}
-      <div className="space-y-3">
-        <div>
-          <label className="block text-xs font-medium text-[#888880] mb-1.5">Email de Temu</label>
-          <input
-            value={email}
-            onChange={e => setEmail(e.target.value)}
-            placeholder="tu@email.com"
-            type="email"
-            autoComplete="email"
-            className="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-3 text-sm text-[#f2f2ef] placeholder-[#444] focus:outline-none focus:border-[#d4ff00]/40 transition"
-          />
+      {extAvailable === null && (
+        <div className="flex items-center gap-2 p-4 rounded-xl bg-white/[0.03] border border-white/[0.06]">
+          <RefreshCcw className="w-3.5 h-3.5 text-[#888880] animate-spin" />
+          <p className="text-xs text-[#888880]">Detectando extensión Lamine Hub…</p>
         </div>
-        <div>
-          <label className="block text-xs font-medium text-[#888880] mb-1.5">Contraseña de Temu</label>
-          <input
-            value={password}
-            onChange={e => setPassword(e.target.value)}
-            placeholder="••••••••"
-            type="password"
-            autoComplete="current-password"
-            className="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-3 text-sm text-[#f2f2ef] placeholder-[#444] focus:outline-none focus:border-[#d4ff00]/40 transition"
-          />
+      )}
+
+      {extAvailable === false && (
+        <div className="flex items-start gap-3 p-4 rounded-xl bg-amber-500/10 border border-amber-500/20">
+          <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-xs font-semibold text-amber-400">Extensión no detectada</p>
+            <p className="text-[10px] text-[#888880] mt-0.5">
+              Instala la extensión Lamine Hub en Chrome y vuelve a cargar esta página.
+              La extensión captura las cookies de tu sesión de Temu sin guardar contraseñas.
+            </p>
+          </div>
         </div>
+      )}
 
-        {err && (
-          <div className="flex items-start gap-2 p-3 rounded-xl bg-red-500/10 border border-red-500/20">
-            <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />
-            <p className="text-xs text-red-400">{err}</p>
+      {extAvailable === true && (
+        <div className="space-y-3">
+          {err && (
+            <div className="flex items-start gap-2 p-3 rounded-xl bg-red-500/10 border border-red-500/20">
+              <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />
+              <p className="text-xs text-red-400">{err}</p>
+            </div>
+          )}
+          {status && !err && (
+            <div className="flex items-center gap-2 p-3 rounded-xl bg-white/[0.03] border border-white/[0.07]">
+              <RefreshCcw className="w-3.5 h-3.5 text-[#888880] animate-spin shrink-0" />
+              <p className="text-xs text-[#888880]">{status}</p>
+            </div>
+          )}
+          <button
+            onClick={connectViaExtension}
+            disabled={connecting}
+            className="w-full py-3 rounded-xl bg-[#d4ff00] text-black text-sm font-bold hover:bg-[#c8f000] disabled:opacity-40 transition"
+          >
+            {connecting ? 'Conectando…' : 'Conectar cuenta de Temu'}
+          </button>
+          <div className="p-3 bg-white/[0.02] border border-white/[0.06] rounded-xl">
+            <p className="text-[10px] text-[#555550] leading-relaxed">
+              <span className="text-[#888880]">Sin contraseñas.</span> La extensión abrirá Temu en una nueva pestaña.
+              Inicia sesión normalmente y la extensión capturará tu sesión automáticamente.
+            </p>
           </div>
-        )}
+        </div>
+      )}
 
-        {status && !err && (
-          <div className="flex items-center gap-2 p-3 rounded-xl bg-white/[0.03] border border-white/[0.07]">
-            <RefreshCcw className="w-3.5 h-3.5 text-[#888880] animate-spin shrink-0" />
-            <p className="text-xs text-[#888880]">{status}</p>
-          </div>
-        )}
-
-        <button
-          onClick={connect}
-          disabled={connecting || !email.trim() || !password.trim()}
-          className="w-full py-3 rounded-xl bg-[#d4ff00] text-black text-sm font-bold hover:bg-[#c8f000] disabled:opacity-40 transition"
-        >
-          {connecting ? 'Conectando con Temu…' : 'Conectar cuenta de Temu'}
-        </button>
-      </div>
-
-      {/* Security note */}
-      <div className="p-4 bg-white/[0.02] border border-white/[0.06] rounded-xl space-y-1.5">
-        <p className="text-[11px] font-semibold text-[#888880]">Seguridad</p>
-        <p className="text-[10px] text-[#555550] leading-relaxed">
-          La contraseña <span className="text-[#888880]">no se almacena</span>. Se usa una vez para iniciar sesión en Temu y se descarta.
-          Solo se guarda la sesión encriptada (equivalente a las cookies que usaría tu navegador).
-        </p>
-      </div>
+      {telegramSection}
     </div>
   );
 }

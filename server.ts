@@ -7508,12 +7508,13 @@ REGLAS ABSOLUTAS:
   // ── Guardar Telegram chat ID ──────────────────────────────────────────────────
   app.put("/api/dropship/telegram", requireLicense as any, async (req: AuthRequest, res) => {
     const uid = req.user!.id;
-    const { chat_id } = req.body;
+    const { chat_id, telegram_chat_id } = req.body;
+    const chatIdValue = chat_id || telegram_chat_id || "";
     await pool.query(
       `INSERT INTO temu_credentials(user_id, cookies_enc, telegram_chat_id, updated_at)
        VALUES($1,'',NULLIF($2,''),NOW())
        ON CONFLICT(user_id) DO UPDATE SET telegram_chat_id=NULLIF($2,''), updated_at=NOW()`,
-      [uid, chat_id || ""]
+      [uid, chatIdValue]
     );
     res.json({ ok: true });
   });
