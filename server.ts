@@ -7522,11 +7522,17 @@ REGLAS ABSOLUTAS:
 
   app.put("/api/dropship/orders/:id/temu-order", requireLicense as any, async (req: AuthRequest, res) => {
     const uid = req.user!.id;
-    const { temu_order_id } = req.body;
+    const { temu_order_id, product_id } = req.body;
+    // Accepts temu_order_id (string) and/or product_id (int) — both optional
+    const updates: string[] = ["updated_at=NOW()"];
+    const vals: any[] = [];
+    let idx = 1;
+    if (temu_order_id !== undefined) { updates.push(`temu_order_id=$${idx++}`); vals.push(temu_order_id || null); }
+    if (product_id !== undefined) { updates.push(`product_id=$${idx++}`); vals.push(product_id ? parseInt(product_id) : null); }
+    vals.push(req.params.id, uid);
     const r = await pool.query(
-      `UPDATE dropship_orders SET temu_order_id=$1, updated_at=NOW()
-       WHERE id=$2 AND user_id=$3 RETURNING id`,
-      [temu_order_id || null, req.params.id, uid]
+      `UPDATE dropship_orders SET ${updates.join(",")} WHERE id=$${idx++} AND user_id=$${idx} RETURNING id`,
+      vals
     );
     if (!r.rows[0]) return res.status(404).json({ error: "Pedido no encontrado" });
     res.json({ ok: true });
@@ -7555,24 +7561,21 @@ REGLAS ABSOLUTAS:
     }
   });
 
-  // ── Escanear ventas de Vinted ─────────────────────────────────────────────────
-  // Llama a la API de Vinted para detectar ítems vendidos nuevos y crearlos en dropship_orders.
-  app.post("/api/dropship/scan/:accountId", requireLicense as any, async (req: AuthRequest, res) => {
-    const uid = req.user!.id;
-    const accountId = parseInt(req.params.accountId);
-
+  // ── Helpers de scan ───────────────────────────────────────────────────────────
+  // Extrae ítems vendidos de la API de Vinted y los inserta en dropship_orders.
+  // Retorna { newOrders, totalSold, error? }
+  async function scanVintedAccountForDropship(userId: number, accountId: number) {
     const accRes = await pool.query(
       "SELECT COALESCE(session_cookie, cookie) as cookie, domain, username, vinted_id FROM vinted_accounts WHERE id=$1 AND user_id=$2 AND is_active=TRUE",
-      [accountId, uid]
+      [accountId, userId]
     );
-    if (!accRes.rows[0]) return res.status(404).json({ error: "Cuenta Vinted no encontrada" });
+    if (!accRes.rows[0]) return { newOrders: 0, totalSold: 0, error: "Cuenta no encontrada" };
     const { cookie, domain: dom, username, vinted_id } = accRes.rows[0];
-    if (!cookie) return res.status(400).json({ error: "Esta cuenta no tiene cookie de sesión. Ve a Cuentas y sincroniza la cuenta." });
+    if (!cookie) return { newOrders: 0, totalSold: 0, error: "Sin cookie de sesión. Ve a Cuentas y sincroniza." };
 
     const d = dom || "es";
     const { headers } = getVintedHeaders(cookie, d);
 
-    // 1. Get current user's Vinted ID (use stored one if available)
     let vintedUserId: string = vinted_id || "";
     if (!vintedUserId) {
       try {
@@ -7583,41 +7586,92 @@ REGLAS ABSOLUTAS:
         if (meRes.status === 200) vintedUserId = meRes.data?.user?.id?.toString() || "";
       } catch { /* ignore */ }
     }
-    if (!vintedUserId) return res.status(400).json({ error: "No se pudo obtener el ID de Vinted. La sesión puede estar caducada." });
+    if (!vintedUserId) return { newOrders: 0, totalSold: 0, error: "Sesión caducada. Ve a Cuentas y vuelve a sincronizar." };
 
-    // 2. Get sold items from user's wardrobe
-    // Vinted API: /api/v2/users/{id}/items?status[]=Sold
-    let newOrders = 0;
+    // Intentamos varios endpoints para obtener ítems vendidos (Vinted usa status int 0=sold/inactive, 1=active)
+    let items: any[] = [];
+
+    // Opción 1: wardrobe endpoint — devuelve todos los ítems con campo `status`
     try {
-      const soldRes = await axiosVinted.get(
-        `https://www.vinted.${d}/api/v2/users/${vintedUserId}/items?page=1&per_page=40&order=newest_first&status[]=Sold`,
+      const r = await axiosVinted.get(
+        `https://www.vinted.${d}/api/v2/wardrobe/${vintedUserId}/items?page=1&per_page=96&order=newest_first`,
         { headers, timeout: 12000, validateStatus: () => true }
       );
-      if (soldRes.status !== 200) {
-        return res.status(502).json({ error: `Vinted API devolvió ${soldRes.status} al obtener ventas` });
+      if (r.status === 200) {
+        const all: any[] = r.data?.items || r.data?.item_list || [];
+        // status 0 = sold/inactive en Vinted; status 1 = active
+        const sold = all.filter((i: any) => i.status === 0 || i.status === 3 || i.status === "sold");
+        if (sold.length > 0) items = sold;
       }
-      const items: any[] = soldRes.data?.items || soldRes.data?.item_list || [];
-      for (const item of items) {
-        // Each sold item = a sale/order. Use item_id as order reference.
-        const orderId = `item-${item.id}`;
-        const itemTitle = item.title || item.photos?.[0]?.url || null;
-        const amount = item.price?.amount || item.price || null;
+    } catch { /* try next */ }
 
-        const ins = await pool.query(
-          `INSERT INTO dropship_orders
-           (user_id,vinted_order_id,vinted_item_title,vinted_amount,vinted_sale_data)
-           VALUES($1,$2,$3,$4,$5)
-           ON CONFLICT(user_id,vinted_order_id) DO NOTHING
-           RETURNING id`,
-          [uid, orderId, itemTitle, amount, JSON.stringify(item)]
+    // Opción 2: endpoint de ítems con status_ids[]=0 (sold)
+    if (items.length === 0) {
+      try {
+        const r = await axiosVinted.get(
+          `https://www.vinted.${d}/api/v2/users/${vintedUserId}/items?page=1&per_page=40&order=newest_first&status_ids[]=0`,
+          { headers, timeout: 12000, validateStatus: () => true }
         );
-        if (ins.rows[0]) newOrders++;
-      }
-    } catch (e: any) {
-      return res.status(500).json({ error: e.message });
+        if (r.status === 200) items = r.data?.items || r.data?.item_list || [];
+      } catch { /* ignore */ }
     }
 
-    res.json({ ok: true, new_orders: newOrders, account: username });
+    // Opción 3: string status filter
+    if (items.length === 0) {
+      try {
+        const r = await axiosVinted.get(
+          `https://www.vinted.${d}/api/v2/users/${vintedUserId}/items?page=1&per_page=40&order=newest_first&status[]=Sold`,
+          { headers, timeout: 12000, validateStatus: () => true }
+        );
+        if (r.status === 200) items = r.data?.items || r.data?.item_list || [];
+      } catch { /* ignore */ }
+    }
+
+    let newOrders = 0;
+    for (const item of items) {
+      const orderId = `item-${item.id}`;
+      const itemTitle = item.title || null;
+      const amount = item.price?.amount != null ? item.price.amount : (typeof item.price === "number" ? item.price : null);
+      const ins = await pool.query(
+        `INSERT INTO dropship_orders (user_id,vinted_order_id,vinted_item_title,vinted_amount,vinted_sale_data)
+         VALUES($1,$2,$3,$4,$5)
+         ON CONFLICT(user_id,vinted_order_id) DO NOTHING RETURNING id`,
+        [userId, orderId, itemTitle, amount, JSON.stringify(item)]
+      );
+      if (ins.rows[0]) newOrders++;
+    }
+
+    return { newOrders, totalSold: items.length, account: username };
+  }
+
+  // ── Escanear ventas de Vinted (cuenta individual) ──────────────────────────
+  app.post("/api/dropship/scan/:accountId", requireLicense as any, async (req: AuthRequest, res) => {
+    try {
+      const result = await scanVintedAccountForDropship(req.user!.id, parseInt(req.params.accountId));
+      if (result.error) return res.status(400).json({ error: result.error });
+      res.json({ ok: true, ...result });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── Escanear todas las cuentas Vinted del usuario ──────────────────────────
+  app.post("/api/dropship/scan-all", requireLicense as any, async (req: AuthRequest, res) => {
+    const uid = req.user!.id;
+    const accs = await pool.query(
+      "SELECT id FROM vinted_accounts WHERE user_id=$1 AND is_active=TRUE",
+      [uid]
+    );
+    let totalNew = 0;
+    const results: any[] = [];
+    for (const acc of accs.rows) {
+      try {
+        const r = await scanVintedAccountForDropship(uid, acc.id);
+        totalNew += r.newOrders || 0;
+        results.push(r);
+      } catch { /* continue with next account */ }
+    }
+    res.json({ ok: true, new_orders: totalNew, accounts: results });
   });
 
   // ── Trigger compra Temu (via BullMQ) ─────────────────────────────────────────
@@ -7661,6 +7715,30 @@ REGLAS ABSOLUTAS:
 
   startLenguetaWorker();
   startDropshipWorker();
+
+  // Auto-scan: cada 10 minutos escanea ventas de Vinted para usuarios con dropshipping activo
+  setInterval(async () => {
+    try {
+      // Solo usuarios con al menos un producto en dropship (señal de que usan la funcionalidad)
+      const usersRes = await pool.query(
+        `SELECT DISTINCT user_id FROM dropship_products WHERE is_active=TRUE`
+      );
+      for (const row of usersRes.rows) {
+        const accs = await pool.query(
+          "SELECT id FROM vinted_accounts WHERE user_id=$1 AND is_active=TRUE",
+          [row.user_id]
+        );
+        for (const acc of accs.rows) {
+          try {
+            const r = await scanVintedAccountForDropship(row.user_id, acc.id);
+            if (r.newOrders > 0) console.log(`[dropship-autoscan] user=${row.user_id} acc=${acc.id} nuevos=${r.newOrders}`);
+          } catch { /* ignore per-account errors */ }
+        }
+      }
+    } catch (e) {
+      console.error("[dropship-autoscan] error:", e);
+    }
+  }, 10 * 60 * 1000); // cada 10 minutos
 }
 
 // ── SSE Ops Terminal ─────────────────────────────────────────────────────────
