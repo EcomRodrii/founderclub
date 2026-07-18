@@ -389,118 +389,148 @@ function ProductModal({ token, product, onClose, onSaved }: {
 
 // ── Temu credentials tab ──────────────────────────────────────────────────────
 function TemuTab({ token, temu, onSaved }: { token: string; temu: TemuCreds | null; onSaved: () => void }) {
-  const [cookies, setCookies] = useState('');
   const [email, setEmail] = useState('');
-  const [saving, setSaving] = useState(false);
+  const [password, setPassword] = useState('');
+  const [connecting, setConnecting] = useState(false);
   const [err, setErr] = useState('');
-  const [ok, setOk] = useState(false);
+  const [status, setStatus] = useState('');
 
-  const save = async () => {
-    if (!cookies.trim()) { setErr('Pega las cookies de Temu'); return; }
-    setSaving(true); setErr(''); setOk(false);
-    const r = await api(token, '/api/dropship/temu-credentials', {
+  const connect = async () => {
+    if (!email.trim() || !password.trim()) { setErr('Introduce email y contraseña'); return; }
+    setConnecting(true); setErr(''); setStatus('Abriendo Temu… esto puede tardar 20-30 segundos');
+    const r = await api(token, '/api/dropship/temu-login', {
       method: 'POST',
-      body: JSON.stringify({ cookies_json: cookies.trim(), email: email.trim() || null }),
+      body: JSON.stringify({ email: email.trim(), password }),
     });
-    if (r.ok) { setOk(true); setCookies(''); onSaved(); }
-    else { const d = await r.json(); setErr(d.error || 'Error'); }
-    setSaving(false);
+    const d = await r.json();
+    setConnecting(false);
+    if (r.ok) {
+      setStatus('');
+      setPassword('');
+      onSaved();
+    } else {
+      setErr(d.error || 'Error al conectar');
+      setStatus('');
+    }
   };
 
-  return (
-    <div className="space-y-5 max-w-lg">
-      {/* Status */}
-      <div className={`flex items-center gap-3 p-4 rounded-2xl border ${
-        temu?.exists
-          ? 'bg-green-500/10 border-green-500/20'
-          : 'bg-amber-500/10 border-amber-500/20'
-      }`}>
-        <div className={`w-2 h-2 rounded-full ${temu?.exists ? 'bg-green-400' : 'bg-amber-400'}`} />
-        <div>
-          <p className={`text-sm font-semibold ${temu?.exists ? 'text-green-400' : 'text-amber-400'}`}>
-            {temu?.exists ? 'Cuenta Temu conectada' : 'Temu no configurado'}
-          </p>
-          {temu?.exists && temu.email && (
-            <p className="text-xs text-[#888880] mt-0.5">{temu.email}</p>
-          )}
-          {!temu?.exists && (
-            <p className="text-xs text-[#888880] mt-0.5">
-              Sin Temu conectado, tendrás que comprar manualmente abriendo el enlace
+  if (temu?.exists) {
+    return (
+      <div className="space-y-5 max-w-lg">
+        {/* Connected state */}
+        <div className="flex items-center gap-4 p-5 rounded-2xl bg-green-500/10 border border-green-500/20">
+          <div className="w-10 h-10 rounded-xl bg-green-500/20 flex items-center justify-center">
+            <CheckCircle2 className="w-5 h-5 text-green-400" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-bold text-green-400">Cuenta Temu conectada</p>
+            {temu.email && <p className="text-xs text-[#888880] mt-0.5 truncate">{temu.email}</p>}
+            <p className="text-[10px] text-[#555550] mt-0.5">
+              La app puede añadir productos al carrito de Temu automáticamente
             </p>
-          )}
+          </div>
+        </div>
+
+        {/* Reconnect */}
+        <div className="space-y-3">
+          <p className="text-xs text-[#555550]">
+            Si Temu ha cerrado tu sesión, vuelve a conectar con tus credenciales:
+          </p>
+          <div className="space-y-2">
+            <input
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              placeholder="Email de Temu"
+              type="email"
+              className="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-3 py-2.5 text-sm text-[#f2f2ef] placeholder-[#444] focus:outline-none focus:border-[#d4ff00]/40 transition"
+            />
+            <input
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              placeholder="Contraseña de Temu"
+              type="password"
+              className="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-3 py-2.5 text-sm text-[#f2f2ef] placeholder-[#444] focus:outline-none focus:border-[#d4ff00]/40 transition"
+            />
+          </div>
+          {err && <p className="text-xs text-red-400">{err}</p>}
+          {status && <p className="text-xs text-[#888880]">{status}</p>}
+          <button
+            onClick={connect}
+            disabled={connecting || !email.trim() || !password.trim()}
+            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-white/[0.08] text-xs text-[#888880] hover:text-[#f2f2ef] hover:border-white/[0.14] disabled:opacity-40 transition"
+          >
+            {connecting ? <RefreshCcw className="w-3.5 h-3.5 animate-spin" /> : <RefreshCcw className="w-3.5 h-3.5" />}
+            {connecting ? status || 'Conectando…' : 'Reconectar cuenta Temu'}
+          </button>
         </div>
       </div>
+    );
+  }
 
-      {/* Instructions */}
-      <div className="space-y-3">
-        <h3 className="text-sm font-bold text-[#f2f2ef]">
-          {temu?.exists ? 'Actualizar cookies de Temu' : 'Conectar tu cuenta de Temu'}
-        </h3>
-
-        <div className="space-y-2">
-          {[
-            'Abre temu.com en Chrome y entra en tu cuenta de Temu',
-            'Pulsa F12 para abrir las herramientas de desarrollador',
-            'Ve a la pestaña "Application" (o "Aplicación")',
-            'En la columna izquierda: Cookies → https://www.temu.com',
-            'Selecciona todas las cookies, cópiolas y pégalas abajo',
-          ].map((step, i) => (
-            <div key={i} className="flex items-start gap-3">
-              <span className="shrink-0 w-5 h-5 rounded-full bg-white/[0.06] text-[10px] font-bold text-[#888880] flex items-center justify-center mt-0.5">
-                {i + 1}
-              </span>
-              <p className="text-xs text-[#888880] leading-relaxed">{step}</p>
-            </div>
-          ))}
-        </div>
-
-        <div className="p-3 bg-white/[0.02] border border-white/[0.06] rounded-xl text-[10px] text-[#555550] flex items-start gap-2">
-          <Info className="w-3 h-3 shrink-0 mt-0.5 text-[#444440]" />
-          <span>
-            Las cookies se guardan encriptadas y solo sirven para que el servidor abra Temu en tu nombre.
-            Si Temu cierra tu sesión, tendrás que volver a pegar las cookies.
-          </span>
-        </div>
+  return (
+    <div className="space-y-6 max-w-lg">
+      {/* Header */}
+      <div>
+        <h2 className="text-base font-bold text-[#f2f2ef]">Conectar cuenta de Temu</h2>
+        <p className="text-xs text-[#888880] mt-1">
+          Introduce tus datos de Temu. La app inicia sesión automáticamente y guarda tu sesión para comprar en tu nombre.
+        </p>
       </div>
 
       {/* Form */}
       <div className="space-y-3">
         <div>
-          <label className="block text-xs font-medium text-[#888880] mb-1">
-            Cookies de Temu <span className="text-red-400">*</span>
-          </label>
-          <textarea
-            value={cookies}
-            onChange={e => setCookies(e.target.value)}
-            placeholder="Pega aquí las cookies copiadas de las herramientas de desarrollador de Chrome…"
-            rows={5}
-            className="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-3 py-2 text-xs text-[#f2f2ef] placeholder-[#444] focus:outline-none focus:border-[#d4ff00]/40 transition font-mono resize-none"
-          />
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-[#888880] mb-1">Email de Temu (opcional)</label>
+          <label className="block text-xs font-medium text-[#888880] mb-1.5">Email de Temu</label>
           <input
             value={email}
             onChange={e => setEmail(e.target.value)}
             placeholder="tu@email.com"
-            className="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-3 py-2 text-xs text-[#f2f2ef] placeholder-[#444] focus:outline-none focus:border-[#d4ff00]/40 transition"
+            type="email"
+            autoComplete="email"
+            className="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-3 text-sm text-[#f2f2ef] placeholder-[#444] focus:outline-none focus:border-[#d4ff00]/40 transition"
           />
         </div>
-        {err && <p className="text-xs text-red-400">{err}</p>}
-        {ok && <p className="text-xs text-green-400">Cuenta de Temu guardada correctamente</p>}
+        <div>
+          <label className="block text-xs font-medium text-[#888880] mb-1.5">Contraseña de Temu</label>
+          <input
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            placeholder="••••••••"
+            type="password"
+            autoComplete="current-password"
+            className="w-full bg-white/[0.04] border border-white/[0.07] rounded-xl px-4 py-3 text-sm text-[#f2f2ef] placeholder-[#444] focus:outline-none focus:border-[#d4ff00]/40 transition"
+          />
+        </div>
+
+        {err && (
+          <div className="flex items-start gap-2 p-3 rounded-xl bg-red-500/10 border border-red-500/20">
+            <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />
+            <p className="text-xs text-red-400">{err}</p>
+          </div>
+        )}
+
+        {status && !err && (
+          <div className="flex items-center gap-2 p-3 rounded-xl bg-white/[0.03] border border-white/[0.07]">
+            <RefreshCcw className="w-3.5 h-3.5 text-[#888880] animate-spin shrink-0" />
+            <p className="text-xs text-[#888880]">{status}</p>
+          </div>
+        )}
+
         <button
-          onClick={save}
-          disabled={saving || !cookies.trim()}
-          className="w-full py-2.5 rounded-xl bg-[#d4ff00] text-black text-sm font-bold hover:bg-[#c8f000] disabled:opacity-40 transition"
+          onClick={connect}
+          disabled={connecting || !email.trim() || !password.trim()}
+          className="w-full py-3 rounded-xl bg-[#d4ff00] text-black text-sm font-bold hover:bg-[#c8f000] disabled:opacity-40 transition"
         >
-          {saving ? 'Guardando…' : 'Guardar cookies de Temu'}
+          {connecting ? 'Conectando con Temu…' : 'Conectar cuenta de Temu'}
         </button>
       </div>
 
-      <div className="p-3 bg-white/[0.02] border border-white/[0.06] rounded-xl">
-        <p className="text-[10px] text-[#555550]">
-          <span className="text-[#888880] font-semibold">¿Sin cuenta Temu?</span> Puedes usar la app igual — cuando detecte una venta en Vinted,
-          te mostrará el enlace directo al producto en Temu para que lo compres tú mismo.
+      {/* Security note */}
+      <div className="p-4 bg-white/[0.02] border border-white/[0.06] rounded-xl space-y-1.5">
+        <p className="text-[11px] font-semibold text-[#888880]">Seguridad</p>
+        <p className="text-[10px] text-[#555550] leading-relaxed">
+          La contraseña <span className="text-[#888880]">no se almacena</span>. Se usa una vez para iniciar sesión en Temu y se descarta.
+          Solo se guarda la sesión encriptada (equivalente a las cookies que usaría tu navegador).
         </p>
       </div>
     </div>

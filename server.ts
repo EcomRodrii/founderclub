@@ -20,6 +20,7 @@ import { lenguetaQueue } from "./queues/lenguetaQueue.js";
 import { startLenguetaWorker } from "./queues/lenguetaWorker.js";
 import { dropshipQueue } from "./queues/dropshipQueue.js";
 import { startDropshipWorker } from "./queues/dropshipWorker.js";
+import { loginToTemu } from "./temu-login.js";
 import * as otplib from "otplib";
 import QRCode from "qrcode";
 
@@ -7488,6 +7489,33 @@ REGLAS ABSOLUTAS:
       [uid, enc, email || null]
     );
     res.json({ ok: true });
+  });
+
+  // ── Login automático en Temu con email+contraseña ─────────────────────────
+  app.post("/api/dropship/temu-login", requireLicense as any, async (req: AuthRequest, res) => {
+    const uid = req.user!.id;
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ error: "email y password requeridos" });
+
+    const result = await loginToTemu(email, password);
+
+    if (!result.success) {
+      return res.status(result.needsOtp ? 422 : 400).json({
+        error: result.error,
+        needsOtp: result.needsOtp || false,
+      });
+    }
+
+    // Guardar cookies encriptadas
+    const enc = ctrlEncrypt(result.cookiesJson!);
+    await pool.query(
+      `INSERT INTO temu_credentials(user_id, cookies_enc, email, updated_at)
+       VALUES($1,$2,$3,NOW())
+       ON CONFLICT(user_id) DO UPDATE SET cookies_enc=$2, email=$3, updated_at=NOW()`,
+      [uid, enc, email]
+    );
+
+    res.json({ ok: true, email });
   });
 
   // ── Pedidos ───────────────────────────────────────────────────────────────────
