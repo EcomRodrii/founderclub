@@ -78,6 +78,24 @@ async function launchBrowser(): Promise<{ browser: Browser; proxy: ProxyConfig |
 
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
 
+// ── Proxy auth via CDP Fetch (page.authenticate only handles web 401, not 407) ─
+async function setupProxyAuth(page: Page, proxy: ProxyConfig): Promise<void> {
+  if (!proxy.username || !proxy.password) return;
+  const client = await page.createCDPSession();
+  // handleAuthRequests: true → only authRequired events fire (not all requests)
+  await client.send("Fetch.enable" as any, { handleAuthRequests: true });
+  client.on("Fetch.authRequired", async (event: any) => {
+    await client.send("Fetch.continueWithAuth" as any, {
+      requestId: event.requestId,
+      authChallengeResponse: {
+        response: "ProvideCredentials",
+        username: proxy.username!,
+        password: proxy.password!,
+      },
+    });
+  });
+}
+
 // ── Anti-bot evasion injected before every page load ──────────────────────────
 async function setupPage(page: Page) {
   await page.evaluateOnNewDocument(() => {
@@ -159,7 +177,7 @@ async function findEmailInputSelector(page: Page): Promise<string | null> {
 async function findPasswordInputSelector(page: Page): Promise<string | null> {
   return page.evaluate(() => {
     const inputs = Array.from(document.querySelectorAll('input[type="password"]'));
-    const visible = inputs.filter(i => i.offsetParent !== null);
+    const visible = inputs.filter(i => (i as HTMLElement).offsetParent !== null);
     if (!visible.length) return null;
     const el = visible[0] as HTMLInputElement;
     if (el.id) return `#${CSS.escape(el.id)}`;
@@ -239,10 +257,8 @@ export async function loginToTemu(email: string, password: string): Promise<Temu
 
     const page = await browser.newPage();
 
-    // Authenticate proxy if credentials are set (iProyal requires auth)
-    if (proxy?.username && proxy?.password) {
-      await page.authenticate({ username: proxy.username, password: proxy.password });
-    }
+    // Handle proxy 407 auth via CDP Fetch (page.authenticate only handles 401)
+    if (proxy) await setupProxyAuth(page, proxy);
 
     await setupPage(page);
 
