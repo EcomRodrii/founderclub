@@ -7266,11 +7266,20 @@ REGLAS ABSOLUTAS:
 
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
-    app.use(vite.middlewares);
+    app.use((req, res, next) => {
+      if (req.path.startsWith("/api/")) return next();
+      vite.middlewares(req, res, next);
+    });
   } else {
     const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (_req, res) => res.sendFile(path.join(distPath, "index.html")));
+    app.use((req, res, next) => {
+      if (req.path.startsWith("/api/")) return next();
+      express.static(distPath)(req, res, next);
+    });
+    app.get("*", (req, res, next) => {
+      if (req.path.startsWith("/api/")) return next();
+      res.sendFile(path.join(distPath, "index.html"));
+    });
   }
 
   // ── Política de privacidad (requerida por Chrome Web Store) ─────────────────
@@ -7547,60 +7556,60 @@ REGLAS ABSOLUTAS:
   });
 
   // ── Escanear ventas de Vinted ─────────────────────────────────────────────────
-  // Llama a la API de Vinted para detectar pedidos nuevos y crearlos en dropship_orders.
+  // Llama a la API de Vinted para detectar ítems vendidos nuevos y crearlos en dropship_orders.
   app.post("/api/dropship/scan/:accountId", requireLicense as any, async (req: AuthRequest, res) => {
     const uid = req.user!.id;
     const accountId = parseInt(req.params.accountId);
 
     const accRes = await pool.query(
-      "SELECT cookie, domain, username FROM vinted_accounts WHERE id=$1 AND user_id=$2 AND is_active=TRUE",
+      "SELECT COALESCE(session_cookie, cookie) as cookie, domain, username, vinted_id FROM vinted_accounts WHERE id=$1 AND user_id=$2 AND is_active=TRUE",
       [accountId, uid]
     );
     if (!accRes.rows[0]) return res.status(404).json({ error: "Cuenta Vinted no encontrada" });
-    const { cookie, domain: dom, username } = accRes.rows[0];
-    if (!cookie) return res.status(400).json({ error: "Esta cuenta no tiene cookie de sesión" });
+    const { cookie, domain: dom, username, vinted_id } = accRes.rows[0];
+    if (!cookie) return res.status(400).json({ error: "Esta cuenta no tiene cookie de sesión. Ve a Cuentas y sincroniza la cuenta." });
 
-    // Build Vinted API headers
-    const { headers } = getVintedHeaders(cookie, dom || "es");
+    const d = dom || "es";
+    const { headers } = getVintedHeaders(cookie, d);
 
-    // 1. Get current user's Vinted ID
-    let vintedUserId: string | null = null;
-    try {
-      const meRes = await axiosVinted.get(
-        `https://www.vinted.${dom || "es"}/api/v2/users/current`,
-        { headers, timeout: 10000, validateStatus: () => true }
-      );
-      if (meRes.status === 200) vintedUserId = meRes.data?.user?.id?.toString() || null;
-    } catch { /* ignore */ }
+    // 1. Get current user's Vinted ID (use stored one if available)
+    let vintedUserId: string = vinted_id || "";
+    if (!vintedUserId) {
+      try {
+        const meRes = await axiosVinted.get(
+          `https://www.vinted.${d}/api/v2/users/current`,
+          { headers, timeout: 10000, validateStatus: () => true }
+        );
+        if (meRes.status === 200) vintedUserId = meRes.data?.user?.id?.toString() || "";
+      } catch { /* ignore */ }
+    }
+    if (!vintedUserId) return res.status(400).json({ error: "No se pudo obtener el ID de Vinted. La sesión puede estar caducada." });
 
-    // 2. Get recent transactions (sales)
+    // 2. Get sold items from user's wardrobe
+    // Vinted API: /api/v2/users/{id}/items?status[]=Sold
     let newOrders = 0;
     try {
-      const txRes = await axiosVinted.get(
-        `https://www.vinted.${dom || "es"}/api/v2/transactions?page=1&per_page=40`,
+      const soldRes = await axiosVinted.get(
+        `https://www.vinted.${d}/api/v2/users/${vintedUserId}/items?page=1&per_page=40&order=newest_first&status[]=Sold`,
         { headers, timeout: 12000, validateStatus: () => true }
       );
-      if (txRes.status !== 200) {
-        return res.status(502).json({ error: `Vinted API devolvió ${txRes.status}` });
+      if (soldRes.status !== 200) {
+        return res.status(502).json({ error: `Vinted API devolvió ${soldRes.status} al obtener ventas` });
       }
-      const transactions: any[] = txRes.data?.transactions || [];
-      for (const tx of transactions) {
-        // Filter: only sold (as seller)
-        if (tx.type !== "sold" && tx.transaction_type !== "sold") continue;
-        const orderId = String(tx.id || tx.transaction_id);
-        const buyerName = tx.buyer?.login || tx.buyer_login || null;
-        const itemTitle = tx.item?.title || tx.item_title || null;
-        const amount = tx.amount?.amount || tx.total_amount || null;
+      const items: any[] = soldRes.data?.items || soldRes.data?.item_list || [];
+      for (const item of items) {
+        // Each sold item = a sale/order. Use item_id as order reference.
+        const orderId = `item-${item.id}`;
+        const itemTitle = item.title || item.photos?.[0]?.url || null;
+        const amount = item.price?.amount || item.price || null;
 
-        // Insert if not exists
-        const addrEnc = null; // address not available from transaction API
         const ins = await pool.query(
           `INSERT INTO dropship_orders
-           (user_id,vinted_order_id,buyer_name,vinted_item_title,vinted_amount,vinted_sale_data)
-           VALUES($1,$2,$3,$4,$5,$6)
+           (user_id,vinted_order_id,vinted_item_title,vinted_amount,vinted_sale_data)
+           VALUES($1,$2,$3,$4,$5)
            ON CONFLICT(user_id,vinted_order_id) DO NOTHING
            RETURNING id`,
-          [uid, orderId, buyerName, itemTitle, amount, JSON.stringify(tx)]
+          [uid, orderId, itemTitle, amount, JSON.stringify(item)]
         );
         if (ins.rows[0]) newOrders++;
       }
