@@ -10,7 +10,7 @@ import Sidebar, { MobileTabBar, type Page } from './components/Sidebar';
 // 'photos' = Fantasma — siempre disponible para todos
 // 'academia' = desbloquea todo lo demás
 
-const ALL_PAGES: Page[] = ['dashboard', 'accounts', 'inventory', 'orders', 'profits', 'tongue', 'photos', 'alfombras', 'metadatos', 'titles', 'settings', 'publish', 'diagnostico'];
+const ALL_PAGES: Page[] = ['dashboard', 'accounts', 'inventory', 'orders', 'profits', 'tongue', 'photos', 'alfombras', 'metadatos', 'titles', 'settings', 'publish', 'diagnostico', 'dropship'];
 
 function computeAllowedPages(license: any, isAdmin: boolean): Set<Page> {
   if (isAdmin) return new Set(ALL_PAGES);
@@ -65,6 +65,7 @@ const VintedAutoPublish = lazy(() => import('./components/VintedAutoPublish'));
 // photos
 const ImageUniquifier  = lazy(() => import('./components/ImageUniquifier'));
 const DiagnosticoPage  = lazy(() => import('./components/DiagnosticoPage'));
+const DropshipPage     = lazy(() => import('./components/DropshipPage'));
 
 function ChunkLoading() {
   return (
@@ -287,6 +288,7 @@ function Dashboard({
       case 'metadatos':  return <S><MetadatosEditor /></S>;
       case 'titles':     return <S><TitleGenerator token={token} /></S>;
       case 'diagnostico': return <S><DiagnosticoPage token={token} /></S>;
+      case 'dropship':    return <S><DropshipPage token={token} /></S>;
       case 'settings':   return <SettingsPage token={token} user={user} license={license} onLogout={onLogout} />;
     }
   };

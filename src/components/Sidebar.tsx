@@ -3,13 +3,13 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   LayoutDashboard, Users, Package, ShoppingBag, Settings,
   LogOut, ShieldCheck, Scissors, Ghost, TrendingUp,
-  MoreHorizontal, X, Lock, Send, Layers, Tag, Type, ClipboardList,
+  MoreHorizontal, X, Lock, Send, Layers, Tag, Type, ClipboardList, ArrowLeftRight,
 } from 'lucide-react';
 
 export type Page =
   | 'dashboard' | 'accounts' | 'inventory' | 'orders'
   | 'profits' | 'tongue' | 'photos' | 'alfombras' | 'metadatos' | 'titles' | 'settings' | 'publish'
-  | 'diagnostico';
+  | 'diagnostico' | 'dropship';
 
 interface SidebarProps {
   currentPage: Page;
@@ -36,6 +36,7 @@ const NAV_TOOLS: { id: Page; label: string; icon: React.ReactNode }[] = [
   { id: 'metadatos', label: 'Metadatos',   icon: <Tag     className="w-[18px] h-[18px]" /> },
   { id: 'titles',    label: 'Títulos IA',  icon: <Type    className="w-[18px] h-[18px]" /> },
   { id: 'diagnostico', label: 'Mi diagnóstico', icon: <ClipboardList className="w-[18px] h-[18px]" /> },
+  { id: 'dropship',   label: 'Dropshipping',   icon: <ArrowLeftRight className="w-[18px] h-[18px]" /> },
   { id: 'settings',  label: 'Config',      icon: <Settings className="w-[18px] h-[18px]" /> },
 ];
 
@@ -145,7 +146,8 @@ const MOBILE_MORE: { id: Page; label: string; icon: React.ReactNode }[] = [
   { id: 'alfombras', label: 'Alfombras',  icon: <Layers   className="w-5 h-5" /> },
   { id: 'metadatos', label: 'Metadatos',  icon: <Tag      className="w-5 h-5" /> },
   { id: 'titles',    label: 'Títulos IA', icon: <Type     className="w-5 h-5" /> },
-  { id: 'diagnostico', label: 'Diagnóstico', icon: <ClipboardList className="w-5 h-5" /> },
+  { id: 'diagnostico', label: 'Diagnóstico', icon: <ClipboardList  className="w-5 h-5" /> },
+  { id: 'dropship',   label: 'Dropship',    icon: <ArrowLeftRight className="w-5 h-5" /> },
   { id: 'settings',  label: 'Config',     icon: <Settings className="w-5 h-5" /> },
 ];
 

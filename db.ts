@@ -425,6 +425,47 @@ export async function initDB() {
        ON fleet_jobs (priority DESC, created_at)
        WHERE status = 'queued'`,
     `CREATE INDEX IF NOT EXISTS idx_fleet_jobs_license ON fleet_jobs(license_id)`,
+
+    // ── DROPSHIPPING ──────────────────────────────────────────────────────────────
+    `CREATE TABLE IF NOT EXISTS dropship_products (
+      id           SERIAL PRIMARY KEY,
+      user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      temu_url     TEXT NOT NULL,
+      temu_cost    NUMERIC(10,2),
+      vinted_price NUMERIC(10,2),
+      title        TEXT NOT NULL DEFAULT '',
+      stock        INTEGER DEFAULT 1,
+      notes        TEXT,
+      is_active    BOOLEAN DEFAULT TRUE,
+      created_at   TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS dropship_orders (
+      id                   SERIAL PRIMARY KEY,
+      user_id              INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      product_id           INTEGER REFERENCES dropship_products(id) ON DELETE SET NULL,
+      vinted_order_id      TEXT NOT NULL,
+      buyer_name           TEXT,
+      buyer_address_enc    TEXT,
+      vinted_item_title    TEXT,
+      vinted_amount        NUMERIC(10,2),
+      vinted_sale_data     JSONB DEFAULT '{}',
+      temu_order_id        TEXT,
+      temu_cart_screenshot TEXT,
+      status               TEXT NOT NULL DEFAULT 'pending_purchase'
+        CHECK (status IN ('pending_purchase','purchased_temu','in_transit','received','shipped')),
+      created_at           TIMESTAMPTZ DEFAULT NOW(),
+      updated_at           TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(user_id, vinted_order_id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS temu_credentials (
+      id          SERIAL PRIMARY KEY,
+      user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE UNIQUE,
+      cookies_enc TEXT NOT NULL,
+      email       TEXT,
+      updated_at  TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_dropship_orders_user ON dropship_orders(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_dropship_products_user ON dropship_products(user_id)`,
   ];
   for (const sql of migrations) {
     await pool.query(sql).catch(() => {}); // silently ignore if column already exists

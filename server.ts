@@ -18,6 +18,8 @@ import { pool, initDB } from "./db.js";
 import { buildTonguePrompt, jpegDimsFromBase64, pickGeminiAspect, buildTonguePreamble } from "./geminiUtils.js";
 import { lenguetaQueue } from "./queues/lenguetaQueue.js";
 import { startLenguetaWorker } from "./queues/lenguetaWorker.js";
+import { dropshipQueue } from "./queues/dropshipQueue.js";
+import { startDropshipWorker } from "./queues/dropshipWorker.js";
 import * as otplib from "otplib";
 import QRCode from "qrcode";
 
@@ -7412,10 +7414,244 @@ REGLAS ABSOLUTAS:
   }, 15_000);
 
   // ─────────────────────────────────────────────────────────────────────────────
+  // ── DROPSHIPPING ─────────────────────────────────────────────────────────────
+
+  // ── Productos ────────────────────────────────────────────────────────────────
+  app.get("/api/dropship/products", requireLicense as any, async (req: AuthRequest, res) => {
+    const uid = req.user!.id;
+    const r = await pool.query(
+      "SELECT * FROM dropship_products WHERE user_id=$1 ORDER BY created_at DESC",
+      [uid]
+    );
+    res.json(r.rows);
+  });
+
+  app.post("/api/dropship/products", requireLicense as any, async (req: AuthRequest, res) => {
+    const uid = req.user!.id;
+    const { temu_url, temu_cost, vinted_price, title, stock, notes } = req.body;
+    if (!temu_url || !title) return res.status(400).json({ error: "temu_url y title son obligatorios" });
+    const r = await pool.query(
+      `INSERT INTO dropship_products(user_id,temu_url,temu_cost,vinted_price,title,stock,notes)
+       VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [uid, temu_url, temu_cost || null, vinted_price || null, title, stock ?? 1, notes || null]
+    );
+    res.json(r.rows[0]);
+  });
+
+  app.put("/api/dropship/products/:id", requireLicense as any, async (req: AuthRequest, res) => {
+    const uid = req.user!.id;
+    const { temu_url, temu_cost, vinted_price, title, stock, notes, is_active } = req.body;
+    const r = await pool.query(
+      `UPDATE dropship_products
+       SET temu_url=$1, temu_cost=$2, vinted_price=$3, title=$4, stock=$5, notes=$6, is_active=$7
+       WHERE id=$8 AND user_id=$9 RETURNING *`,
+      [temu_url, temu_cost || null, vinted_price || null, title, stock ?? 1, notes || null,
+       is_active !== false, req.params.id, uid]
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: "Producto no encontrado" });
+    res.json(r.rows[0]);
+  });
+
+  app.delete("/api/dropship/products/:id", requireLicense as any, async (req: AuthRequest, res) => {
+    const uid = req.user!.id;
+    await pool.query("DELETE FROM dropship_products WHERE id=$1 AND user_id=$2", [req.params.id, uid]);
+    res.json({ ok: true });
+  });
+
+  // ── Credenciales Temu ─────────────────────────────────────────────────────────
+  app.get("/api/dropship/temu-credentials", requireLicense as any, async (req: AuthRequest, res) => {
+    const r = await pool.query(
+      "SELECT id, email, updated_at FROM temu_credentials WHERE user_id=$1",
+      [req.user!.id]
+    );
+    res.json({ exists: !!r.rows[0], email: r.rows[0]?.email, updated_at: r.rows[0]?.updated_at });
+  });
+
+  app.post("/api/dropship/temu-credentials", requireLicense as any, async (req: AuthRequest, res) => {
+    const uid = req.user!.id;
+    const { cookies_json, email } = req.body;
+    if (!cookies_json) return res.status(400).json({ error: "cookies_json requerido" });
+    const enc = ctrlEncrypt(cookies_json);
+    await pool.query(
+      `INSERT INTO temu_credentials(user_id, cookies_enc, email, updated_at)
+       VALUES($1,$2,$3,NOW())
+       ON CONFLICT(user_id) DO UPDATE SET cookies_enc=$2, email=$3, updated_at=NOW()`,
+      [uid, enc, email || null]
+    );
+    res.json({ ok: true });
+  });
+
+  // ── Pedidos ───────────────────────────────────────────────────────────────────
+  app.get("/api/dropship/orders", requireLicense as any, async (req: AuthRequest, res) => {
+    const uid = req.user!.id;
+    const r = await pool.query(
+      `SELECT o.*, p.temu_url, p.title as product_title
+       FROM dropship_orders o
+       LEFT JOIN dropship_products p ON p.id = o.product_id
+       WHERE o.user_id=$1
+       ORDER BY o.created_at DESC LIMIT 200`,
+      [uid]
+    );
+    // Never return encrypted address to client
+    const rows = r.rows.map(({ buyer_address_enc: _, ...row }) => row);
+    res.json(rows);
+  });
+
+  app.put("/api/dropship/orders/:id/status", requireLicense as any, async (req: AuthRequest, res) => {
+    const uid = req.user!.id;
+    const { status } = req.body;
+    const valid = ["pending_purchase", "purchased_temu", "in_transit", "received", "shipped"];
+    if (!valid.includes(status)) return res.status(400).json({ error: "Estado inválido" });
+    const r = await pool.query(
+      `UPDATE dropship_orders SET status=$1, updated_at=NOW()
+       WHERE id=$2 AND user_id=$3 RETURNING id, status`,
+      [status, req.params.id, uid]
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: "Pedido no encontrado" });
+    res.json(r.rows[0]);
+  });
+
+  app.put("/api/dropship/orders/:id/temu-order", requireLicense as any, async (req: AuthRequest, res) => {
+    const uid = req.user!.id;
+    const { temu_order_id } = req.body;
+    const r = await pool.query(
+      `UPDATE dropship_orders SET temu_order_id=$1, updated_at=NOW()
+       WHERE id=$2 AND user_id=$3 RETURNING id`,
+      [temu_order_id || null, req.params.id, uid]
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: "Pedido no encontrado" });
+    res.json({ ok: true });
+  });
+
+  // ── Crear pedido manualmente ──────────────────────────────────────────────────
+  app.post("/api/dropship/orders", requireLicense as any, async (req: AuthRequest, res) => {
+    const uid = req.user!.id;
+    const { product_id, vinted_order_id, buyer_name, buyer_address, vinted_item_title, vinted_amount } = req.body;
+    if (!vinted_order_id) return res.status(400).json({ error: "vinted_order_id requerido" });
+    const addrEnc = buyer_address ? ctrlEncrypt(buyer_address) : null;
+    try {
+      const r = await pool.query(
+        `INSERT INTO dropship_orders
+         (user_id,product_id,vinted_order_id,buyer_name,buyer_address_enc,vinted_item_title,vinted_amount)
+         VALUES($1,$2,$3,$4,$5,$6,$7)
+         ON CONFLICT(user_id,vinted_order_id) DO NOTHING
+         RETURNING *`,
+        [uid, product_id || null, vinted_order_id, buyer_name || null, addrEnc,
+         vinted_item_title || null, vinted_amount || null]
+      );
+      if (!r.rows[0]) return res.status(409).json({ error: "Pedido ya existe" });
+      res.json(r.rows[0]);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── Escanear ventas de Vinted ─────────────────────────────────────────────────
+  // Llama a la API de Vinted para detectar pedidos nuevos y crearlos en dropship_orders.
+  app.post("/api/dropship/scan/:accountId", requireLicense as any, async (req: AuthRequest, res) => {
+    const uid = req.user!.id;
+    const accountId = parseInt(req.params.accountId);
+
+    const accRes = await pool.query(
+      "SELECT cookie, domain, username FROM vinted_accounts WHERE id=$1 AND user_id=$2 AND is_active=TRUE",
+      [accountId, uid]
+    );
+    if (!accRes.rows[0]) return res.status(404).json({ error: "Cuenta Vinted no encontrada" });
+    const { cookie, domain: dom, username } = accRes.rows[0];
+    if (!cookie) return res.status(400).json({ error: "Esta cuenta no tiene cookie de sesión" });
+
+    // Build Vinted API headers
+    const { headers } = getVintedHeaders(cookie, dom || "es");
+
+    // 1. Get current user's Vinted ID
+    let vintedUserId: string | null = null;
+    try {
+      const meRes = await axiosVinted.get(
+        `https://www.vinted.${dom || "es"}/api/v2/users/current`,
+        { headers, timeout: 10000, validateStatus: () => true }
+      );
+      if (meRes.status === 200) vintedUserId = meRes.data?.user?.id?.toString() || null;
+    } catch { /* ignore */ }
+
+    // 2. Get recent transactions (sales)
+    let newOrders = 0;
+    try {
+      const txRes = await axiosVinted.get(
+        `https://www.vinted.${dom || "es"}/api/v2/transactions?page=1&per_page=40`,
+        { headers, timeout: 12000, validateStatus: () => true }
+      );
+      if (txRes.status !== 200) {
+        return res.status(502).json({ error: `Vinted API devolvió ${txRes.status}` });
+      }
+      const transactions: any[] = txRes.data?.transactions || [];
+      for (const tx of transactions) {
+        // Filter: only sold (as seller)
+        if (tx.type !== "sold" && tx.transaction_type !== "sold") continue;
+        const orderId = String(tx.id || tx.transaction_id);
+        const buyerName = tx.buyer?.login || tx.buyer_login || null;
+        const itemTitle = tx.item?.title || tx.item_title || null;
+        const amount = tx.amount?.amount || tx.total_amount || null;
+
+        // Insert if not exists
+        const addrEnc = null; // address not available from transaction API
+        const ins = await pool.query(
+          `INSERT INTO dropship_orders
+           (user_id,vinted_order_id,buyer_name,vinted_item_title,vinted_amount,vinted_sale_data)
+           VALUES($1,$2,$3,$4,$5,$6)
+           ON CONFLICT(user_id,vinted_order_id) DO NOTHING
+           RETURNING id`,
+          [uid, orderId, buyerName, itemTitle, amount, JSON.stringify(tx)]
+        );
+        if (ins.rows[0]) newOrders++;
+      }
+    } catch (e: any) {
+      return res.status(500).json({ error: e.message });
+    }
+
+    res.json({ ok: true, new_orders: newOrders, account: username });
+  });
+
+  // ── Trigger compra Temu (via BullMQ) ─────────────────────────────────────────
+  app.post("/api/dropship/orders/:id/buy-temu", requireLicense as any, async (req: AuthRequest, res) => {
+    const uid = req.user!.id;
+    const orderId = parseInt(req.params.id);
+    if (!dropshipQueue) return res.status(503).json({ error: "Queue no disponible (Redis no configurado)" });
+
+    // Verify order belongs to user
+    const check = await pool.query(
+      "SELECT id FROM dropship_orders WHERE id=$1 AND user_id=$2",
+      [orderId, uid]
+    );
+    if (!check.rows[0]) return res.status(404).json({ error: "Pedido no encontrado" });
+
+    const job = await dropshipQueue.add("buy_temu", { type: "buy_temu", userId: uid, orderId });
+    res.json({ ok: true, jobId: job.id });
+  });
+
+  // ── Estado de job Temu ────────────────────────────────────────────────────────
+  app.get("/api/dropship/job/:jobId", requireLicense as any, async (req: AuthRequest, res) => {
+    if (!dropshipQueue) return res.status(503).json({ error: "Queue no disponible" });
+    const job = await dropshipQueue.getJob(req.params.jobId);
+    if (!job) return res.status(404).json({ error: "Job no encontrado" });
+    const state = await job.getState();
+    res.json({ state, result: job.returnvalue, error: job.failedReason });
+  });
+
+  // ── Cuentas Vinted disponibles para dropship ──────────────────────────────────
+  app.get("/api/dropship/vinted-accounts", requireLicense as any, async (req: AuthRequest, res) => {
+    const r = await pool.query(
+      "SELECT id, username, domain, is_active, last_synced_at FROM vinted_accounts WHERE user_id=$1 AND is_active=TRUE ORDER BY username",
+      [req.user!.id]
+    );
+    res.json(r.rows);
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
 
   app.listen(PORT, "0.0.0.0", () => console.log(`Server running on http://localhost:${PORT}`));
 
   startLenguetaWorker();
+  startDropshipWorker();
 }
 
 // ── SSE Ops Terminal ─────────────────────────────────────────────────────────
