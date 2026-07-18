@@ -82,8 +82,17 @@ const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
 async function setupProxyAuth(page: Page, proxy: ProxyConfig): Promise<void> {
   if (!proxy.username || !proxy.password) return;
   const client = await page.createCDPSession();
-  // handleAuthRequests: true → only authRequired events fire (not all requests)
+
+  // handleAuthRequests:true ALSO pauses regular requests via Fetch.requestPaused.
+  // Without a continueRequest handler those requests hang indefinitely.
   await client.send("Fetch.enable" as any, { handleAuthRequests: true });
+
+  // Continue all non-auth requests immediately so they don't block page load.
+  client.on("Fetch.requestPaused", async (event: any) => {
+    await client.send("Fetch.continueRequest" as any, { requestId: event.requestId }).catch(() => {});
+  });
+
+  // Respond to proxy 407 challenges with credentials.
   client.on("Fetch.authRequired", async (event: any) => {
     await client.send("Fetch.continueWithAuth" as any, {
       requestId: event.requestId,
@@ -92,7 +101,7 @@ async function setupProxyAuth(page: Page, proxy: ProxyConfig): Promise<void> {
         username: proxy.username!,
         password: proxy.password!,
       },
-    });
+    }).catch(() => {});
   });
 }
 
