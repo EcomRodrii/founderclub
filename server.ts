@@ -7776,11 +7776,15 @@ REGLAS ABSOLUTAS:
   // Retorna { newOrders, totalSold, error? }
   async function scanVintedAccountForDropship(userId: number, accountId: number) {
     const accRes = await pool.query(
-      "SELECT COALESCE(session_cookie, cookie) as cookie, domain, username, vinted_id FROM vinted_accounts WHERE id=$1 AND user_id=$2 AND is_active=TRUE",
+      "SELECT session_cookie, cookie, domain, username, vinted_id FROM vinted_accounts WHERE id=$1 AND user_id=$2 AND is_active=TRUE",
       [accountId, userId]
     );
     if (!accRes.rows[0]) return { newOrders: 0, totalSold: 0, error: "Cuenta no encontrada" };
-    const { cookie, domain: dom, username, vinted_id } = accRes.rows[0];
+    const row = accRes.rows[0];
+    // session_cookie is stored AES-GCM encrypted — must decrypt before use
+    const decrypted = row.session_cookie ? ctrlDecrypt(row.session_cookie) : null;
+    const cookie = decrypted || row.cookie || null;
+    const { domain: dom, username, vinted_id } = row;
     if (!cookie) return { newOrders: 0, totalSold: 0, error: "Sin cookie de sesión. Ve a Cuentas y sincroniza." };
 
     const d = dom || "es";

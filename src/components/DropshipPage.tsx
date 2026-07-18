@@ -627,9 +627,11 @@ function TemuTab({ token, temu, onSaved }: { token: string; temu: TemuCreds | nu
 
   const connectViaExtension = () => {
     setConnecting(true); setErr(''); setStatus('Comprobando sesión de Temu…');
+    let handled = false;
     const onResp = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail?.action !== 'temu:connect') return;
+      handled = true;
       window.removeEventListener('founderclub-ext-response', onResp);
       const resp = detail.response;
       if (resp?.ok) {
@@ -645,8 +647,11 @@ function TemuTab({ token, temu, onSaved }: { token: string; temu: TemuCreds | nu
     window.addEventListener('founderclub-ext-response', onResp);
     window.dispatchEvent(new CustomEvent('founderclub-ext-msg', { detail: { action: 'temu:connect' } }));
     setTimeout(() => {
-      window.removeEventListener('founderclub-ext-response', onResp);
-      if (connecting) { setConnecting(false); setErr('La extensión no respondió. Asegúrate de que Lamine Hub está activo.'); }
+      if (!handled) {
+        window.removeEventListener('founderclub-ext-response', onResp);
+        setConnecting(false);
+        setErr('La extensión no respondió. Asegúrate de que Lamine Hub está instalado y activo.');
+      }
     }, 8000);
   };
 
