@@ -263,7 +263,12 @@ function Dashboard({
 }) {
   const allowedPages = computeAllowedPages(license, !!user?.is_admin);
   // Página inicial: si tiene acceso a dashboard → dashboard, si no → photos (Fantasma)
-  const [page, setPage] = useState<Page>(() => allowedPages.has('dashboard') ? 'dashboard' : 'photos');
+  const [page, setPage] = useState<Page>(() => {
+    // La extensión puede abrir la web con ?page=dropship (u otra página)
+    const urlPage = new URLSearchParams(window.location.search).get('page') as Page | null;
+    if (urlPage && allowedPages.has(urlPage)) return urlPage;
+    return allowedPages.has('dashboard') ? 'dashboard' : 'photos';
+  });
 
   // Share token with Chrome extension so it doesn't need a separate login
   useEffect(() => {
