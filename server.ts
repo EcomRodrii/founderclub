@@ -7452,24 +7452,33 @@ REGLAS ABSOLUTAS:
   app.put("/api/dropship/products/:id", requireLicense as any, async (req: AuthRequest, res) => {
     const uid = req.user!.id;
     const { temu_url, temu_cost, vinted_price, title, stock, notes, is_active, temu_images, temu_description } = req.body;
-    const r = await pool.query(
-      `UPDATE dropship_products
-       SET temu_url=$1, temu_cost=$2, vinted_price=$3, title=$4, stock=$5, notes=$6, is_active=$7,
-           temu_images=COALESCE($10::jsonb, temu_images), temu_description=COALESCE($11, temu_description)
-       WHERE id=$8 AND user_id=$9 RETURNING *`,
-      [temu_url, temu_cost || null, vinted_price || null, title, stock ?? 1, notes || null,
-       is_active !== false, req.params.id, uid,
-       temu_images !== undefined ? JSON.stringify(temu_images) : null,
-       temu_description !== undefined ? temu_description : null]
-    );
-    if (!r.rows[0]) return res.status(404).json({ error: "Producto no encontrado" });
-    res.json(r.rows[0]);
+    if (!temu_url || !title) return res.status(400).json({ error: "temu_url y title son obligatorios" });
+    try {
+      const r = await pool.query(
+        `UPDATE dropship_products
+         SET temu_url=$1, temu_cost=$2, vinted_price=$3, title=$4, stock=$5, notes=$6, is_active=$7,
+             temu_images=COALESCE($10::jsonb, temu_images), temu_description=COALESCE($11, temu_description)
+         WHERE id=$8 AND user_id=$9 RETURNING *`,
+        [temu_url, temu_cost || null, vinted_price || null, title, stock ?? 1, notes || null,
+         is_active !== false, req.params.id, uid,
+         temu_images !== undefined ? JSON.stringify(temu_images) : null,
+         temu_description !== undefined ? temu_description : null]
+      );
+      if (!r.rows[0]) return res.status(404).json({ error: "Producto no encontrado" });
+      res.json(r.rows[0]);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   app.delete("/api/dropship/products/:id", requireLicense as any, async (req: AuthRequest, res) => {
     const uid = req.user!.id;
-    await pool.query("DELETE FROM dropship_products WHERE id=$1 AND user_id=$2", [req.params.id, uid]);
-    res.json({ ok: true });
+    try {
+      await pool.query("DELETE FROM dropship_products WHERE id=$1 AND user_id=$2", [req.params.id, uid]);
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   // ── Scraper de producto Temu ──────────────────────────────────────────────────
@@ -7494,11 +7503,11 @@ REGLAS ABSOLUTAS:
   // ── Credenciales Temu ─────────────────────────────────────────────────────────
   app.get("/api/dropship/temu-credentials", requireLicense as any, async (req: AuthRequest, res) => {
     const r = await pool.query(
-      "SELECT id, email, telegram_chat_id, updated_at FROM temu_credentials WHERE user_id=$1",
+      "SELECT id, email, telegram_chat_id, updated_at, cookies_enc FROM temu_credentials WHERE user_id=$1",
       [req.user!.id]
     );
     res.json({
-      exists: !!r.rows[0],
+      exists: !!r.rows[0] && (r.rows[0].cookies_enc ?? '') !== '',
       email: r.rows[0]?.email,
       telegram_chat_id: r.rows[0]?.telegram_chat_id || null,
       updated_at: r.rows[0]?.updated_at,
@@ -7663,6 +7672,9 @@ REGLAS ABSOLUTAS:
     const uid = req.user!.id;
     const { cookies_json, email } = req.body;
     if (!cookies_json) return res.status(400).json({ error: "cookies_json requerido" });
+    try { JSON.parse(cookies_json); } catch {
+      return res.status(400).json({ error: "cookies_json debe ser JSON válido (array de objetos cookie)" });
+    }
     const enc = ctrlEncrypt(cookies_json);
     await pool.query(
       `INSERT INTO temu_credentials(user_id, cookies_enc, email, updated_at)
@@ -7805,30 +7817,14 @@ REGLAS ABSOLUTAS:
     // Intentamos varios endpoints para obtener ítems vendidos (Vinted usa status int 0=sold/inactive, 1=active)
     let items: any[] = [];
 
-    // Opción 1: wardrobe endpoint — devuelve todos los ítems con campo `status`
+    // Opción 2: endpoint de ítems con status_ids[]=0 (sold) — más preciso, sin ítems pausados
     try {
       const r = await axiosVinted.get(
-        `https://www.vinted.${d}/api/v2/wardrobe/${vintedUserId}/items?page=1&per_page=96&order=newest_first`,
+        `https://www.vinted.${d}/api/v2/users/${vintedUserId}/items?page=1&per_page=40&order=newest_first&status_ids[]=0`,
         { headers, timeout: 12000, validateStatus: () => true }
       );
-      if (r.status === 200) {
-        const all: any[] = r.data?.items || r.data?.item_list || [];
-        // status 0 = sold/inactive en Vinted; status 1 = active
-        const sold = all.filter((i: any) => i.status === 0 || i.status === 3 || i.status === "sold");
-        if (sold.length > 0) items = sold;
-      }
-    } catch { /* try next */ }
-
-    // Opción 2: endpoint de ítems con status_ids[]=0 (sold)
-    if (items.length === 0) {
-      try {
-        const r = await axiosVinted.get(
-          `https://www.vinted.${d}/api/v2/users/${vintedUserId}/items?page=1&per_page=40&order=newest_first&status_ids[]=0`,
-          { headers, timeout: 12000, validateStatus: () => true }
-        );
-        if (r.status === 200) items = r.data?.items || r.data?.item_list || [];
-      } catch { /* ignore */ }
-    }
+      if (r.status === 200) items = r.data?.items || r.data?.item_list || [];
+    } catch { /* ignore */ }
 
     // Opción 3: string status filter
     if (items.length === 0) {
@@ -7838,6 +7834,22 @@ REGLAS ABSOLUTAS:
           { headers, timeout: 12000, validateStatus: () => true }
         );
         if (r.status === 200) items = r.data?.items || r.data?.item_list || [];
+      } catch { /* ignore */ }
+    }
+
+    // Opción 1 (último recurso): wardrobe endpoint — puede incluir ítems pausados (status 0)
+    if (items.length === 0) {
+      try {
+        const r = await axiosVinted.get(
+          `https://www.vinted.${d}/api/v2/wardrobe/${vintedUserId}/items?page=1&per_page=96&order=newest_first`,
+          { headers, timeout: 12000, validateStatus: () => true }
+        );
+        if (r.status === 200) {
+          const all: any[] = r.data?.items || r.data?.item_list || [];
+          // status 3 = sold; status 0 incluye pausados — solo usar status 3 o "sold" explícito
+          const sold = all.filter((i: any) => i.status === 3 || i.status === "sold");
+          if (sold.length > 0) items = sold;
+        }
       } catch { /* ignore */ }
     }
 
@@ -7976,11 +7988,34 @@ REGLAS ABSOLUTAS:
           "SELECT id FROM vinted_accounts WHERE user_id=$1 AND is_active=TRUE",
           [row.user_id]
         );
+        let userNewOrders = 0;
         for (const acc of accs.rows) {
           try {
             const r = await scanVintedAccountForDropship(row.user_id, acc.id);
-            if (r.newOrders > 0) console.log(`[dropship-autoscan] user=${row.user_id} acc=${acc.id} nuevos=${r.newOrders}`);
+            if (r.newOrders > 0) {
+              userNewOrders += r.newOrders;
+              console.log(`[dropship-autoscan] user=${row.user_id} acc=${acc.id} nuevos=${r.newOrders}`);
+            }
           } catch { /* ignore per-account errors */ }
+        }
+        // Notificación Telegram si hay nuevas ventas
+        if (userNewOrders > 0) {
+          try {
+            const tgRes = await pool.query(
+              "SELECT telegram_chat_id FROM temu_credentials WHERE user_id=$1 AND telegram_chat_id IS NOT NULL",
+              [row.user_id]
+            );
+            const chatId = tgRes.rows[0]?.telegram_chat_id;
+            const botToken = process.env.TELEGRAM_BOT_TOKEN;
+            if (chatId && botToken) {
+              const msg = `🛍️ *Nueva venta en Vinted*\n${userNewOrders} artículo(s) vendido(s). Entra en la app para comprar en Temu.`;
+              await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ chat_id: chatId, text: msg, parse_mode: "Markdown" }),
+              }).catch(() => {});
+            }
+          } catch { /* ignore */ }
         }
       }
     } catch (e) {

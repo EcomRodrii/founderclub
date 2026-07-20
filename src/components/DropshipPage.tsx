@@ -147,24 +147,35 @@ function OrderCard({ order, products, token, onRefresh }: {
     const target = to || nextStatus;
     if (!target) return;
     setMoving(true);
-    await api(token, `/api/dropship/orders/${order.id}/status`, {
+    const r = await api(token, `/api/dropship/orders/${order.id}/status`, {
       method: 'PUT', body: JSON.stringify({ status: target }),
     });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      alert(d.error || 'No se pudo actualizar el estado');
+      setMoving(false);
+      return;
+    }
     onRefresh();
     setMoving(false);
   };
 
   const saveTemuId = async () => {
-    await api(token, `/api/dropship/orders/${order.id}/temu-order`, {
+    const r = await api(token, `/api/dropship/orders/${order.id}/temu-order`, {
       method: 'PUT', body: JSON.stringify({ temu_order_id: temuId }),
     });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      alert(d.error || 'No se pudo guardar el ID de Temu');
+      return;
+    }
     setEditTemuId(false);
     onRefresh();
   };
 
   const assignProduct = async () => {
     await api(token, `/api/dropship/orders/${order.id}/temu-order`, {
-      method: 'PUT', body: JSON.stringify({ product_id: selectedProductId || null }),
+      method: 'PUT', body: JSON.stringify({ product_id: selectedProductId ? parseInt(selectedProductId, 10) : null }),
     });
     setAssigningProduct(false);
     onRefresh();
@@ -436,7 +447,7 @@ function PublishModal({ token, product, accounts, onClose, onSuccess }: {
     const response = await fetch(`/api/dropship/products/${product.id}/publish-vinted`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ account_id: accountId || undefined, price: parseFloat(price), condition, size: size || undefined, gender }),
+      body: JSON.stringify({ account_id: accountId ? parseInt(accountId, 10) : undefined, price: parseFloat(price), condition, size: size || undefined, gender }),
     });
 
     if (!response.ok || !response.body) {
@@ -569,12 +580,17 @@ function TemuTab({ token, temu, onSaved }: { token: string; temu: TemuCreds | nu
   const [status, setStatus] = useState('');
   const [extAvailable, setExtAvailable] = useState<boolean | null>(null);
   const [chatId, setChatId] = useState(temu?.telegram_chat_id || '');
+
+  useEffect(() => {
+    setChatId(temu?.telegram_chat_id || '');
+  }, [temu?.telegram_chat_id]);
   const [savingTg, setSavingTg] = useState(false);
   const [tgSaved, setTgSaved] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     // Detect Lamine Hub extension by pinging temu:get-status via bridge
+    let t: ReturnType<typeof setTimeout>;
     const onResp = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail?.action === 'temu:get-status') {
@@ -585,7 +601,7 @@ function TemuTab({ token, temu, onSaved }: { token: string; temu: TemuCreds | nu
     };
     window.addEventListener('founderclub-ext-response', onResp);
     window.dispatchEvent(new CustomEvent('founderclub-ext-msg', { detail: { action: 'temu:get-status' } }));
-    const t = setTimeout(() => {
+    t = setTimeout(() => {
       window.removeEventListener('founderclub-ext-response', onResp);
       setExtAvailable(prev => prev === null ? false : prev);
     }, 2500);
@@ -811,7 +827,7 @@ export default function DropshipPage({ token }: { token: string }) {
     setProducts(Array.isArray(pRes) ? pRes : []);
     setOrders(Array.isArray(oRes) ? oRes : []);
     setAccounts(Array.isArray(aRes) ? aRes : []);
-    setTemu(tRes?.exists !== undefined ? tRes : { exists: false, email: null });
+    setTemu(tRes?.exists !== undefined ? tRes : { exists: false, email: null, telegram_chat_id: null });
     setLoading(false);
   }, [token]);
 
@@ -823,7 +839,7 @@ export default function DropshipPage({ token }: { token: string }) {
     const d = await r.json().catch(() => ({}));
     if (r.ok) {
       if (d.new_orders > 0) alert(`✅ ${d.new_orders} venta(s) nueva(s) detectada(s) en Vinted`);
-      load();
+      await load();
     } else {
       alert('Error al escanear: ' + (d.error || 'desconocido'));
     }
@@ -832,7 +848,12 @@ export default function DropshipPage({ token }: { token: string }) {
 
   const deleteProduct = async (id: number) => {
     if (!confirm('¿Eliminar producto?')) return;
-    await api(token, `/api/dropship/products/${id}`, { method: 'DELETE' });
+    const r = await api(token, `/api/dropship/products/${id}`, { method: 'DELETE' });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      alert(d.error || 'No se pudo eliminar el producto');
+      return;
+    }
     load();
   };
 
